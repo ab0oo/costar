@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "data": {
+    "source": "local_time",
+    "poll_ms": 1000,
+    "fields": {
+      "time_now": "time",
+      "date_now": "date",
+      "tz_name": "tz"
+    }
+  },
+  "ui": {
+    "title": "Clock",
+    "nodes": [
+      {
+        "type": "label",
+        "x": 8,
+        "y": 10,
+        "font": 4,
+        "color": "#FFFFFF",
+        "text": "{{time_now}}"
+      },
+      {
+        "type": "label",
+        "x": 8,
+        "y": 42,
+        "font": 2,
+        "color": "#B0BEC5",
+        "text": "{{date_now}}  {{tz_name}}"
+      }
+    ]
+  }
+}

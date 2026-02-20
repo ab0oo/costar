@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "data": {
+    "url": "https://api.open-meteo.com/v1/forecast?latitude={{geo.lat}}&longitude={{geo.lon}}&hourly=temperature_2m,relative_humidity_2m&forecast_days=1",
+    "debug": true,
+    "poll_ms": 15000,
+    "fields": {
+      "temp_now": {
+        "path": "hourly.temperature_2m[0]",
+        "format": {
+          "round": 1,
+          "unit": "{{pref.temp_unit}}",
+          "locale": "en-US"
+        }
+      },
+      "humidity_now": {
+        "path": "hourly.relative_humidity_2m[0]",
+        "format": {
+          "round": 0,
+          "unit": "percent",
+          "locale": "en-US"
+        }
+      },
+      "series_temp": {
+        "path": "hourly.temperature_2m"
+      },
+      "time_local": {
+        "path": "hourly.time[0]",
+        "format": {
+          "tz": "local",
+          "time_format": "%m/%d %H:%M"
+        }
+      }
+    }
+  },
+  "ui": {
+    "title": "DSL Weather",
+    "nodes": [
+      {
+        "type": "label",
+        "x": 8,
+        "y": 28,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "Now {{temp_now}}"
+      },
+      {
+        "type": "label",
+        "x": 8,
+        "y": 42,
+        "font": 1,
+        "color": "#B0BEC5",
+        "text": "Local {{time_local}}"
+      },
+      {
+        "type": "value_box",
+        "x": 8,
+        "y": 58,
+        "w": 68,
+        "h": 26,
+        "font": 2,
+        "color": "#FFFFFF",
+        "bg": "#1B2A33",
+        "text": "Humidity",
+        "key": "humidity_now"
+      },
+      {
+        "type": "progress",
+        "x": 80,
+        "y": 64,
+        "w": 72,
+        "h": 16,
+        "color": "#52E88A",
+        "bg": "#1A1A1A",
+        "key": "humidity_now",
+        "min": 0,
+        "max": 100
+      },
+      {
+        "type": "sparkline",
+        "x": 80,
+        "y": 28,
+        "w": 72,
+        "h": 28,
+        "color": "#FFD54A",
+        "bg": "#101010",
+        "key": "series_temp"
+      }
+    ]
+  }
+}

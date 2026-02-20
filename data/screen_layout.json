@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "screen": {
+    "id": "focus-debug",
+    "orientation": "landscape",
+    "width": 320,
+    "height": 240,
+    "regions": [
+      {
+        "id": "adsb-main",
+        "widget": "adsb-focus",
+        "x": 0,
+        "y": 0,
+        "w": 320,
+        "h": 240
+      }
+    ]
+  },
+  "widget_defs": {
+    "adsb-focus": {
+      "type": "dsl",
+      "update_ms": 1000,
+      "settings": {
+        "dsl_path": "/dsl/adsb_nearest.json",
+        "radius_nm": "40",
+        "debug": "true"
+      }
+    }
+  }
+}

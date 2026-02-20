@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "data": {
+    "source": "http",
+    "url": "https://api.open-meteo.com/v1/forecast?latitude={{geo.lat}}&longitude={{geo.lon}}&current=temperature_2m,weather_code",
+    "poll_ms": 45000,
+    "fields": {
+      "temp_now": {
+        "path": "current.temperature_2m",
+        "format": {
+          "round": 1,
+          "unit": "{{pref.temp_unit}}",
+          "locale": "en-US"
+        }
+      },
+      "code_now": "current.weather_code"
+    }
+  },
+  "ui": {
+    "title": "Weather",
+    "nodes": [
+      {
+        "type": "label",
+        "x": 8,
+        "y": 10,
+        "font": 4,
+        "color": "#FFD54A",
+        "text": "{{temp_now}}"
+      },
+      {
+        "type": "label",
+        "x": 8,
+        "y": 58,
+        "font": 2,
+        "color": "#B0BEC5",
+        "text": "code {{code_now}}"
+      }
+    ]
+  }
+}

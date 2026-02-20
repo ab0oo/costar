@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "data": {
+    "source": "http",
+    "url": "https://finnhub.io/api/v1/quote?symbol={{setting.symbol}}&token={{setting.finnhub_token}}",
+    "poll_ms": 60000,
+    "fields": {
+      "price": {
+        "path": "c",
+        "format": {
+          "round": 2,
+          "prefix": "$",
+          "locale": "en-US"
+        }
+      },
+      "change": {
+        "path": "dp",
+        "format": {
+          "round": 2,
+          "suffix": "%"
+        }
+      }
+    }
+  },
+  "ui": {
+    "title": "Crypto",
+    "nodes": [
+      {
+        "type": "label",
+        "x": 8,
+        "y": 8,
+        "font": 2,
+        "color": "#B0BEC5",
+        "text": "{{setting.symbol}}"
+      },
+      {
+        "type": "label",
+        "x": 8,
+        "y": 30,
+        "font": 4,
+        "color": "#52E88A",
+        "text": "{{price}}"
+      },
+      {
+        "type": "label",
+        "x": 8,
+        "y": 62,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "{{change}} 24h"
+      }
+    ]
+  }
+}

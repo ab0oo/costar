@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "data": {
+    "source": "local_time",
+    "poll_ms": 1000,
+    "fields": {
+      "h": "hour",
+      "m": "minute",
+      "s": "second",
+      "time_now": "time",
+      "date_now": "date"
+    }
+  },
+  "ui": {
+    "title": "Analog Clock",
+    "nodes": [
+      {
+        "type": "circle",
+        "x": 38,
+        "y": 32,
+        "r": 28,
+        "thickness": 2,
+        "color": "#D5E7FF",
+        "bg": "#121A24"
+      },
+      {
+        "type": "hand",
+        "x": 38,
+        "y": 32,
+        "length": 15,
+        "thickness": 3,
+        "color": "#FFFFFF",
+        "angle_expr": "30*h + 0.5*m"
+      },
+      {
+        "type": "hand",
+        "x": 38,
+        "y": 32,
+        "length": 21,
+        "thickness": 2,
+        "color": "#9FD3FF",
+        "angle_expr": "6*m + 0.1*s"
+      },
+      {
+        "type": "hand",
+        "x": 38,
+        "y": 32,
+        "length": 24,
+        "thickness": 1,
+        "color": "#FF6B6B",
+        "angle_expr": "6*s"
+      },
+      {
+        "type": "circle",
+        "x": 38,
+        "y": 32,
+        "r": 2,
+        "thickness": 1,
+        "color": "#FF6B6B",
+        "bg": "#FF6B6B"
+      },
+      {
+        "type": "label",
+        "x": 78,
+        "y": 10,
+        "font": 4,
+        "color": "#FFFFFF",
+        "text": "{{time_now}}"
+      },
+      {
+        "type": "label",
+        "x": 78,
+        "y": 42,
+        "font": 2,
+        "color": "#B0BEC5",
+        "text": "{{date_now}}"
+      }
+    ]
+  }
+}

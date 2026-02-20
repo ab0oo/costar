@@ -1,0 +1,775 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Widget DSL Editor</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #141c28;
+      --panel-2: #1a2433;
+      --line: #2d3b52;
+      --text: #d9e2f2;
+      --muted: #93a6c4;
+      --ok: #2ad672;
+      --err: #ff3f5b;
+      --accent: #5ec8ff;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Liberation Mono", "Courier New", monospace;
+      background: radial-gradient(circle at top, #1a2638, #0d1117 55%);
+      color: var(--text);
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 12px;
+      padding: 12px;
+      min-height: 100vh;
+    }
+
+    .card {
+      background: linear-gradient(180deg, var(--panel), var(--panel-2));
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .title {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--accent);
+    }
+
+    .title small {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .body {
+      padding: 10px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    button, select, input[type="text"], textarea {
+      background: #0f1723;
+      border: 1px solid #344764;
+      color: var(--text);
+      border-radius: 6px;
+      padding: 6px 8px;
+      font: inherit;
+      font-size: 12px;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    button:hover {
+      border-color: #4c6b96;
+    }
+
+    textarea {
+      width: 100%;
+      resize: vertical;
+      min-height: 220px;
+      line-height: 1.35;
+      tab-size: 2;
+      white-space: pre;
+    }
+
+    #payloadInput {
+      min-height: 170px;
+    }
+
+    .status {
+      font-size: 12px;
+      color: var(--muted);
+      min-height: 16px;
+      white-space: pre-wrap;
+    }
+
+    .status.ok { color: var(--ok); }
+    .status.err { color: var(--err); }
+
+    .previewWrap {
+      display: grid;
+      place-items: center;
+      padding: 12px 0 6px;
+    }
+
+    .screenFrame {
+      padding: 10px;
+      border-radius: 14px;
+      border: 1px solid #2f4361;
+      background: linear-gradient(160deg, #0e1522, #0a0f17);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+    }
+
+    #screen {
+      width: 640px;
+      max-width: 100%;
+      aspect-ratio: 4 / 3;
+      image-rendering: pixelated;
+      border-radius: 8px;
+      border: 1px solid #283a54;
+      background: #000;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    @media (max-width: 1100px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <section class="card">
+      <div class="title">
+        <strong>DSL JSON Editor</strong>
+        <small>Live preview: 320x240 landscape</small>
+      </div>
+      <div class="body">
+        <div class="row">
+          <button id="loadWeatherBtn" type="button">Load Weather Sample</button>
+          <button id="loadAdsbBtn" type="button">Load ADSB Sample</button>
+          <button id="formatBtn" type="button">Format JSON</button>
+          <button id="downloadBtn" type="button">Download JSON</button>
+          <input id="fileOpen" type="file" accept=".json,application/json">
+        </div>
+        <textarea id="dslInput" spellcheck="false"></textarea>
+        <div id="dslStatus" class="status"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="title">
+        <strong>Runtime Data + Preview</strong>
+        <small>Simulates field extraction/formatting</small>
+      </div>
+      <div class="body">
+        <div class="row">
+          <label>Source JSON Payload</label>
+        </div>
+        <textarea id="payloadInput" spellcheck="false"></textarea>
+        <div class="row">
+          <button id="applyPayloadBtn" type="button">Apply Payload</button>
+          <label><input id="animateClock" type="checkbox" checked> animate local_time widgets</label>
+        </div>
+        <div id="payloadStatus" class="status"></div>
+        <div class="previewWrap">
+          <div class="screenFrame">
+            <canvas id="screen" width="320" height="240"></canvas>
+          </div>
+        </div>
+        <div class="hint">
+          Tip: run from project root with <code>python3 -m http.server 8000</code> and open
+          <code>http://localhost:8000/tools/dsl_editor/</code> so sample loaders work.
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const dslInput = document.getElementById("dslInput");
+    const payloadInput = document.getElementById("payloadInput");
+    const dslStatus = document.getElementById("dslStatus");
+    const payloadStatus = document.getElementById("payloadStatus");
+    const animateClock = document.getElementById("animateClock");
+    const canvas = document.getElementById("screen");
+    const ctx = canvas.getContext("2d");
+
+    const runtimeContext = {
+      "geo.lat": "37.4220",
+      "geo.lon": "-122.0841",
+      "geo.tz": "America/Los_Angeles",
+      "geo.offset_min": "-480",
+      "pref.clock_24h": "true",
+      "pref.temp_unit": "F",
+      "pref.distance_unit": "mi"
+    };
+
+    let parsedDsl = null;
+    let parsedPayload = {};
+    let lastError = "";
+
+    function setStatus(el, text, ok) {
+      el.textContent = text || "";
+      el.classList.remove("ok", "err");
+      if (!text) return;
+      el.classList.add(ok ? "ok" : "err");
+    }
+
+    function parseJson(text) {
+      return JSON.parse(text);
+    }
+
+    function formatJsonInEditor(textarea) {
+      try {
+        const obj = parseJson(textarea.value);
+        textarea.value = JSON.stringify(obj, null, 2);
+      } catch (err) {
+        setStatus(dslStatus, "JSON format failed: " + err.message, false);
+      }
+    }
+
+    function bindTemplate(text, values) {
+      if (typeof text !== "string") return "";
+      return text.replace(/{{\s*([^}]+)\s*}}/g, (_, keyRaw) => {
+        const key = keyRaw.trim();
+        if (values.hasOwnProperty(key)) return String(values[key]);
+        if (runtimeContext.hasOwnProperty(key)) return String(runtimeContext[key]);
+        return "";
+      });
+    }
+
+    function tokenizePath(path) {
+      const tokens = [];
+      let cur = "";
+      for (let i = 0; i < path.length; i++) {
+        const ch = path[i];
+        if (ch === ".") {
+          if (cur) tokens.push({ type: "key", value: cur });
+          cur = "";
+          continue;
+        }
+        if (ch === "[") {
+          if (cur) {
+            tokens.push({ type: "key", value: cur });
+            cur = "";
+          }
+          const end = path.indexOf("]", i + 1);
+          if (end < 0) return [];
+          const idx = Number(path.substring(i + 1, end));
+          if (!Number.isInteger(idx)) return [];
+          tokens.push({ type: "idx", value: idx });
+          i = end;
+          continue;
+        }
+        cur += ch;
+      }
+      if (cur) tokens.push({ type: "key", value: cur });
+      return tokens;
+    }
+
+    function resolvePath(obj, path) {
+      const tokens = tokenizePath(path);
+      if (!tokens.length) return undefined;
+      let cur = obj;
+      for (const t of tokens) {
+        if (t.type === "key") {
+          if (cur == null || typeof cur !== "object" || !(t.value in cur)) return undefined;
+          cur = cur[t.value];
+        } else {
+          if (!Array.isArray(cur) || t.value < 0 || t.value >= cur.length) return undefined;
+          cur = cur[t.value];
+        }
+      }
+      return cur;
+    }
+
+    function parseNumberMaybe(v) {
+      if (typeof v === "number" && Number.isFinite(v)) return v;
+      if (typeof v !== "string") return null;
+      const cleaned = v.replace(/[^0-9.+-]/g, "");
+      if (!cleaned) return null;
+      const n = Number(cleaned);
+      return Number.isFinite(n) ? n : null;
+    }
+
+    function formatTimestamp(text, tz, timeFormat) {
+      if (typeof text !== "string" || !text) return String(text || "");
+      const d = new Date(text.endsWith("Z") ? text : text + "Z");
+      if (Number.isNaN(d.getTime())) return text;
+
+      let target = new Date(d.getTime());
+      if (tz && tz !== "local") {
+        const m = /^UTC([+-])(\d{2}):(\d{2})$/.exec(tz);
+        if (m) {
+          const sign = m[1] === "-" ? -1 : 1;
+          const minutes = sign * (Number(m[2]) * 60 + Number(m[3]));
+          target = new Date(d.getTime() + minutes * 60000);
+          return (timeFormat || "%Y-%m-%d %H:%M")
+            .replace("%Y", String(target.getUTCFullYear()))
+            .replace("%m", String(target.getUTCMonth() + 1).padStart(2, "0"))
+            .replace("%d", String(target.getUTCDate()).padStart(2, "0"))
+            .replace("%H", String(target.getUTCHours()).padStart(2, "0"))
+            .replace("%M", String(target.getUTCMinutes()).padStart(2, "0"));
+        }
+      }
+
+      return (timeFormat || "%Y-%m-%d %H:%M")
+        .replace("%Y", String(target.getFullYear()))
+        .replace("%m", String(target.getMonth() + 1).padStart(2, "0"))
+        .replace("%d", String(target.getDate()).padStart(2, "0"))
+        .replace("%H", String(target.getHours()).padStart(2, "0"))
+        .replace("%M", String(target.getMinutes()).padStart(2, "0"));
+    }
+
+    function formatLocaleNumber(value, digits, locale) {
+      const options = { minimumFractionDigits: digits, maximumFractionDigits: digits };
+      try {
+        return Number(value).toLocaleString(locale || "en-US", options);
+      } catch {
+        return Number(value).toFixed(digits);
+      }
+    }
+
+    function applyFormat(raw, fmt) {
+      if (!fmt) return String(raw ?? "");
+      let numeric = typeof raw === "number" ? raw : parseNumberMaybe(raw);
+      let out = (raw == null) ? "" : String(raw);
+
+      if (fmt.tz) {
+        out = formatTimestamp(String(raw ?? ""), fmt.tz, fmt.time_format || fmt.timeFormat);
+      }
+
+      if (numeric != null) {
+        let v = numeric;
+        const unit = String(fmt.unit || "").toLowerCase();
+        let unitSuffix = "";
+        if (unit === "f" || unit === "fahrenheit" || unit === "c_to_f") {
+          v = (v * 9 / 5) + 32;
+          unitSuffix = " F";
+        } else if (unit === "c" || unit === "celsius") {
+          unitSuffix = " C";
+        } else if (unit === "%" || unit === "percent") {
+          unitSuffix = "%";
+        }
+
+        const digits = Number.isInteger(fmt.round) ? fmt.round : 2;
+        out = formatLocaleNumber(v, digits, fmt.locale || "en-US");
+
+        if (fmt.prefix) out = String(fmt.prefix) + out;
+        if (fmt.suffix) out += String(fmt.suffix);
+        else if (unitSuffix) out += unitSuffix;
+      } else {
+        if (fmt.prefix) out = String(fmt.prefix) + out;
+        if (fmt.suffix) out += String(fmt.suffix);
+      }
+      return out;
+    }
+
+    function buildLocalTimeDoc() {
+      const d = new Date();
+      const h = String(d.getHours()).padStart(2, "0");
+      const m = String(d.getMinutes()).padStart(2, "0");
+      const s = String(d.getSeconds()).padStart(2, "0");
+      const h12n = d.getHours() % 12 || 12;
+      const h12 = String(h12n).padStart(2, "0");
+      const ap = d.getHours() >= 12 ? "PM" : "AM";
+      return {
+        time: `${h}:${m}:${s}`,
+        time_24: `${h}:${m}:${s}`,
+        time_12: `${h12}:${m}:${s} ${ap}`,
+        date: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`,
+        iso_local: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}T${h}:${m}`,
+        hour: d.getHours(),
+        minute: d.getMinutes(),
+        second: d.getSeconds(),
+        millis: d.getMilliseconds(),
+        tz: runtimeContext["geo.tz"]
+      };
+    }
+
+    function buildResolvedData(dslDoc, payload) {
+      const values = {};
+      const numerics = {};
+      const series = {};
+      const fields = (((dslDoc || {}).data || {}).fields) || {};
+      const source = (((dslDoc || {}).data || {}).source) || "http";
+      const dataDoc = source === "local_time" ? buildLocalTimeDoc() : (payload || {});
+
+      for (const [key, spec] of Object.entries(fields)) {
+        let path;
+        let fmt;
+        if (typeof spec === "string") {
+          path = bindTemplate(spec, values);
+          fmt = null;
+        } else if (spec && typeof spec === "object") {
+          path = bindTemplate(String(spec.path || ""), values);
+          fmt = spec.format || null;
+        } else {
+          continue;
+        }
+
+        const raw = resolvePath(dataDoc, path);
+        if (raw === undefined) {
+          values[key] = "";
+          continue;
+        }
+
+        if (Array.isArray(raw)) {
+          const nums = raw.map(v => (typeof v === "number" ? v : Number(v))).filter(Number.isFinite);
+          series[key] = nums;
+          if (nums.length > 0) {
+            values[key] = applyFormat(nums[nums.length - 1], fmt || {});
+            numerics[key] = nums[nums.length - 1];
+          } else {
+            values[key] = "";
+          }
+          continue;
+        }
+
+        values[key] = fmt ? applyFormat(raw, fmt) : String(raw);
+        const n = parseNumberMaybe(raw);
+        if (n != null) numerics[key] = n;
+      }
+
+      return { values, numerics, series };
+    }
+
+    function textPx(font) {
+      if (font >= 4) return 26;
+      if (font >= 3) return 18;
+      if (font >= 2) return 14;
+      return 11;
+    }
+
+    function hexColor(v, fallback) {
+      if (typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v)) return v;
+      return fallback;
+    }
+
+    function drawString(text, x, y, font, color, baseline = "top") {
+      ctx.fillStyle = color;
+      ctx.font = `${textPx(font)}px monospace`;
+      ctx.textBaseline = baseline;
+      ctx.fillText(String(text ?? ""), x, y);
+    }
+
+    function evalAngle(expr, numerics) {
+      if (!expr || typeof expr !== "string") return null;
+      const js = expr.replace(/[A-Za-z_][A-Za-z0-9_]*/g, (name) => {
+        if (Object.prototype.hasOwnProperty.call(numerics, name)) {
+          return String(numerics[name]);
+        }
+        return "0";
+      });
+      try {
+        const val = Function(`"use strict"; return (${js});`)();
+        return Number.isFinite(val) ? val : null;
+      } catch {
+        return null;
+      }
+    }
+
+    function renderPreview() {
+      ctx.clearRect(0, 0, 320, 240);
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, 320, 240);
+      ctx.strokeStyle = "#555";
+      ctx.strokeRect(0.5, 0.5, 319, 239);
+
+      if (!parsedDsl) {
+        ctx.fillStyle = "#ff3f5b";
+        ctx.beginPath();
+        ctx.arc(314, 6, 3, 0, Math.PI * 2);
+        ctx.fill();
+        return;
+      }
+
+      const nodeList = (((parsedDsl || {}).ui || {}).nodes) || [];
+      const { values, numerics, series } = buildResolvedData(parsedDsl, parsedPayload);
+
+      for (const node of nodeList) {
+        const type = node.type || "label";
+        const x = Number(node.x || 0);
+        const y = Number(node.y || 0);
+        const w = Number(node.w || 0);
+        const h = Number(node.h || 0);
+        const fg = hexColor(node.color, "#ffffff");
+        const bg = hexColor(node.bg, "#000000");
+        const font = Number(node.font || 1);
+
+        if (type === "label") {
+          drawString(bindTemplate(node.text || "", values), x, y, font, fg);
+          continue;
+        }
+
+        if (type === "value_box") {
+          ctx.fillStyle = bg;
+          ctx.fillRect(x, y, w, h);
+          ctx.strokeStyle = fg;
+          ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+          if (node.text) drawString(bindTemplate(node.text, values), x + 4, y + 3, 1, fg);
+          const val = node.key ? (values[node.key] ?? "") : "";
+          drawString(val, x + 4, y + 14, font, fg);
+          continue;
+        }
+
+        if (type === "progress") {
+          ctx.fillStyle = bg;
+          ctx.fillRect(x, y, w, h);
+          ctx.strokeStyle = fg;
+          ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+          const key = node.key || "";
+          let v = numerics[key];
+          if (!Number.isFinite(v)) v = parseNumberMaybe(values[key]) ?? 0;
+          const min = Number(node.min ?? 0);
+          const max = Number(node.max ?? 100);
+          const ratio = max > min ? Math.max(0, Math.min(1, (v - min) / (max - min))) : 0;
+          const fillW = Math.floor((w - 4) * ratio);
+          ctx.fillStyle = fg;
+          ctx.fillRect(x + 2, y + 2, fillW, Math.max(0, h - 4));
+          drawString(String(v.toFixed(1)), x + Math.floor(w / 2) - 12, y + Math.floor(h / 2) - 5, 1, "#ffffff");
+          continue;
+        }
+
+        if (type === "sparkline") {
+          ctx.fillStyle = bg;
+          ctx.fillRect(x, y, w, h);
+          ctx.strokeStyle = fg;
+          ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+          const vals = series[node.key] || [];
+          if (vals.length < 2) continue;
+          let min = Number(node.min);
+          let max = Number(node.max);
+          if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) {
+            min = Math.min(...vals);
+            max = Math.max(...vals);
+            if (max <= min) max = min + 1;
+          }
+          ctx.strokeStyle = fg;
+          ctx.beginPath();
+          for (let i = 0; i < vals.length; i++) {
+            const rx = (i / (vals.length - 1)) * (w - 2);
+            const ry = (vals[i] - min) / (max - min);
+            const px = x + 1 + rx;
+            const py = y + (h - 2) - (ry * (h - 2));
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          }
+          ctx.stroke();
+          continue;
+        }
+
+        if (type === "circle") {
+          const r = Number(node.r || Math.floor(w / 2) || 10);
+          if (bg.toLowerCase() !== "#000000") {
+            ctx.fillStyle = bg;
+            ctx.beginPath();
+            ctx.arc(x, y, r, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          const thickness = Math.max(1, Number(node.thickness || 1));
+          ctx.strokeStyle = fg;
+          for (let i = 0; i < thickness; i++) {
+            ctx.beginPath();
+            ctx.arc(x, y, Math.max(1, r - i), 0, Math.PI * 2);
+            ctx.stroke();
+          }
+          continue;
+        }
+
+        if (type === "hand") {
+          let deg = null;
+          if (node.angle_expr) deg = evalAngle(bindTemplate(node.angle_expr, values), numerics);
+          if (deg == null && node.key) deg = numerics[node.key] ?? parseNumberMaybe(values[node.key]);
+          if (deg == null || !Number.isFinite(deg)) continue;
+          const len = Number(node.length || node.r || 20);
+          const rad = (deg - 90) * Math.PI / 180;
+          const x2 = x + Math.cos(rad) * len;
+          const y2 = y + Math.sin(rad) * len;
+          const thick = Math.max(1, Number(node.thickness || 1));
+          ctx.strokeStyle = fg;
+          ctx.lineWidth = thick;
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.lineTo(x2, y2);
+          ctx.stroke();
+          ctx.lineWidth = 1;
+        }
+      }
+
+      ctx.fillStyle = lastError ? "var(--err)" : "var(--ok)";
+      ctx.beginPath();
+      ctx.arc(314, 6, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function compileDsl() {
+      try {
+        parsedDsl = parseJson(dslInput.value);
+        lastError = "";
+        setStatus(dslStatus, "DSL parsed successfully.", true);
+      } catch (err) {
+        parsedDsl = null;
+        lastError = err.message;
+        setStatus(dslStatus, "DSL parse error: " + err.message, false);
+      }
+    }
+
+    function compilePayload() {
+      const raw = payloadInput.value.trim();
+      if (!raw) {
+        parsedPayload = {};
+        setStatus(payloadStatus, "Payload cleared (using empty object or local_time clock).", true);
+        return;
+      }
+      try {
+        parsedPayload = parseJson(raw);
+        setStatus(payloadStatus, "Payload parsed successfully.", true);
+      } catch (err) {
+        parsedPayload = {};
+        setStatus(payloadStatus, "Payload parse error: " + err.message, false);
+      }
+    }
+
+    let dslDebounce = null;
+    dslInput.addEventListener("input", () => {
+      clearTimeout(dslDebounce);
+      dslDebounce = setTimeout(() => {
+        compileDsl();
+        renderPreview();
+      }, 180);
+    });
+
+    let payloadDebounce = null;
+    payloadInput.addEventListener("input", () => {
+      clearTimeout(payloadDebounce);
+      payloadDebounce = setTimeout(() => {
+        compilePayload();
+        renderPreview();
+      }, 180);
+    });
+
+    document.getElementById("applyPayloadBtn").addEventListener("click", () => {
+      compilePayload();
+      renderPreview();
+    });
+
+    document.getElementById("formatBtn").addEventListener("click", () => {
+      formatJsonInEditor(dslInput);
+      compileDsl();
+      renderPreview();
+    });
+
+    document.getElementById("downloadBtn").addEventListener("click", () => {
+      const blob = new Blob([dslInput.value], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "widget.dsl.json";
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+
+    document.getElementById("fileOpen").addEventListener("change", (ev) => {
+      const file = ev.target.files && ev.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        dslInput.value = String(reader.result || "");
+        compileDsl();
+        renderPreview();
+      };
+      reader.readAsText(file);
+      ev.target.value = "";
+    });
+
+    async function loadRepoFile(path) {
+      const res = await fetch(path, { cache: "no-store" });
+      if (!res.ok) throw new Error("HTTP " + res.status + " loading " + path);
+      return await res.text();
+    }
+
+    document.getElementById("loadWeatherBtn").addEventListener("click", async () => {
+      try {
+        dslInput.value = await loadRepoFile("/data/dsl/weather_now.json");
+        payloadInput.value = `{
+  "hourly": {
+    "time": ["2026-02-20T00:00", "2026-02-20T01:00", "2026-02-20T02:00"],
+    "temperature_2m": [10.6, 9.4, 8.2],
+    "relative_humidity_2m": [56, 56, 62]
+  }
+}`;
+        compileDsl();
+        compilePayload();
+        renderPreview();
+      } catch (err) {
+        setStatus(dslStatus, "Sample load failed: " + err.message, false);
+      }
+    });
+
+    document.getElementById("loadAdsbBtn").addEventListener("click", async () => {
+      try {
+        dslInput.value = await loadRepoFile("/data/dsl/adsb_nearest.json");
+        payloadInput.value = `{
+  "ac": [
+    {"flight":"UAL2423","t":"B739","alt_baro":10025,"dst":35.6,"destination":"KSFO","lat":37.65,"lon":-121.98},
+    {"flight":"VOI1772","t":"A20N","alt_baro":4475,"dst":37.9,"destination":"MMUN","lat":37.55,"lon":-121.96},
+    {"flight":"UAL249","t":"B39M","alt_baro":11025,"dst":30.1,"destination":"KDEN","lat":37.64,"lon":-121.84},
+    {"flight":"UAL1665","t":"B38M","alt_baro":9025,"dst":35.1,"destination":"KLAX","lat":37.47,"lon":-121.79},
+    {"flight":"N441QF","t":"C172","alt_baro":1800,"dst":31.5,"destination":"?","lat":38.39,"lon":-121.59}
+  ]
+}`;
+        compileDsl();
+        compilePayload();
+        renderPreview();
+      } catch (err) {
+        setStatus(dslStatus, "Sample load failed: " + err.message, false);
+      }
+    });
+
+    function tick() {
+      if (animateClock.checked && parsedDsl && parsedDsl.data && parsedDsl.data.source === "local_time") {
+        renderPreview();
+      }
+      requestAnimationFrame(tick);
+    }
+
+    dslInput.value = `{
+  "version": 1,
+  "data": {
+    "source": "local_time",
+    "fields": {
+      "clock": "time_24",
+      "hour": "hour",
+      "minute": "minute",
+      "second": "second"
+    }
+  },
+  "ui": {
+    "title": "Editor Boot",
+    "nodes": [
+      {"type":"label","x":8,"y":8,"font":2,"color":"#9FD3FF","text":"Widget DSL Editor"},
+      {"type":"label","x":8,"y":28,"font":2,"color":"#FFFFFF","text":"{{clock}}"},
+      {"type":"circle","x":260,"y":130,"r":52,"color":"#D0D0D0","bg":"#101010","thickness":2},
+      {"type":"hand","x":260,"y":130,"length":30,"thickness":3,"color":"#52E88A","angle_expr":"(hour%12)*30 + minute*0.5"},
+      {"type":"hand","x":260,"y":130,"length":40,"thickness":2,"color":"#FFD54A","angle_expr":"minute*6"},
+      {"type":"hand","x":260,"y":130,"length":48,"thickness":1,"color":"#FF5A5A","angle_expr":"second*6"}
+    ]
+  }
+}`;
+    payloadInput.value = "{}";
+    compileDsl();
+    compilePayload();
+    renderPreview();
+    requestAnimationFrame(tick);
+  </script>
+</body>
+</html>
