@@ -1,6 +1,6 @@
 #include <Arduino.h>
 #include <SPI.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include <TFT_eSPI.h>
 #include <WiFi.h>
 #include <XPT2046_Touchscreen.h>
@@ -11,6 +11,7 @@
 #include "RuntimeGeo.h"
 #include "RuntimeSettings.h"
 #include "core/DisplayManager.h"
+#include "core/TextEntry.h"
 #include "core/TouchMapper.h"
 #include "core/WifiProvisioner.h"
 #include "services/GeoIpService.h"
@@ -35,7 +36,9 @@ constexpr char kColorSetKey[] = "color_set";
 constexpr char kColorBgrKey[] = "color_bgr";
 constexpr char kInvertSetKey[] = "inv_set";
 constexpr char kInvertOnKey[] = "inv_on";
+constexpr uint16_t kAdsbRadiusOptions[] = {20, 40, 80, 120};
 void configureTimeFromGeo();
+bool ensureUtcTime(uint32_t timeoutMs = 6000);
 
 void waitForTouchRelease() {
   if (!AppConfig::kTouchEnabled) {
@@ -197,6 +200,15 @@ void drawSetupScreen() {
   const uint16_t hdrBg = tft.color565(20, 24, 36);
   const uint16_t btnBg = tft.color565(36, 42, 60);
   const uint16_t btnBgAlt = tft.color565(32, 58, 44);
+  const int btnW = 148;
+  const int btnH = 34;
+  const int xL = 8;
+  const int xR = 164;
+  const int y1 = 34;
+  const int y2 = 72;
+  const int y3 = 110;
+  const int y4 = 148;
+  const int y5 = 186;
 
   tft.fillScreen(TFT_BLACK);
   tft.fillRect(0, 0, AppConfig::kScreenWidth, 28, hdrBg);
@@ -209,21 +221,47 @@ void drawSetupScreen() {
     tft.drawCentreString(label, x + w / 2, y + 10, 2);
   };
 
-  drawBtn(8, 36, 148, 42, "Display Cal", false);
-  drawBtn(164, 36, 148, 42, "WiFi Setup", false);
-  drawBtn(8, 86, 148, 42, String("Clock: ") + (RuntimeSettings::use24HourClock ? "24h" : "12h"),
+  drawBtn(xL, y1, btnW, btnH, "Display Cal", false);
+  drawBtn(xR, y1, btnW, btnH, "WiFi Setup", false);
+  drawBtn(xL, y2, btnW, btnH,
+          String("Clock: ") + (RuntimeSettings::use24HourClock ? "24h" : "12h"), true);
+  drawBtn(xR, y2, btnW, btnH, String("Temp: ") + (RuntimeSettings::useFahrenheit ? "F" : "C"),
           true);
-  drawBtn(164, 86, 148, 42, String("Temp: ") + (RuntimeSettings::useFahrenheit ? "F" : "C"),
+  drawBtn(xL, y3, btnW, btnH, String("Distance: ") + (RuntimeSettings::useMiles ? "mi" : "km"),
           true);
-  drawBtn(8, 136, 148, 42, String("Distance: ") + (RuntimeSettings::useMiles ? "mi" : "km"),
-          true);
-  drawBtn(164, 136, 148, 42, "Exit", false);
-
-  tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-  tft.drawString("Open setup: tap top-right corner in dashboard", 8, 198, 1);
+  drawBtn(xR, y3, btnW, btnH, String("ADS-B: ") + RuntimeSettings::adsbRadiusNm + "nm", true);
+  drawBtn(xL, y4, btnW, btnH, "City / Locale", false);
+  drawBtn(xR, y4, btnW, btnH, "Lat / Lon", false);
+  drawBtn(xL, y5, btnW, btnH, "Use Geo-IP", false);
+  drawBtn(xR, y5, btnW, btnH, "Exit", false);
 }
 
 void runSetupScreen() {
+  auto showMessage = [&](const String& line1, const String& line2, uint32_t timeoutMs = 0) {
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(TFT_CYAN, TFT_BLACK);
+    tft.drawString(line1, AppConfig::kScreenWidth / 2, AppConfig::kScreenHeight / 2 - 14, 2);
+    if (!line2.isEmpty()) {
+      tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+      tft.drawString(line2, AppConfig::kScreenWidth / 2, AppConfig::kScreenHeight / 2 + 10, 2);
+    }
+    tft.setTextDatum(TL_DATUM);
+    if (timeoutMs == 0) {
+      uint16_t x = 0;
+      uint16_t y = 0;
+      while (!readTouchPoint(x, y)) {
+        delay(20);
+      }
+      waitForTouchRelease();
+    } else {
+      const uint32_t startMs = millis();
+      while (millis() - startMs < timeoutMs) {
+        delay(20);
+      }
+    }
+  };
+
   for (;;) {
     drawSetupScreen();
     uint16_t x = 0;
@@ -234,47 +272,146 @@ void runSetupScreen() {
     waitForTouchRelease();
 
     // Display calibration
-    if (x >= 8 && x <= 156 && y >= 36 && y <= 78) {
+    if (x >= 8 && x <= 156 && y >= 34 && y <= 68) {
       ensureDisplayColorOrder();
       continue;
     }
 
     // WiFi setup
-    if (x >= 164 && x <= 312 && y >= 36 && y <= 78) {
+    if (x >= 164 && x <= 312 && y >= 34 && y <= 68) {
       WifiProvisioner provisioner(tft, touch);
       wifiReady = provisioner.connectOrProvision();
       GeoIpService geo;
-      geo.loadCached();
-      if (wifiReady) {
-        geo.refreshFromInternet();
+      if (!geo.loadOverride()) {
+        geo.loadCached();
+        if (wifiReady) {
+          geo.refreshFromInternet();
+        }
+        configureTimeFromGeo();
       }
-      configureTimeFromGeo();
       continue;
     }
 
     // Clock 12h/24h
-    if (x >= 8 && x <= 156 && y >= 86 && y <= 128) {
+    if (x >= 8 && x <= 156 && y >= 72 && y <= 106) {
       RuntimeSettings::use24HourClock = !RuntimeSettings::use24HourClock;
       RuntimeSettings::save();
       continue;
     }
 
     // Temp units
-    if (x >= 164 && x <= 312 && y >= 86 && y <= 128) {
+    if (x >= 164 && x <= 312 && y >= 72 && y <= 106) {
       RuntimeSettings::useFahrenheit = !RuntimeSettings::useFahrenheit;
       RuntimeSettings::save();
       continue;
     }
 
     // Distance units
-    if (x >= 8 && x <= 156 && y >= 136 && y <= 178) {
+    if (x >= 8 && x <= 156 && y >= 110 && y <= 144) {
       RuntimeSettings::useMiles = !RuntimeSettings::useMiles;
       RuntimeSettings::save();
       continue;
     }
 
+    // ADS-B radius
+    if (x >= 164 && x <= 312 && y >= 110 && y <= 144) {
+      constexpr size_t kRadiusCount = sizeof(kAdsbRadiusOptions) / sizeof(kAdsbRadiusOptions[0]);
+      uint16_t nextRadius = kAdsbRadiusOptions[0];
+      for (size_t i = 0; i < kRadiusCount; ++i) {
+        if (RuntimeSettings::adsbRadiusNm == kAdsbRadiusOptions[i]) {
+          nextRadius = kAdsbRadiusOptions[(i + 1) % kRadiusCount];
+          break;
+        }
+      }
+      RuntimeSettings::adsbRadiusNm = nextRadius;
+      RuntimeSettings::save();
+      continue;
+    }
+
+    // City / locale
+    if (x >= 8 && x <= 156 && y >= 148 && y <= 182) {
+      if (!wifiReady) {
+        showMessage("WiFi required", "Connect first");
+        continue;
+      }
+      if (!ensureUtcTime()) {
+        showMessage("Time sync failed", "SSL may fail");
+      }
+      TextEntry entry(tft, touch);
+      TextEntryOptions options;
+      options.title = "City / Locale";
+      options.subtitle = "ex: Seattle, WA";
+      const String city = entry.prompt(options);
+      if (city == "__CANCEL__" || city.isEmpty()) {
+        continue;
+      }
+      GeoIpService geo;
+      if (geo.setManualCity(city)) {
+        configureTimeFromGeo();
+        showMessage("Location set", city, 1200);
+      } else {
+        showMessage("Location failed", geo.lastError());
+      }
+      continue;
+    }
+
+    // Lat / Lon
+    if (x >= 164 && x <= 312 && y >= 148 && y <= 182) {
+      if (!wifiReady) {
+        showMessage("WiFi required", "Connect first");
+        continue;
+      }
+      if (!ensureUtcTime()) {
+        showMessage("Time sync failed", "SSL may fail");
+      }
+      TextEntry entry(tft, touch);
+      TextEntryOptions latOpt;
+      latOpt.title = "Latitude";
+      latOpt.subtitle = "Range -90..90";
+      latOpt.numericOnly = true;
+      const String latText = entry.prompt(latOpt);
+      if (latText == "__CANCEL__" || latText.isEmpty()) {
+        continue;
+      }
+      TextEntryOptions lonOpt;
+      lonOpt.title = "Longitude";
+      lonOpt.subtitle = "Range -180..180";
+      lonOpt.numericOnly = true;
+      const String lonText = entry.prompt(lonOpt);
+      if (lonText == "__CANCEL__" || lonText.isEmpty()) {
+        continue;
+      }
+      const float lat = latText.toFloat();
+      const float lon = lonText.toFloat();
+      if (lat < -90.0f || lat > 90.0f || lon < -180.0f || lon > 180.0f) {
+        showMessage("Invalid coords", "Check range");
+        continue;
+      }
+      GeoIpService geo;
+      if (geo.setManualLatLon(lat, lon)) {
+        configureTimeFromGeo();
+        showMessage("Location set", String(lat, 4) + "," + String(lon, 4), 1200);
+      } else {
+        showMessage("Location failed", geo.lastError());
+      }
+      continue;
+    }
+
+    // Use Geo-IP
+    if (x >= 8 && x <= 156 && y >= 186 && y <= 220) {
+      GeoIpService geo;
+      geo.clearOverride();
+      geo.loadCached();
+      if (wifiReady) {
+        geo.refreshFromInternet();
+      }
+      configureTimeFromGeo();
+      showMessage("Geo-IP enabled", geo.lastSource(), 1000);
+      continue;
+    }
+
     // Exit
-    if (x >= 164 && x <= 312 && y >= 136 && y <= 178) {
+    if (x >= 164 && x <= 312 && y >= 186 && y <= 220) {
       return;
     }
   }
@@ -406,6 +543,19 @@ void configureTimeFromGeo() {
     Serial.println("[time] NTP UTC sync; timezone unavailable");
   }
 }
+
+bool ensureUtcTime(uint32_t timeoutMs) {
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  const uint32_t startMs = millis();
+  while (millis() - startMs < timeoutMs) {
+    const time_t nowUtc = time(nullptr);
+    if (nowUtc > 946684800) {
+      return true;
+    }
+    delay(120);
+  }
+  return false;
+}
 }  // namespace
 
 void setup() {
@@ -415,10 +565,10 @@ void setup() {
   Serial.println("== WidgetOS boot ==");
   Serial.println("[boot] setup start");
 
-  if (!SPIFFS.begin(true)) {
-    Serial.println("SPIFFS mount failed");
+  if (!LittleFS.begin(true)) {
+    Serial.println("LittleFS mount failed");
   } else {
-    Serial.println("[boot] SPIFFS mounted");
+    Serial.println("[boot] LittleFS mounted");
   }
   RuntimeSettings::load();
   Serial.printf("[settings] clock=%s temp=%s dist=%s\n",
@@ -465,7 +615,12 @@ void setup() {
   wifiReady = provisioner.connectOrProvision();
 
   GeoIpService geo;
-  if (geo.loadCached()) {
+  if (geo.loadOverride()) {
+    Serial.printf("[geo] manual source=%s lat=%.4f lon=%.4f tz=%s off_min=%d known=%d\n",
+                  geo.lastSource().c_str(), RuntimeGeo::latitude, RuntimeGeo::longitude,
+                  RuntimeGeo::timezone.c_str(), RuntimeGeo::utcOffsetMinutes,
+                  RuntimeGeo::hasUtcOffset ? 1 : 0);
+  } else if (geo.loadCached()) {
     Serial.printf("[geo] cache hit source=%s lat=%.4f lon=%.4f tz=%s off_min=%d known=%d\n",
                   geo.lastSource().c_str(), RuntimeGeo::latitude, RuntimeGeo::longitude,
                   RuntimeGeo::timezone.c_str(), RuntimeGeo::utcOffsetMinutes,
@@ -474,7 +629,7 @@ void setup() {
     Serial.printf("[geo] cache miss: %s\n", geo.lastError().c_str());
   }
 
-  if (wifiReady) {
+  if (wifiReady && geo.lastSource() != "manual") {
     Serial.printf("WiFi connected: %s\n", WiFi.localIP().toString().c_str());
     if (geo.refreshFromInternet()) {
       Serial.printf("[geo] online source=%s lat=%.4f lon=%.4f tz=%s off_min=%d known=%d\n",
@@ -525,10 +680,31 @@ void loop() {
   if (AppConfig::kTouchEnabled && touch.touched()) {
     TouchPoint point;
     if (TouchMapper::mapRaw(touch.getPoint(), point)) {
-      if (point.x >= static_cast<int16_t>(AppConfig::kScreenWidth - 32) && point.y <= 24) {
-        waitForTouchRelease();
-        runSetupScreen();
-        displayManager.reloadLayout();
+      const bool inCorner = (point.x >= static_cast<int16_t>(AppConfig::kScreenWidth - 32) &&
+                             point.y <= 24);
+      if (inCorner) {
+        const uint32_t startMs = millis();
+        bool held = false;
+        while (touch.touched()) {
+          TouchPoint current;
+          if (!TouchMapper::mapRaw(touch.getPoint(), current)) {
+            break;
+          }
+          if (current.x < static_cast<int16_t>(AppConfig::kScreenWidth - 32) ||
+              current.y > 24) {
+            break;
+          }
+          if (millis() - startMs > 650) {
+            held = true;
+            break;
+          }
+          delay(20);
+        }
+        if (held) {
+          waitForTouchRelease();
+          runSetupScreen();
+          displayManager.reloadLayout();
+        }
       } else {
         displayManager.onTouch(point.x, point.y);
       }

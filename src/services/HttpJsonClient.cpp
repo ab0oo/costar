@@ -3,6 +3,8 @@
 #include <HTTPClient.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <cstdlib>
 #include <esp_heap_caps.h>
 
@@ -90,6 +92,31 @@ String compactPreview(const String& payload, size_t maxLen = 120) {
   }
   return out;
 }
+
+SemaphoreHandle_t sHttpMutex = nullptr;
+
+class HttpMutexGuard {
+ public:
+  explicit HttpMutexGuard(uint32_t timeoutMs) {
+    if (sHttpMutex == nullptr) {
+      sHttpMutex = xSemaphoreCreateMutex();
+    }
+    if (sHttpMutex != nullptr) {
+      locked_ = (xSemaphoreTake(sHttpMutex, pdMS_TO_TICKS(timeoutMs)) == pdTRUE);
+    }
+  }
+
+  ~HttpMutexGuard() {
+    if (locked_ && sHttpMutex != nullptr) {
+      xSemaphoreGive(sHttpMutex);
+    }
+  }
+
+  bool locked() const { return locked_; }
+
+ private:
+  bool locked_ = false;
+};
 }  // namespace
 
 bool HttpJsonClient::get(const String& url, JsonDocument& outDoc,
@@ -101,6 +128,14 @@ bool HttpJsonClient::get(const String& url, JsonDocument& outDoc,
   if (WiFi.status() != WL_CONNECTED) {
     if (errorMessage != nullptr) {
       *errorMessage = "WiFi disconnected, " + heapDiag();
+    }
+    return false;
+  }
+
+  HttpMutexGuard guard(12000);
+  if (!guard.locked()) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "HTTP busy (mutex timeout), " + heapDiag();
     }
     return false;
   }

@@ -3,6 +3,7 @@
 #include <stdlib.h>
 
 #include "RuntimeGeo.h"
+#include "RuntimeSettings.h"
 
 String DslWidget::applyFormat(const String& text, const dsl::FormatSpec& fmt,
                               bool numeric, double numericValue) const {
@@ -23,6 +24,13 @@ String DslWidget::applyFormat(const String& text, const dsl::FormatSpec& fmt,
       unitSuffix = " F";
     } else if (unit == "c" || unit == "celsius") {
       unitSuffix = " C";
+    } else if (unit == "pressure") {
+      if (RuntimeSettings::useFahrenheit) {
+        value = value * 0.0295299830714;
+        unitSuffix = " inHg";
+      } else {
+        unitSuffix = " hPa";
+      }
     } else if (unit == "percent" || unit == "%") {
       unitSuffix = "%";
     } else if (unit == "usd" || unit == "$") {
@@ -33,10 +41,14 @@ String DslWidget::applyFormat(const String& text, const dsl::FormatSpec& fmt,
     }
   }
 
-  if (numeric && fmt.roundDigits >= 0) {
-    out += formatNumericLocale(value, fmt.roundDigits, fmt.locale);
-  } else if (numeric) {
-    out += formatNumericLocale(value, 2, fmt.locale);
+  if (numeric) {
+    int decimals = 2;
+    if (fmt.roundDigits >= 0) {
+      decimals = fmt.roundDigits;
+    } else if (unit == "pressure") {
+      decimals = RuntimeSettings::useFahrenheit ? 2 : 0;
+    }
+    out += formatNumericLocale(value, decimals, fmt.locale);
   }
 
   if (!fmt.prefix.isEmpty()) {
@@ -113,15 +125,19 @@ bool DslWidget::parseTzOffsetMinutes(const String& tz, int& minutes) const {
 
 bool DslWidget::parseIsoMinuteTimestamp(const String& text, int& year, int& mon, int& day,
                                         int& hour, int& minute) const {
-  if (text.length() < 16) {
+  if (text.length() < 10) {
     return false;
   }
 
   year = text.substring(0, 4).toInt();
   mon = text.substring(5, 7).toInt();
   day = text.substring(8, 10).toInt();
-  hour = text.substring(11, 13).toInt();
-  minute = text.substring(14, 16).toInt();
+  hour = 0;
+  minute = 0;
+  if (text.length() >= 16) {
+    hour = text.substring(11, 13).toInt();
+    minute = text.substring(14, 16).toInt();
+  }
 
   if (year < 1970 || mon < 1 || mon > 12 || day < 1 || day > 31 || hour < 0 || hour > 23 ||
       minute < 0 || minute > 59) {
@@ -158,17 +174,18 @@ String DslWidget::formatTimestampWithTz(const String& text, const String& tz,
   int tzOffsetMin = 0;
   String tzSource = tz;
   if (tz.equalsIgnoreCase("local")) {
-    if (!RuntimeGeo::hasUtcOffset) {
-      return text;
+    if (RuntimeGeo::hasUtcOffset) {
+      const int off = RuntimeGeo::utcOffsetMinutes;
+      const char sign = off < 0 ? '-' : '+';
+      const int absMin = abs(off);
+      const int hh = absMin / 60;
+      const int mm = absMin % 60;
+      char tzBuf[16];
+      snprintf(tzBuf, sizeof(tzBuf), "UTC%c%02d:%02d", sign, hh, mm);
+      tzSource = String(tzBuf);
+    } else {
+      tzSource = "UTC+00:00";
     }
-    const int off = RuntimeGeo::utcOffsetMinutes;
-    const char sign = off < 0 ? '-' : '+';
-    const int absMin = abs(off);
-    const int hh = absMin / 60;
-    const int mm = absMin % 60;
-    char tzBuf[16];
-    snprintf(tzBuf, sizeof(tzBuf), "UTC%c%02d:%02d", sign, hh, mm);
-    tzSource = String(tzBuf);
   }
 
   if (!parseTzOffsetMinutes(tzSource, tzOffsetMin)) {
@@ -201,6 +218,57 @@ String DslWidget::formatTimestampWithTz(const String& text, const String& tz,
 
   const int outH = rem / 60;
   const int outM = rem % 60;
+  int dow = static_cast<int>((days + 4) % 7);
+  if (dow < 0) {
+    dow += 7;
+  }
+  static const char* kDowShort[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+  static const char* kDowLong[] = {"Sunday", "Monday", "Tuesday", "Wednesday",
+                                   "Thursday", "Friday", "Saturday"};
+  static const char* kMonthShort[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+  static const char* kMonthLong[] = {"January", "February", "March", "April", "May", "June",
+                                     "July", "August", "September", "October", "November",
+                                     "December"};
+
+  auto isoWeekNumber = [&](int year, int month, int day) -> int {
+    const long long dayNum = daysFromCivil(year, month, day);
+    int dowMon = static_cast<int>((dayNum + 3) % 7);
+    if (dowMon < 0) {
+      dowMon += 7;
+    }
+    dowMon += 1;  // 1..7 Monday..Sunday
+
+    const long long jan1 = daysFromCivil(year, 1, 1);
+    int jan1Dow = static_cast<int>((jan1 + 3) % 7);
+    if (jan1Dow < 0) {
+      jan1Dow += 7;
+    }
+    jan1Dow += 1;
+
+    const bool leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    const bool has53 = (jan1Dow == 4) || (leap && jan1Dow == 3);
+
+    const int doy = static_cast<int>(dayNum - jan1) + 1;
+    int week = (doy - dowMon + 10) / 7;
+    if (week < 1) {
+      // previous year
+      const int prevYear = year - 1;
+      const long long prevJan1 = daysFromCivil(prevYear, 1, 1);
+      int prevJan1Dow = static_cast<int>((prevJan1 + 3) % 7);
+      if (prevJan1Dow < 0) {
+        prevJan1Dow += 7;
+      }
+      prevJan1Dow += 1;
+      const bool prevLeap =
+          (prevYear % 4 == 0 && prevYear % 100 != 0) || (prevYear % 400 == 0);
+      const bool prevHas53 = (prevJan1Dow == 4) || (prevLeap && prevJan1Dow == 3);
+      week = prevHas53 ? 53 : 52;
+    } else if (week == 53 && !has53) {
+      week = 1;
+    }
+    return week;
+  };
 
   String out = timeFormat;
   out.replace("%Y", String(outY));
@@ -208,5 +276,15 @@ String DslWidget::formatTimestampWithTz(const String& text, const String& tz,
   out.replace("%d", (outD < 10 ? "0" : "") + String(outD));
   out.replace("%H", (outH < 10 ? "0" : "") + String(outH));
   out.replace("%M", (outM < 10 ? "0" : "") + String(outM));
+  out.replace("%A", String(kDowLong[dow]));
+  out.replace("%a", String(kDowShort[dow]));
+  if (outMo >= 1 && outMo <= 12) {
+    out.replace("%B", String(kMonthLong[outMo - 1]));
+    out.replace("%b", String(kMonthShort[outMo - 1]));
+  }
+  const int weekNum = isoWeekNumber(outY, outMo, outD);
+  char weekBuf[4];
+  snprintf(weekBuf, sizeof(weekBuf), "%02d", weekNum);
+  out.replace("%V", String(weekBuf));
   return out;
 }

@@ -250,15 +250,26 @@ bool DslWidget::update(uint32_t nowMs) {
     return false;
   }
 
-  if (dsl_.source == "adsb_nearest" && adsbBackoffUntilMs_ != 0 &&
-      static_cast<int32_t>(nowMs - adsbBackoffUntilMs_) < 0) {
-    return false;
-  }
-
-  if (nowMs - lastFetchMs_ < dsl_.pollMs) {
-    return false;
+  if (dsl_.source == "adsb_nearest") {
+    if (adsbBackoffUntilMs_ != 0 && static_cast<int32_t>(nowMs - adsbBackoffUntilMs_) < 0) {
+      return false;
+    }
+    if (nextFetchMs_ == 0) {
+      nextFetchMs_ = nowMs;
+    }
+    if (!firstFetch_ && static_cast<int32_t>(nowMs - nextFetchMs_) < 0) {
+      return false;
+    }
+  } else if (nowMs - lastFetchMs_ < dsl_.pollMs) {
+    if (!firstFetch_) {
+      return false;
+    }
   }
   lastFetchMs_ = nowMs;
+  if (dsl_.source == "adsb_nearest") {
+    nextFetchMs_ = nowMs + dsl_.pollMs + computeAdsbJitterMs(dsl_.pollMs);
+  }
+  firstFetch_ = false;
 
   JsonDocument doc;
   String error;
@@ -277,8 +288,14 @@ bool DslWidget::update(uint32_t nowMs) {
     if (altTransportUrl.startsWith("https://")) {
       altTransportUrl.replace("https://", "http://");
     }
-    const String radiusNm = config_.settings.count("radius_nm") ? config_.settings.at("radius_nm")
-                                                                 : String("40");
+    String radiusNm;
+    if (RuntimeSettings::adsbRadiusNm > 0) {
+      radiusNm = String(RuntimeSettings::adsbRadiusNm);
+    } else if (config_.settings.count("radius_nm")) {
+      radiusNm = config_.settings.at("radius_nm");
+    } else {
+      radiusNm = "40";
+    }
     const String fallbackUrlHttps = "https://api.airplanes.live/v2/point/" +
                                     String(RuntimeGeo::latitude, 4) + "/" +
                                     String(RuntimeGeo::longitude, 4) + "/" + radiusNm;

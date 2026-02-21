@@ -2,7 +2,7 @@
 
 #include <ArduinoJson.h>
 #include <FS.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 
 #include "AppConfig.h"
 #include "core/WidgetFactory.h"
@@ -91,7 +91,7 @@ bool DisplayManager::loadLayout() {
   xSemaphoreTake(widgetsMutex_, portMAX_DELAY);
   widgets_.clear();
 
-  fs::File manifest = SPIFFS.open(layoutPath_, FILE_READ);
+  fs::File manifest = LittleFS.open(layoutPath_, FILE_READ);
   if (!manifest || manifest.isDirectory()) {
     xSemaphoreGive(widgetsMutex_);
     drawBootMessage("Layout missing", layoutPath_);
@@ -196,6 +196,7 @@ bool DisplayManager::parseWidgetConfig(const JsonObjectConst& node, WidgetConfig
   outCfg.w = node["w"] | 120;
   outCfg.h = node["h"] | 80;
   outCfg.updateMs = node["update_ms"] | 1000;
+  outCfg.drawBorder = node["draw_border"] | outCfg.drawBorder;
 
   const JsonObjectConst settings = node["settings"];
   if (!settings.isNull()) {
@@ -229,6 +230,7 @@ bool DisplayManager::parseRegionConfig(const JsonObjectConst& region,
   outCfg.y = region["y"] | outCfg.y;
   outCfg.w = region["w"] | outCfg.w;
   outCfg.h = region["h"] | outCfg.h;
+  outCfg.drawBorder = region["draw_border"] | outCfg.drawBorder;
 
   const String regionId = region["id"] | String();
   if (!regionId.isEmpty()) {

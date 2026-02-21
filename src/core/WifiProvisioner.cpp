@@ -1,9 +1,9 @@
 #include "core/WifiProvisioner.h"
 
 #include <algorithm>
-#include <cctype>
 
 #include "AppConfig.h"
+#include "core/TextEntry.h"
 #include "core/TouchMapper.h"
 
 namespace {
@@ -13,32 +13,6 @@ constexpr char kPrefsPassKey[] = "password";
 
 constexpr int16_t kHeaderH = 28;
 constexpr int16_t kRowH = 22;
-
-constexpr int16_t kKW = 28;
-constexpr int16_t kKH = 28;
-constexpr int16_t kKG = 3;
-constexpr int16_t kKS = kKW + kKG;
-
-constexpr int16_t kKY0 = 52;
-constexpr int16_t kKY1 = kKY0 + kKH + kKG;
-constexpr int16_t kKY2 = kKY1 + kKH + kKG;
-constexpr int16_t kKY3 = kKY2 + kKH + kKG;
-
-constexpr int16_t kRX10 = 6;
-constexpr int16_t kRX9 = 22;
-
-constexpr int16_t kShiftX = 8;
-constexpr int16_t kShiftW = 42;
-constexpr int16_t kAlpha7X = kShiftX + kShiftW + kKG;
-constexpr int16_t kBsX = 270;
-constexpr int16_t kBsW = 42;
-
-constexpr int16_t kModeX = 8;
-constexpr int16_t kModeW = 50;
-constexpr int16_t kSpaceX = kModeX + kModeW + kKG;
-constexpr int16_t kEnterX = 252;
-constexpr int16_t kEnterW = 60;
-constexpr int16_t kSpaceW = kEnterX - kKG - kSpaceX;
 }  // namespace
 
 WifiProvisioner::WifiProvisioner(TFT_eSPI& tft, XPT2046_Touchscreen& touch)
@@ -292,165 +266,12 @@ int WifiProvisioner::pickNetwork(const std::vector<NetworkInfo>& networks) {
 }
 
 String WifiProvisioner::promptPassword(const String& ssid) {
-  bool symMode = false;
-  bool capsOn = true;
-  String input;
-
-  while (true) {
-    const uint16_t keyBg = tft_.color565(35, 35, 50);
-    const uint16_t keySpecial = tft_.color565(40, 70, 140);
-    const uint16_t keyGreen = tft_.color565(20, 140, 60);
-    const uint16_t keyActive = tft_.color565(60, 120, 210);
-
-    tft_.fillScreen(TFT_BLACK);
-    tft_.setTextDatum(ML_DATUM);
-    tft_.setTextColor(tft_.color565(120, 200, 255), TFT_BLACK);
-    String ssidLabel = "Network: ";
-    ssidLabel += (ssid.length() > 22) ? ssid.substring(0, 20) + ".." : ssid;
-    tft_.drawString(ssidLabel, 8, 10, 1);
-
-    tft_.fillRoundRect(272, 2, 42, 18, 3, keySpecial);
-    tft_.setTextDatum(MC_DATUM);
-    tft_.setTextColor(TFT_WHITE, keySpecial);
-    tft_.drawString("< Back", 293, 11, 1);
-
-    const uint16_t fieldBg = tft_.color565(18, 18, 28);
-    tft_.fillRoundRect(4, 22, 312, 26, 4, fieldBg);
-    tft_.drawRoundRect(4, 22, 312, 26, 4, tft_.color565(70, 70, 100));
-
-    String display;
-    display.reserve(input.length() + 2);
-    for (size_t i = 0; i < input.length(); ++i) {
-      display += '*';
-    }
-    display += "_";
-    if (display.length() > 38) {
-      display = display.substring(display.length() - 38);
-    }
-    tft_.setTextDatum(ML_DATUM);
-    tft_.setTextColor(TFT_WHITE, fieldBg);
-    tft_.drawString(display, 10, 35, 2);
-
-    tft_.setTextDatum(MR_DATUM);
-    tft_.setTextColor(tft_.color565(130, 130, 130), fieldBg);
-    tft_.drawString(String(input.length()), 308, 35, 1);
-
-    std::vector<KeyRect> keys;
-
-    auto addCharRow = [&](const char* chars, int y, int startX, int count) {
-      for (int i = 0; i < count; ++i) {
-        KeyRect k;
-        k.x = startX + i * kKS;
-        k.y = y;
-        k.w = kKW;
-        k.h = kKH;
-        k.ch = chars[i];
-        if (!symMode && !capsOn) {
-          k.label = String((char)tolower(chars[i]));
-        } else {
-          k.label = String(chars[i]);
-        }
-        k.action = kChar;
-        keys.push_back(k);
-      }
-    };
-
-    if (symMode) {
-      addCharRow("1234567890", kKY0, kRX10, 10);
-      addCharRow("!@#$%^&*()", kKY1, kRX10, 10);
-      addCharRow("-_=+.,/?;'", kKY2, kAlpha7X, 7);
-    } else {
-      addCharRow("QWERTYUIOP", kKY0, kRX10, 10);
-      addCharRow("ASDFGHJKL", kKY1, kRX9, 9);
-      addCharRow("ZXCVBNM", kKY2, kAlpha7X, 7);
-    }
-
-    auto addAction = [&](int x, int y, int w, const char* label, KeyAction action) {
-      KeyRect k;
-      k.x = x;
-      k.y = y;
-      k.w = w;
-      k.h = kKH;
-      k.label = label;
-      k.action = action;
-      keys.push_back(k);
-    };
-
-    addAction(kShiftX, kKY2, kShiftW, symMode ? "---" : (capsOn ? "CAP" : "shf"),
-              kToggleMode);
-    addAction(kBsX, kKY2, kBsW, "< X", kBackspace);
-    addAction(kModeX, kKY3, kModeW, symMode ? "ABC" : "123", kToggleMode);
-    addAction(kSpaceX, kKY3, kSpaceW, "SPACE", kSpace);
-    addAction(kEnterX, kKY3, kEnterW, "OK", kDone);
-
-    for (const auto& k : keys) {
-      uint16_t bg = keyBg;
-      if (k.action == kDone) {
-        bg = keyGreen;
-      } else if (k.action != kChar) {
-        bg = keySpecial;
-      }
-      if (k.label == "CAP") {
-        bg = keyActive;
-      }
-
-      tft_.fillRoundRect(k.x, k.y, k.w, k.h, 3, bg);
-      tft_.setTextDatum(MC_DATUM);
-      tft_.setTextColor(TFT_WHITE, bg);
-      tft_.drawString(k.label, k.x + k.w / 2, k.y + k.h / 2, 2);
-    }
-
-    uint16_t tx = 0;
-    uint16_t ty = 0;
-    while (!readTouch(tx, ty)) {
-      delay(20);
-    }
-
-    if (ty < 22 && tx >= 272) {
-      waitForTouchRelease();
-      return "__CANCEL__";
-    }
-
-    for (const auto& k : keys) {
-      if (tx < k.x || tx >= k.x + k.w || ty < k.y || ty >= k.y + k.h) {
-        continue;
-      }
-
-      waitForTouchRelease();
-      if (k.action == kChar) {
-        if (input.length() < 63) {
-          char c = k.ch;
-          if (!symMode && !capsOn) {
-            c = (char)tolower(c);
-          }
-          input += c;
-          if (!symMode && capsOn && input.length() == 1) {
-            capsOn = false;
-          }
-        }
-      } else if (k.action == kBackspace) {
-        if (input.length() > 0) {
-          input.remove(input.length() - 1);
-        }
-      } else if (k.action == kSpace) {
-        if (input.length() < 63) {
-          input += ' ';
-        }
-      } else if (k.action == kDone) {
-        return input;
-      } else if (k.action == kToggleMode) {
-        if (k.label == "CAP" || k.label == "shf") {
-          capsOn = !capsOn;
-        } else {
-          symMode = !symMode;
-          if (!symMode) {
-            capsOn = true;
-          }
-        }
-      }
-      break;
-    }
-  }
+  TextEntry entry(tft_, touch_);
+  TextEntryOptions options;
+  options.title = "Network: " + (ssid.length() > 22 ? ssid.substring(0, 20) + ".." : ssid);
+  options.maskInput = true;
+  options.maxLen = 63;
+  return entry.prompt(options);
 }
 
 void WifiProvisioner::drawStatus(const String& line1, const String& line2) {

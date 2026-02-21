@@ -35,7 +35,8 @@ Fast local iteration without reflashing:
 Features:
 
 - 320x240 landscape screen preview
-- Supports DSL node types: `label`, `value_box`, `progress`, `sparkline`, `circle`, `hand`
+- JSONEditor (tree + code) via CDN for proper JSON editing and tab/indent
+- Supports DSL node types: `label`, `value_box`, `progress`, `sparkline`, `icon`, `moon_phase`, `arc`, `line`, `repeat`
 - Field-path resolution + basic formatting (`round`, `prefix`, `suffix`, `unit`, `locale`, `tz`)
 - Load sample widgets from `data/dsl/`
 
@@ -61,7 +62,7 @@ Each DSL file in `data/dsl/` supports:
 - `data.poll_ms`
 - `data.debug` (or widget setting `debug=true` override)
 - `data.fields`: JSON path selectors with optional formatting
-- `ui.nodes`: `label`, `value_box`, `progress`, `sparkline`
+- `ui.nodes`: `label`, `value_box`, `progress`, `sparkline`, `icon`, `moon_phase`, `arc`, `line`, `repeat`
 
 Template bindings:
 
@@ -69,6 +70,28 @@ Template bindings:
 - runtime bindings in URL/path/text:
   - `{{setting.<key>}}`
   - `{{geo.lat}}`, `{{geo.lon}}`, `{{geo.tz}}`, `{{geo.offset_min}}`
+  - `{{geo.label}}`
+
+Label alignment:
+
+- `align`: `left`, `center`, `right`
+- `valign`: `top`, `middle`, `bottom`, `baseline`
+
+Repeat nodes (advanced):
+
+- Use `"type": "repeat"` to expand a node (or list of nodes) at parse time.
+- Fields: `count` (or `times`), `start`, `step`, `var` (default `i`), and `nodes` (array) or `node` (single object).
+- The repeat variable is available in numeric expressions (e.g. `"x": "80 + cos(i*6-90)*60"`) and in text/path via `{{i}}`.
+- Safety: repeat expansion is capped at 512 iterations per node.
+
+Numeric expressions (advanced):
+
+- String-valued numeric fields (`x`, `y`, `x2`, `y2`, `r`, `length`, `thickness`, `min`, `max`, `start_deg`, `end_deg`) may contain arithmetic.
+- Supported functions: `sin`, `cos`, `tan`, `asin`, `acos`, `atan` (degrees), `abs`, `sqrt`, `floor`, `ceil`, `round`, `min`, `max`, `pow`, `rad`, `deg`, and constant `pi`.
+
+Format units:
+
+- `unit: "pressure"` pins to temperature units (`F` → `inHg`, `C` → `hPa`).
 
 ## Runtime notes
 
@@ -77,3 +100,9 @@ Template bindings:
 - Widget health indicator is a 5px dot:
   - green = `ok`
   - red = non-OK
+
+## Third-party assets
+
+- Meteocons weather icons by Bas Milius (MIT License).
+  - Source: https://github.com/basmilius/weather-icons
+  - License text: `third_party/meteocons/LICENSE`

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <TFT_eSPI.h>
 
 #include <map>
 #include <vector>
@@ -27,8 +28,10 @@ enum class NodeType : uint8_t {
   kValueBox,
   kProgress,
   kSparkline,
-  kCircle,
-  kHand,
+  kIcon,
+  kMoonPhase,
+  kArc,
+  kLine,
 };
 
 struct Node {
@@ -38,6 +41,8 @@ struct Node {
   int16_t y = 0;
   int16_t w = 100;
   int16_t h = 32;
+  int16_t x2 = 0;
+  int16_t y2 = 0;
 
   uint8_t font = 2;
   uint16_t color565 = 0xFFFF;
@@ -45,10 +50,14 @@ struct Node {
 
   String text;
   String key;
+  String path;
   String angleExpr;
+  uint8_t datum = TL_DATUM;
 
   float min = 0.0f;
   float max = 100.0f;
+  float startDeg = 0.0f;
+  float endDeg = 360.0f;
   int16_t radius = 0;
   int16_t length = 0;
   int16_t thickness = 1;

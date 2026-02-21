@@ -6,6 +6,8 @@
 #include <map>
 #include <vector>
 
+#include <TFT_eSPI.h>
+
 #include "core/Widget.h"
 #include "dsl/DslModel.h"
 #include "services/HttpJsonClient.h"
@@ -13,6 +15,7 @@
 class DslWidget final : public Widget {
  public:
   explicit DslWidget(const WidgetConfig& cfg);
+  ~DslWidget() override;
 
   void begin() override;
   bool isNetworkWidget() const override {
@@ -29,12 +32,12 @@ class DslWidget final : public Widget {
   bool buildAdsbNearestDoc(const JsonDocument& rawDoc, JsonDocument& outDoc, String& error) const;
   float distanceKm(float lat1, float lon1, float lat2, float lon2) const;
   bool applyFieldsFromDoc(const JsonDocument& doc, bool& changed);
+  bool computeMoonPhaseName(String& out) const;
+  bool computeMoonPhaseFraction(float& out) const;
+  uint32_t computeAdsbJitterMs(uint32_t pollMs) const;
   bool getNumeric(const String& key, float& out) const;
+  static bool resolveNumericVar(void* ctx, const String& name, float& out);
   bool evaluateAngleExpr(const String& expr, float& outDegrees) const;
-  bool parseExpr(const String& s, int& pos, float& out) const;
-  bool parseTerm(const String& s, int& pos, float& out) const;
-  bool parseFactor(const String& s, int& pos, float& out) const;
-  void skipSpaces(const String& s, int& pos) const;
 
   bool resolveVariant(const JsonDocument& doc, const String& path,
                       JsonVariantConst& out) const;
@@ -53,10 +56,15 @@ class DslWidget final : public Widget {
 
   String dslPath_;
   bool debugOverride_ = false;
+  bool useSprite_ = false;
+  bool spriteReady_ = false;
+  TFT_eSprite* sprite_ = nullptr;
   dsl::Document dsl_;
   bool dslLoaded_ = false;
   String status_ = "init";
   uint32_t lastFetchMs_ = 0;
+  uint32_t nextFetchMs_ = 0;
+  bool firstFetch_ = true;
   uint32_t adsbBackoffUntilMs_ = 0;
   uint8_t adsbFailureStreak_ = 0;
 

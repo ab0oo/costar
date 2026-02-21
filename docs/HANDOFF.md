@@ -51,6 +51,29 @@
 
 Use it to validate DSL layout, path bindings, and formatting before flashing.
 
+Editor notes:
+
+- The editor uses JSONEditor (tree + code) loaded from CDN.
+- Tab/indent behaves like a real code editor inside the JSON panes.
+
+## 5.1) DSL Advanced Features (Repeat + Math)
+
+- `repeat` nodes expand at parse time to generate multiple nodes.
+- Fields: `count` (or `times`), `start`, `step`, `var` (default `i`), and `nodes` (array) or `node` (single object).
+- The repeat variable is available in numeric expressions and in text/path via `{{i}}`.
+- Numeric expression fields: `x`, `y`, `x2`, `y2`, `r`, `length`, `thickness`, `min`, `max`, `start_deg`, `end_deg`.
+- Supported functions: `sin`, `cos`, `tan`, `asin`, `acos`, `atan` (degrees), `abs`, `sqrt`, `floor`, `ceil`, `round`, `min`, `max`, `pow`, `rad`, `deg`, `pi`.
+- Safety: repeat expansion is capped at 512 iterations per node.
+
+Label alignment:
+
+- `align`: `left`, `center`, `right`
+- `valign`: `top`, `middle`, `bottom`, `baseline`
+
+Format units:
+
+- `unit: "pressure"` pins to temperature units (`F` → `inHg`, `C` → `hPa`).
+
 ## 6) Logging Guide
 
 Good cycle:

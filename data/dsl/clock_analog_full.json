@@ -1,0 +1,247 @@
+{
+  "version": 1,
+  "data": {
+    "source": "local_time",
+    "poll_ms": 1000,
+    "fields": {
+      "hour": "hour",
+      "minute": "minute",
+      "second": "second",
+      "date_long": {
+        "path": "iso_local",
+        "format": {
+          "tz": "local",
+          "time_format": "%B %d, %Y"
+        }
+      },
+      "week_day": {
+        "path": "iso_local",
+        "format": {
+          "tz": "local",
+          "time_format": "Week %V, %A"
+        }
+      }
+    }
+  },
+  "ui": {
+    "title": "Analog Clock",
+    "nodes": [
+      {
+        "type": "circle",
+        "x": 80,
+        "y": 72,
+        "r": 62,
+        "color": "#7FB1FF",
+        "bg": "#000000",
+        "thickness": 1
+      },
+      {
+        "type": "circle",
+        "x": 80,
+        "y": 72,
+        "r": 58,
+        "color": "#2A3C5A",
+        "bg": "#000000",
+        "thickness": 1
+      },
+      {
+        "type": "label",
+        "x": 78,
+        "y": 14,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "12"
+      },
+      {
+        "type": "label",
+        "x": 110,
+        "y": 24,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "1"
+      },
+      {
+        "type": "label",
+        "x": 126,
+        "y": 46,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "2"
+      },
+      {
+        "type": "label",
+        "x": 132,
+        "y": 72,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "3"
+      },
+      {
+        "type": "label",
+        "x": 124,
+        "y": 98,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "4"
+      },
+      {
+        "type": "label",
+        "x": 108,
+        "y": 120,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "5"
+      },
+      {
+        "type": "label",
+        "x": 78,
+        "y": 128,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "6"
+      },
+      {
+        "type": "label",
+        "x": 46,
+        "y": 120,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "7"
+      },
+      {
+        "type": "label",
+        "x": 30,
+        "y": 98,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "8"
+      },
+      {
+        "type": "label",
+        "x": 24,
+        "y": 72,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "9"
+      },
+      {
+        "type": "label",
+        "x": 28,
+        "y": 46,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "10"
+      },
+      {
+        "type": "label",
+        "x": 46,
+        "y": 24,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "11"
+      },
+      {
+        "type": "repeat",
+        "var": "i",
+        "count": 60,
+        "start": 0,
+        "step": 1,
+        "nodes": [
+          {
+            "type": "circle",
+            "x": "80 + cos(i * 6 - 90) * 60",
+            "y": "72 + sin(i * 6 - 90) * 60",
+            "r": 1,
+            "color": "#7FB1FF",
+            "bg": "#7FB1FF",
+            "thickness": 1
+          }
+        ]
+      },
+      {
+        "type": "repeat",
+        "var": "h",
+        "count": 12,
+        "start": 0,
+        "step": 5,
+        "nodes": [
+          {
+            "type": "circle",
+            "x": "80 + cos(h * 6 - 90) * 60",
+            "y": "72 + sin(h * 6 - 90) * 60",
+            "r": 2,
+            "color": "#9FD3FF",
+            "bg": "#9FD3FF",
+            "thickness": 1
+          }
+        ]
+      },
+      {
+        "type": "hand",
+        "x": 80,
+        "y": 72,
+        "length": 28,
+        "thickness": 3,
+        "color": "#FFFFFF",
+        "angle_expr": "(hour % 12) * 30 + minute * 0.5"
+      },
+      {
+        "type": "hand",
+        "x": 80,
+        "y": 72,
+        "length": 46,
+        "thickness": 2,
+        "color": "#9FD3FF",
+        "angle_expr": "minute*6"
+      },
+      {
+        "type": "hand",
+        "x": 80,
+        "y": 72,
+        "length": 54,
+        "thickness": 1,
+        "color": "#F5E663",
+        "angle_expr": "second*6"
+      },
+      {
+        "type": "circle",
+        "x": 80,
+        "y": 72,
+        "r": 3,
+        "color": "#9FD3FF",
+        "bg": "#9FD3FF",
+        "thickness": 1
+      },
+      {
+        "type": "label",
+        "x": 80,
+        "y": 150,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "{{date_long}}",
+        "align": "center",
+        "valign": "top"
+      },
+      {
+        "type": "label",
+        "x": 80,
+        "y": 170,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "{{week_day}}",
+        "align": "center",
+        "valign": "top"
+      },
+      {
+        "type": "label",
+        "x": 80,
+        "y": 192,
+        "font": 2,
+        "color": "#7FB1FF",
+        "text": "{{geo.label}}",
+        "align": "center",
+        "valign": "top"
+      }
+    ]
+  }
+}

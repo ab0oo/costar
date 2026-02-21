@@ -7,17 +7,27 @@
 
 class GeoIpService {
  public:
+  bool loadOverride();
   bool loadCached();
   bool refreshFromInternet();
+  bool setManualCity(const String& name);
+  bool setManualLatLon(float lat, float lon);
+  bool clearOverride();
   String lastError() const { return lastError_; }
   String lastSource() const { return lastSource_; }
 
  private:
+  bool fetchGeoForName(const String& name, float& lat, float& lon, String& tz,
+                       int& offsetMinutes, bool& hasOffset, String& label) const;
+  bool fetchTimezoneForLatLon(float lat, float lon, String& tz, int& offsetMinutes,
+                              bool& hasOffset) const;
+  bool saveManual(float lat, float lon, const String& tz, int offsetMinutes,
+                  bool hasOffset, const String& label, const String& city);
   bool parseGeoDoc(const JsonDocument& doc, float& lat, float& lon, String& tz,
                    int& offsetMinutes, bool& hasOffset) const;
   bool parseOffsetText(const String& raw, int& minutes) const;
   bool fetchOffsetForTimezone(const String& tz, int& minutes) const;
-  bool saveCached(float lat, float lon, const String& tz);
+  bool saveCached(float lat, float lon, const String& tz, const String& label);
   void setError(const String& msg);
 
   HttpJsonClient http_;

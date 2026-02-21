@@ -1,0 +1,147 @@
+{
+  "version": 1,
+  "data": {
+    "source": "local_time",
+    "poll_ms": 1000,
+    "fields": {
+      "hour": "hour",
+      "minute": "minute",
+      "second": "second",
+      "date_short": {
+        "path": "iso_local",
+        "format": {
+          "tz": "local",
+          "time_format": "%b %d"
+        }
+      },
+      "day_short": {
+        "path": "iso_local",
+        "format": {
+          "tz": "local",
+          "time_format": "%a"
+        }
+      }
+    }
+  },
+  "ui": {
+    "title": "Clock",
+    "nodes": [
+      {
+        "type": "circle",
+        "x": 80,
+        "y": 44,
+        "r": 38,
+        "color": "#7FB1FF",
+        "bg": "#000000",
+        "thickness": 1
+      },
+      {
+        "type": "circle",
+        "x": 80,
+        "y": 44,
+        "r": 35,
+        "color": "#2A3C5A",
+        "bg": "#000000",
+        "thickness": 1
+      },
+      {
+        "type": "label",
+        "x": 76,
+        "y": 10,
+        "font": 1,
+        "color": "#9FD3FF",
+        "text": "12"
+      },
+      {
+        "type": "label",
+        "x": 112,
+        "y": 38,
+        "font": 1,
+        "color": "#9FD3FF",
+        "text": "3"
+      },
+      {
+        "type": "label",
+        "x": 76,
+        "y": 70,
+        "font": 1,
+        "color": "#9FD3FF",
+        "text": "6"
+      },
+      {
+        "type": "label",
+        "x": 40,
+        "y": 38,
+        "font": 1,
+        "color": "#9FD3FF",
+        "text": "9"
+      },
+      {
+        "type": "hand",
+        "x": 80,
+        "y": 44,
+        "length": 18,
+        "thickness": 2,
+        "color": "#FFFFFF",
+        "angle_expr": "(hour % 12) * 30 + minute * 0.5"
+      },
+      {
+        "type": "hand",
+        "x": 80,
+        "y": 44,
+        "length": 28,
+        "thickness": 1,
+        "color": "#9FD3FF",
+        "angle_expr": "minute*6"
+      },
+      {
+        "type": "hand",
+        "x": 80,
+        "y": 44,
+        "length": 34,
+        "thickness": 1,
+        "color": "#F5E663",
+        "angle_expr": "second*6"
+      },
+      {
+        "type": "circle",
+        "x": 80,
+        "y": 44,
+        "r": 2,
+        "color": "#9FD3FF",
+        "bg": "#9FD3FF",
+        "thickness": 1
+      },
+      {
+        "type": "label",
+        "x": 80,
+        "y": 88,
+        "font": 1,
+        "color": "#9FD3FF",
+        "text": "{{date_short}}",
+        "align": "center",
+        "valign": "top"
+      },
+      {
+        "type": "label",
+        "x": 80,
+        "y": 102,
+        "font": 1,
+        "color": "#9FD3FF",
+        "text": "{{day_short}}",
+        "align": "center",
+        "valign": "top"
+      },
+      {
+        "type": "label",
+        "x": 80,
+        "y": 116,
+        "font": 1,
+        "color": "#7FB1FF",
+        "text": "{{geo.label}}",
+        "align": "center",
+        "valign": "top"
+      }
+    ]
+  }
+}

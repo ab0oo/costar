@@ -1,90 +1,141 @@
 {
   "version": 1,
   "data": {
-    "url": "https://api.open-meteo.com/v1/forecast?latitude={{geo.lat}}&longitude={{geo.lon}}&hourly=temperature_2m,relative_humidity_2m&forecast_days=1",
+    "source": "http",
+    "url": "https://api.open-meteo.com/v1/forecast?latitude={{geo.lat}}&longitude={{geo.lon}}&current=temperature_2m,relative_humidity_2m,pressure_msl,wind_speed_10m,wind_direction_10m,weather_code&daily=sunrise,sunset&timezone=UTC&forecast_days=1&wind_speed_unit=mph",
     "debug": true,
-    "poll_ms": 15000,
+    "poll_ms": 45000,
     "fields": {
       "temp_now": {
-        "path": "hourly.temperature_2m[0]",
+        "path": "current.temperature_2m",
         "format": {
-          "round": 1,
+          "round": 0,
           "unit": "{{pref.temp_unit}}",
           "locale": "en-US"
         }
       },
+      "code_now": "current.weather_code",
       "humidity_now": {
-        "path": "hourly.relative_humidity_2m[0]",
+        "path": "current.relative_humidity_2m",
         "format": {
           "round": 0,
           "unit": "percent",
           "locale": "en-US"
         }
       },
-      "series_temp": {
-        "path": "hourly.temperature_2m"
+      "pressure_now": {
+        "path": "current.pressure_msl",
+        "format": {
+          "unit": "pressure",
+          "locale": "en-US"
+        }
       },
-      "time_local": {
-        "path": "hourly.time[0]",
+      "wind_speed": {
+        "path": "current.wind_speed_10m",
+        "format": {
+          "round": 1,
+          "suffix": " mph",
+          "locale": "en-US"
+        }
+      },
+      "wind_dir": {
+        "path": "current.wind_direction_10m",
+        "format": {
+          "round": 0,
+          "suffix": " deg",
+          "locale": "en-US"
+        }
+      },
+      "sunrise": {
+        "path": "daily.sunrise[0]",
         "format": {
           "tz": "local",
-          "time_format": "%m/%d %H:%M"
+          "time_format": "%H:%M"
+        }
+      },
+      "sunset": {
+        "path": "daily.sunset[0]",
+        "format": {
+          "tz": "local",
+          "time_format": "%H:%M"
         }
       }
     }
   },
   "ui": {
-    "title": "DSL Weather",
+    "title": "Weather Now",
     "nodes": [
       {
-        "type": "label",
-        "x": 8,
-        "y": 28,
-        "font": 2,
-        "color": "#9FD3FF",
-        "text": "Now {{temp_now}}"
-      },
-      {
-        "type": "label",
-        "x": 8,
-        "y": 42,
-        "font": 1,
-        "color": "#B0BEC5",
-        "text": "Local {{time_local}}"
-      },
-      {
-        "type": "value_box",
-        "x": 8,
-        "y": 58,
-        "w": 68,
-        "h": 26,
-        "font": 2,
-        "color": "#FFFFFF",
-        "bg": "#1B2A33",
-        "text": "Humidity",
-        "key": "humidity_now"
-      },
-      {
-        "type": "progress",
-        "x": 80,
-        "y": 64,
-        "w": 72,
-        "h": 16,
-        "color": "#52E88A",
-        "bg": "#1A1A1A",
-        "key": "humidity_now",
-        "min": 0,
-        "max": 100
-      },
-      {
-        "type": "sparkline",
-        "x": 80,
-        "y": 28,
-        "w": 72,
+        "type": "icon",
+        "x": 2,
+        "y": 0,
+        "w": 28,
         "h": 28,
+        "path": "{{icon_now}}"
+      },
+      {
+        "type": "label",
+        "x": 36,
+        "y": 2,
+        "font": 4,
+        "color": "#9FD3FF",
+        "text": "{{temp_now}}"
+      },
+      {
+        "type": "label",
+        "x": 36,
+        "y": 32,
+        "font": 2,
+        "color": "#B0BEC5",
+        "text": "{{cond_now}}"
+      },
+      {
+        "type": "label",
+        "x": 6,
+        "y": 54,
+        "font": 1,
+        "color": "#C7D2D9",
+        "text": "Hum: {{humidity_now}}  Press: {{pressure_now}}"
+      },
+      {
+        "type": "label",
+        "x": 6,
+        "y": 68,
+        "font": 1,
+        "color": "#C7D2D9",
+        "text": "Wind: {{wind_speed}} {{wind_dir}}"
+      },
+      {
+        "type": "icon",
+        "x": 6,
+        "y": 80,
+        "w": 28,
+        "h": 28,
+        "path": "/icons/meteocons/sunrise.raw"
+      },
+      {
+        "type": "label",
+        "x": 38,
+        "y": 90,
+        "font": 1,
         "color": "#FFD54A",
-        "bg": "#101010",
-        "key": "series_temp"
+        "text": "{{sunrise}}"
+      },
+      {
+        "type": "icon",
+        "x": 98,
+        "y": 80,
+        "w": 28,
+        "h": 28,
+        "path": "/icons/meteocons/sunset.raw"
+      },
+      {
+        "type": "label",
+        "x": 130,
+        "y": 90,
+        "font": 1,
+        "color": "#F0625F",
+        "text": "{{sunset}}"
       }
     ]
   }

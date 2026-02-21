@@ -115,7 +115,9 @@ class Widget {
   void drawPanel(TFT_eSPI& tft, const String& title) const {
     (void)title;
     tft.fillRect(config_.x, config_.y, config_.w, config_.h, TFT_BLACK);
-    tft.drawRect(config_.x, config_.y, config_.w, config_.h, TFT_DARKGREY);
+    if (config_.drawBorder) {
+      tft.drawRect(config_.x, config_.y, config_.w, config_.h, TFT_DARKGREY);
+    }
   }
 
   const WidgetConfig config_;

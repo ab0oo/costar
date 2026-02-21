@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Widget DSL Editor</title>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/jsoneditor/10.4.1/jsoneditor.min.css" rel="stylesheet">
   <style>
     :root {
       --bg: #0d1117;
@@ -95,8 +96,17 @@
       white-space: pre;
     }
 
-    #payloadInput {
-      min-height: 170px;
+    .editorArea {
+      width: 100%;
+      height: 360px;
+      border: 1px solid #344764;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #0f1723;
+    }
+
+    #payloadEditor {
+      height: 260px;
     }
 
     .status {
@@ -161,7 +171,7 @@
           <button id="downloadBtn" type="button">Download JSON</button>
           <input id="fileOpen" type="file" accept=".json,application/json">
         </div>
-        <textarea id="dslInput" spellcheck="false"></textarea>
+        <div id="dslEditor" class="editorArea"></div>
         <div id="dslStatus" class="status"></div>
       </div>
     </section>
@@ -175,7 +185,7 @@
         <div class="row">
           <label>Source JSON Payload</label>
         </div>
-        <textarea id="payloadInput" spellcheck="false"></textarea>
+        <div id="payloadEditor" class="editorArea"></div>
         <div class="row">
           <button id="applyPayloadBtn" type="button">Apply Payload</button>
           <label><input id="animateClock" type="checkbox" checked> animate local_time widgets</label>
@@ -194,9 +204,10 @@
     </section>
   </div>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsoneditor/10.4.1/jsoneditor.min.js"></script>
   <script>
-    const dslInput = document.getElementById("dslInput");
-    const payloadInput = document.getElementById("payloadInput");
+    const dslEditorEl = document.getElementById("dslEditor");
+    const payloadEditorEl = document.getElementById("payloadEditor");
     const dslStatus = document.getElementById("dslStatus");
     const payloadStatus = document.getElementById("payloadStatus");
     const animateClock = document.getElementById("animateClock");
@@ -216,6 +227,39 @@
     let parsedDsl = null;
     let parsedPayload = {};
     let lastError = "";
+    const iconCache = new Map();
+    let dslDebounce = null;
+    let payloadDebounce = null;
+
+    const dslEditor = new JSONEditor(dslEditorEl, {
+      mode: "code",
+      modes: ["code", "tree"],
+      mainMenuBar: true,
+      navigationBar: false,
+      statusBar: false,
+      onChangeText: () => {
+        clearTimeout(dslDebounce);
+        dslDebounce = setTimeout(() => {
+          compileDsl();
+          renderPreview();
+        }, 180);
+      }
+    });
+
+    const payloadEditor = new JSONEditor(payloadEditorEl, {
+      mode: "code",
+      modes: ["code", "tree"],
+      mainMenuBar: true,
+      navigationBar: false,
+      statusBar: false,
+      onChangeText: () => {
+        clearTimeout(payloadDebounce);
+        payloadDebounce = setTimeout(() => {
+          compilePayload();
+          renderPreview();
+        }, 180);
+      }
+    });
 
     function setStatus(el, text, ok) {
       el.textContent = text || "";
@@ -228,10 +272,10 @@
       return JSON.parse(text);
     }
 
-    function formatJsonInEditor(textarea) {
+    function formatJsonInEditor(editor) {
       try {
-        const obj = parseJson(textarea.value);
-        textarea.value = JSON.stringify(obj, null, 2);
+        const obj = editor.get();
+        editor.setText(JSON.stringify(obj, null, 2));
       } catch (err) {
         setStatus(dslStatus, "JSON format failed: " + err.message, false);
       }
@@ -239,11 +283,32 @@
 
     function bindTemplate(text, values) {
       if (typeof text !== "string") return "";
-      return text.replace(/{{\s*([^}]+)\s*}}/g, (_, keyRaw) => {
+      return text.replace(/{{\s*([^}]+)\s*}}/g, (full, keyRaw) => {
         const key = keyRaw.trim();
         if (values.hasOwnProperty(key)) return String(values[key]);
         if (runtimeContext.hasOwnProperty(key)) return String(runtimeContext[key]);
-        return "";
+        return full;
+      });
+    }
+
+    function applyVarTemplate(text, vars) {
+      if (typeof text !== "string" || !vars) return text;
+      return text.replace(/{{\s*([^}]+)\s*}}/g, (full, keyRaw) => {
+        const key = keyRaw.trim();
+        if (Object.prototype.hasOwnProperty.call(vars, key)) {
+          return String(vars[key]);
+        }
+        return full;
+      });
+    }
+
+    function substituteExprVars(text, vars) {
+      if (typeof text !== "string" || !vars) return text;
+      return text.replace(/\b[A-Za-z_][A-Za-z0-9_]*\b/g, (name) => {
+        if (Object.prototype.hasOwnProperty.call(vars, name)) {
+          return String(vars[name]);
+        }
+        return name;
       });
     }
 
@@ -301,33 +366,65 @@
       return Number.isFinite(n) ? n : null;
     }
 
+    function isoWeekNumber(date, useUtc) {
+      const d = new Date(date.getTime());
+      const day = useUtc ? d.getUTCDay() : d.getDay();
+      const diff = (day + 6) % 7;
+      if (useUtc) d.setUTCDate(d.getUTCDate() - diff + 3);
+      else d.setDate(d.getDate() - diff + 3);
+      const firstThursday = useUtc ? new Date(Date.UTC(d.getUTCFullYear(), 0, 4)) : new Date(d.getFullYear(), 0, 4);
+      const firstDay = useUtc ? firstThursday.getUTCDay() : firstThursday.getDay();
+      const firstDiff = (firstDay + 6) % 7;
+      if (useUtc) firstThursday.setUTCDate(firstThursday.getUTCDate() - firstDiff + 3);
+      else firstThursday.setDate(firstThursday.getDate() - firstDiff + 3);
+      const week = 1 + Math.round((d.getTime() - firstThursday.getTime()) / 604800000);
+      return week;
+    }
+
     function formatTimestamp(text, tz, timeFormat) {
       if (typeof text !== "string" || !text) return String(text || "");
       const d = new Date(text.endsWith("Z") ? text : text + "Z");
       if (Number.isNaN(d.getTime())) return text;
 
+      const fmt = timeFormat || "%Y-%m-%d %H:%M";
       let target = new Date(d.getTime());
+      let useUtc = false;
       if (tz && tz !== "local") {
         const m = /^UTC([+-])(\d{2}):(\d{2})$/.exec(tz);
         if (m) {
           const sign = m[1] === "-" ? -1 : 1;
           const minutes = sign * (Number(m[2]) * 60 + Number(m[3]));
           target = new Date(d.getTime() + minutes * 60000);
-          return (timeFormat || "%Y-%m-%d %H:%M")
-            .replace("%Y", String(target.getUTCFullYear()))
-            .replace("%m", String(target.getUTCMonth() + 1).padStart(2, "0"))
-            .replace("%d", String(target.getUTCDate()).padStart(2, "0"))
-            .replace("%H", String(target.getUTCHours()).padStart(2, "0"))
-            .replace("%M", String(target.getUTCMinutes()).padStart(2, "0"));
+          useUtc = true;
         }
       }
 
-      return (timeFormat || "%Y-%m-%d %H:%M")
-        .replace("%Y", String(target.getFullYear()))
-        .replace("%m", String(target.getMonth() + 1).padStart(2, "0"))
-        .replace("%d", String(target.getDate()).padStart(2, "0"))
-        .replace("%H", String(target.getHours()).padStart(2, "0"))
-        .replace("%M", String(target.getMinutes()).padStart(2, "0"));
+      const monthsLong = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+      const monthsShort = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+      const daysLong = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+      const daysShort = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+      const Y = useUtc ? target.getUTCFullYear() : target.getFullYear();
+      const m = (useUtc ? target.getUTCMonth() : target.getMonth());
+      const dnum = useUtc ? target.getUTCDate() : target.getDate();
+      const hh = useUtc ? target.getUTCHours() : target.getHours();
+      const mm = useUtc ? target.getUTCMinutes() : target.getMinutes();
+      const ss = useUtc ? target.getUTCSeconds() : target.getSeconds();
+      const weekday = useUtc ? target.getUTCDay() : target.getDay();
+      const weekNum = isoWeekNumber(target, useUtc);
+
+      return fmt
+        .replace("%Y", String(Y))
+        .replace("%m", String(m + 1).padStart(2, "0"))
+        .replace("%d", String(dnum).padStart(2, "0"))
+        .replace("%H", String(hh).padStart(2, "0"))
+        .replace("%M", String(mm).padStart(2, "0"))
+        .replace("%S", String(ss).padStart(2, "0"))
+        .replace("%b", monthsShort[m])
+        .replace("%B", monthsLong[m])
+        .replace("%a", daysShort[weekday])
+        .replace("%A", daysLong[weekday])
+        .replace("%V", String(weekNum).padStart(2, "0"));
     }
 
     function formatLocaleNumber(value, digits, locale) {
@@ -357,11 +454,27 @@
           unitSuffix = " F";
         } else if (unit === "c" || unit === "celsius") {
           unitSuffix = " C";
+        } else if (unit === "pressure") {
+          const pref = String(runtimeContext["pref.temp_unit"] || "C").toUpperCase();
+          if (pref === "F") {
+            v = v * 0.0295299830714;
+            unitSuffix = " inHg";
+          } else {
+            unitSuffix = " hPa";
+          }
         } else if (unit === "%" || unit === "percent") {
           unitSuffix = "%";
         }
 
-        const digits = Number.isInteger(fmt.round) ? fmt.round : 2;
+        let digits;
+        if (Number.isInteger(fmt.round)) {
+          digits = fmt.round;
+        } else if (unit === "pressure") {
+          const pref = String(runtimeContext["pref.temp_unit"] || "C").toUpperCase();
+          digits = (pref === "F") ? 2 : 0;
+        } else {
+          digits = 2;
+        }
         out = formatLocaleNumber(v, digits, fmt.locale || "en-US");
 
         if (fmt.prefix) out = String(fmt.prefix) + out;
@@ -455,26 +568,208 @@
       return fallback;
     }
 
-    function drawString(text, x, y, font, color, baseline = "top") {
+    function drawString(text, x, y, font, color, align = "left", valign = "top") {
       ctx.fillStyle = color;
       ctx.font = `${textPx(font)}px monospace`;
-      ctx.textBaseline = baseline;
+      ctx.textAlign = align;
+      if (valign === "middle") ctx.textBaseline = "middle";
+      else if (valign === "bottom") ctx.textBaseline = "bottom";
+      else if (valign === "baseline") ctx.textBaseline = "alphabetic";
+      else ctx.textBaseline = "top";
       ctx.fillText(String(text ?? ""), x, y);
     }
 
-    function evalAngle(expr, numerics) {
+    function evalExpression(expr, vars) {
       if (!expr || typeof expr !== "string") return null;
-      const js = expr.replace(/[A-Za-z_][A-Za-z0-9_]*/g, (name) => {
-        if (Object.prototype.hasOwnProperty.call(numerics, name)) {
-          return String(numerics[name]);
-        }
-        return "0";
-      });
+      const scope = Object.assign({}, vars || {});
+      scope.sin = (deg) => Math.sin(deg * Math.PI / 180);
+      scope.cos = (deg) => Math.cos(deg * Math.PI / 180);
+      scope.tan = (deg) => Math.tan(deg * Math.PI / 180);
+      scope.asin = (v) => Math.asin(v) * 180 / Math.PI;
+      scope.acos = (v) => Math.acos(v) * 180 / Math.PI;
+      scope.atan = (v) => Math.atan(v) * 180 / Math.PI;
+      scope.abs = Math.abs;
+      scope.sqrt = Math.sqrt;
+      scope.floor = Math.floor;
+      scope.ceil = Math.ceil;
+      scope.round = Math.round;
+      scope.min = Math.min;
+      scope.max = Math.max;
+      scope.pow = Math.pow;
+      scope.rad = (deg) => deg * Math.PI / 180;
+      scope.deg = (rad) => rad * 180 / Math.PI;
+      scope.pi = Math.PI;
+
       try {
-        const val = Function(`"use strict"; return (${js});`)();
+        const names = Object.keys(scope);
+        const values = Object.values(scope);
+        const fn = Function(...names, `"use strict"; return (${expr});`);
+        const val = fn(...values);
         return Number.isFinite(val) ? val : null;
       } catch {
         return null;
+      }
+    }
+
+    function evalAngle(expr, numerics) {
+      return evalExpression(expr, numerics);
+    }
+
+    function computeMoonPhaseFraction(date) {
+      const synodic = 29.53058867;
+      const knownNewMoon = Date.UTC(2000, 0, 6, 18, 14, 0);
+      const days = (date.getTime() - knownNewMoon) / 86400000;
+      const phase = ((days % synodic) + synodic) % synodic;
+      return phase / synodic;
+    }
+
+    const intFields = new Set(["x","y","w","h","x2","y2","r","length","thickness"]);
+    const floatFields = new Set(["min","max","start_deg","end_deg"]);
+
+    function resolveNumber(value, vars) {
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+      if (typeof value !== "string") return null;
+      const templated = applyVarTemplate(value, vars);
+      const expr = substituteExprVars(templated, vars);
+      const evald = evalExpression(expr, vars);
+      if (Number.isFinite(evald)) return evald;
+      const numeric = Number(templated);
+      return Number.isFinite(numeric) ? numeric : null;
+    }
+
+    function resolveNode(node, vars) {
+      const out = Object.assign({}, node);
+      const stringKeys = ["text","key","path","icon","angle_expr","align","valign"];
+      for (const key of stringKeys) {
+        if (typeof out[key] === "string") {
+          let val = applyVarTemplate(out[key], vars);
+          if (key === "angle_expr") {
+            val = substituteExprVars(val, vars);
+          }
+          out[key] = val;
+        }
+      }
+      for (const key of intFields) {
+        if (typeof out[key] === "string") {
+          const val = resolveNumber(out[key], vars);
+          if (Number.isFinite(val)) out[key] = Math.round(val);
+        }
+      }
+      for (const key of floatFields) {
+        if (typeof out[key] === "string") {
+          const val = resolveNumber(out[key], vars);
+          if (Number.isFinite(val)) out[key] = val;
+        }
+      }
+      return out;
+    }
+
+    function expandNodes(nodes, vars) {
+      const out = [];
+      if (!Array.isArray(nodes)) return out;
+      for (const node of nodes) {
+        const type = node.type || "label";
+        if (type === "repeat") {
+          const countRaw = (node.count ?? node.times ?? 0);
+          const count = Math.max(0, Number(countRaw) || 0);
+          if (!count) continue;
+          const startVal = resolveNumber(node.start ?? 0, vars) ?? 0;
+          const stepVal = resolveNumber(node.step ?? 1, vars) ?? 1;
+          const varName = typeof node.var === "string" && node.var ? node.var : "i";
+          const childNodes = Array.isArray(node.nodes) ? node.nodes : (node.node ? [node.node] : []);
+          for (let i = 0; i < count; i++) {
+            const nextVars = Object.assign({}, vars || {});
+            nextVars[varName] = startVal + (i * stepVal);
+            out.push(...expandNodes(childNodes, nextVars));
+          }
+          continue;
+        }
+        out.push(resolveNode(node, vars));
+      }
+      return out;
+    }
+
+    function resolveIconPath(path) {
+      if (!path) return "";
+      if (path.startsWith("/data/")) return path;
+      if (path.startsWith("/icons/")) return "/data" + path;
+      if (path.startsWith("icons/")) return "/data/" + path;
+      return path;
+    }
+
+    function decodeRgb565(buffer, w, h) {
+      const bytes = new Uint8Array(buffer);
+      const pixelCount = Math.floor(bytes.length / 2);
+      const size = Math.floor(Math.sqrt(pixelCount));
+      const width = Number.isFinite(w) && w > 0 ? w : size;
+      const height = Number.isFinite(h) && h > 0 ? h : size;
+      const imageData = ctx.createImageData(width, height);
+      const data = imageData.data;
+      let src = 0;
+      for (let i = 0; i < width * height; i++) {
+        if (src + 1 >= bytes.length) break;
+        const v = bytes[src] | (bytes[src + 1] << 8);
+        src += 2;
+        const r = ((v >> 11) & 0x1f) * 255 / 31;
+        const g = ((v >> 5) & 0x3f) * 255 / 63;
+        const b = (v & 0x1f) * 255 / 31;
+        const di = i * 4;
+        data[di] = r;
+        data[di + 1] = g;
+        data[di + 2] = b;
+        data[di + 3] = 255;
+      }
+      return { width, height, imageData };
+    }
+
+    function requestIcon(path, w, h) {
+      const resolved = resolveIconPath(path);
+      if (!resolved) return;
+      const cached = iconCache.get(resolved);
+      if (cached && cached.status === "ready") return;
+      if (cached && cached.status === "loading") return;
+
+      const entry = { status: "loading", promise: null, imageData: null, width: 0, height: 0 };
+      entry.promise = fetch(resolved, { cache: "no-store" })
+        .then(res => {
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          return res.arrayBuffer();
+        })
+        .then(buf => {
+          const decoded = decodeRgb565(buf, w, h);
+          entry.status = "ready";
+          entry.imageData = decoded.imageData;
+          entry.width = decoded.width;
+          entry.height = decoded.height;
+          renderPreview();
+        })
+        .catch(() => {
+          entry.status = "error";
+        });
+      iconCache.set(resolved, entry);
+    }
+
+    function drawIcon(path, x, y, w, h) {
+      const resolved = resolveIconPath(path);
+      if (!resolved) return;
+      const cached = iconCache.get(resolved);
+      if (!cached || cached.status !== "ready") {
+        requestIcon(path, w, h);
+        return;
+      }
+      const img = cached.imageData;
+      if (!img) return;
+      if (w > 0 && h > 0 && (w !== img.width || h !== img.height)) {
+        const off = document.createElement("canvas");
+        off.width = img.width;
+        off.height = img.height;
+        const offCtx = off.getContext("2d");
+        offCtx.putImageData(img, 0, 0);
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(off, x, y, w, h);
+        ctx.imageSmoothingEnabled = true;
+      } else {
+        ctx.putImageData(img, x, y);
       }
     }
 
@@ -493,7 +788,8 @@
         return;
       }
 
-      const nodeList = (((parsedDsl || {}).ui || {}).nodes) || [];
+      const rawNodes = (((parsedDsl || {}).ui || {}).nodes) || [];
+      const nodeList = expandNodes(rawNodes, null);
       const { values, numerics, series } = buildResolvedData(parsedDsl, parsedPayload);
 
       for (const node of nodeList) {
@@ -507,7 +803,19 @@
         const font = Number(node.font || 1);
 
         if (type === "label") {
-          drawString(bindTemplate(node.text || "", values), x, y, font, fg);
+          const align = (node.align || "left").toLowerCase();
+          const valign = (node.valign || "top").toLowerCase();
+          drawString(bindTemplate(node.text || "", values), x, y, font, fg, align, valign);
+          continue;
+        }
+
+        if (type === "icon") {
+          const rawPath = node.path || node.icon || node.text || "";
+          const iconPath = bindTemplate(rawPath, values);
+          if (!iconPath) continue;
+          const iw = Number(node.w || 0);
+          const ih = Number(node.h || 0);
+          drawIcon(iconPath, x, y, iw, ih);
           continue;
         }
 
@@ -516,9 +824,9 @@
           ctx.fillRect(x, y, w, h);
           ctx.strokeStyle = fg;
           ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
-          if (node.text) drawString(bindTemplate(node.text, values), x + 4, y + 3, 1, fg);
+          if (node.text) drawString(bindTemplate(node.text, values), x + 4, y + 3, 1, fg, "left", "top");
           const val = node.key ? (values[node.key] ?? "") : "";
-          drawString(val, x + 4, y + 14, font, fg);
+          drawString(val, x + 4, y + 14, font, fg, "left", "top");
           continue;
         }
 
@@ -536,7 +844,7 @@
           const fillW = Math.floor((w - 4) * ratio);
           ctx.fillStyle = fg;
           ctx.fillRect(x + 2, y + 2, fillW, Math.max(0, h - 4));
-          drawString(String(v.toFixed(1)), x + Math.floor(w / 2) - 12, y + Math.floor(h / 2) - 5, 1, "#ffffff");
+          drawString(String(v.toFixed(1)), x + Math.floor(w / 2), y + Math.floor(h / 2), 1, "#ffffff", "center", "middle");
           continue;
         }
 
@@ -568,33 +876,41 @@
           continue;
         }
 
-        if (type === "circle") {
+        if (type === "arc" || type === "circle") {
           const r = Number(node.r || Math.floor(w / 2) || 10);
+          const thickness = Math.max(1, Number(node.thickness || 1));
+          const startDeg = Number.isFinite(Number(node.start_deg)) ? Number(node.start_deg) : 0;
+          const endDeg = Number.isFinite(Number(node.end_deg)) ? Number(node.end_deg) : 360;
           if (bg.toLowerCase() !== "#000000") {
             ctx.fillStyle = bg;
             ctx.beginPath();
             ctx.arc(x, y, r, 0, Math.PI * 2);
             ctx.fill();
           }
-          const thickness = Math.max(1, Number(node.thickness || 1));
           ctx.strokeStyle = fg;
-          for (let i = 0; i < thickness; i++) {
-            ctx.beginPath();
-            ctx.arc(x, y, Math.max(1, r - i), 0, Math.PI * 2);
-            ctx.stroke();
-          }
+          ctx.lineWidth = thickness;
+          ctx.beginPath();
+          ctx.arc(x, y, r, (startDeg - 90) * Math.PI / 180, (endDeg - 90) * Math.PI / 180);
+          ctx.stroke();
+          ctx.lineWidth = 1;
           continue;
         }
 
-        if (type === "hand") {
-          let deg = null;
-          if (node.angle_expr) deg = evalAngle(bindTemplate(node.angle_expr, values), numerics);
-          if (deg == null && node.key) deg = numerics[node.key] ?? parseNumberMaybe(values[node.key]);
-          if (deg == null || !Number.isFinite(deg)) continue;
-          const len = Number(node.length || node.r || 20);
-          const rad = (deg - 90) * Math.PI / 180;
-          const x2 = x + Math.cos(rad) * len;
-          const y2 = y + Math.sin(rad) * len;
+        if (type === "line" || type === "hand") {
+          let x2 = Number(node.x2);
+          let y2 = Number(node.y2);
+          if (!Number.isFinite(x2) || !Number.isFinite(y2)) {
+            let deg = null;
+            if (node.angle_expr) deg = evalAngle(bindTemplate(node.angle_expr, values), numerics);
+            if (deg == null && node.key) deg = numerics[node.key] ?? parseNumberMaybe(values[node.key]);
+            if (deg != null && Number.isFinite(deg)) {
+              const len = Number(node.length || node.r || 20);
+              const rad = (deg - 90) * Math.PI / 180;
+              x2 = x + Math.cos(rad) * len;
+              y2 = y + Math.sin(rad) * len;
+            }
+          }
+          if (!Number.isFinite(x2) || !Number.isFinite(y2)) continue;
           const thick = Math.max(1, Number(node.thickness || 1));
           ctx.strokeStyle = fg;
           ctx.lineWidth = thick;
@@ -603,6 +919,42 @@
           ctx.lineTo(x2, y2);
           ctx.stroke();
           ctx.lineWidth = 1;
+          continue;
+        }
+
+        if (type === "moon_phase") {
+          const r = Number(node.r || Math.floor(w / 2) || 8);
+          let phase = null;
+          if (node.key) {
+            phase = numerics[node.key];
+            if (!Number.isFinite(phase)) phase = parseNumberMaybe(values[node.key]);
+          }
+          if (!Number.isFinite(phase)) {
+            phase = computeMoonPhaseFraction(new Date());
+          }
+          const bgFill = bg.toLowerCase() === "#000000" ? "#000000" : bg;
+          ctx.fillStyle = bgFill;
+          ctx.beginPath();
+          ctx.arc(x, y, r, 0, Math.PI * 2);
+          ctx.fill();
+
+          const waxing = phase <= 0.5;
+          const threshold = waxing ? r * (1.0 - 2.0 * phase) : -r * (2.0 * phase - 1.0);
+          ctx.fillStyle = fg;
+          for (let dy = -r; dy <= r; dy++) {
+            for (let dx = -r; dx <= r; dx++) {
+              if (dx * dx + dy * dy > r * r) continue;
+              const lit = waxing ? (dx > threshold) : (dx < threshold);
+              if (lit) ctx.fillRect(x + dx, y + dy, 1, 1);
+            }
+          }
+          if (Number(node.thickness || 1) > 0) {
+            ctx.strokeStyle = fg;
+            ctx.beginPath();
+            ctx.arc(x, y, r, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+          continue;
         }
       }
 
@@ -614,7 +966,7 @@
 
     function compileDsl() {
       try {
-        parsedDsl = parseJson(dslInput.value);
+        parsedDsl = parseJson(dslEditor.getText());
         lastError = "";
         setStatus(dslStatus, "DSL parsed successfully.", true);
       } catch (err) {
@@ -625,7 +977,7 @@
     }
 
     function compilePayload() {
-      const raw = payloadInput.value.trim();
+      const raw = payloadEditor.getText().trim();
       if (!raw) {
         parsedPayload = {};
         setStatus(payloadStatus, "Payload cleared (using empty object or local_time clock).", true);
@@ -640,37 +992,19 @@
       }
     }
 
-    let dslDebounce = null;
-    dslInput.addEventListener("input", () => {
-      clearTimeout(dslDebounce);
-      dslDebounce = setTimeout(() => {
-        compileDsl();
-        renderPreview();
-      }, 180);
-    });
-
-    let payloadDebounce = null;
-    payloadInput.addEventListener("input", () => {
-      clearTimeout(payloadDebounce);
-      payloadDebounce = setTimeout(() => {
-        compilePayload();
-        renderPreview();
-      }, 180);
-    });
-
     document.getElementById("applyPayloadBtn").addEventListener("click", () => {
       compilePayload();
       renderPreview();
     });
 
     document.getElementById("formatBtn").addEventListener("click", () => {
-      formatJsonInEditor(dslInput);
+      formatJsonInEditor(dslEditor);
       compileDsl();
       renderPreview();
     });
 
     document.getElementById("downloadBtn").addEventListener("click", () => {
-      const blob = new Blob([dslInput.value], { type: "application/json" });
+      const blob = new Blob([dslEditor.getText()], { type: "application/json" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
       a.download = "widget.dsl.json";
@@ -683,7 +1017,7 @@
       if (!file) return;
       const reader = new FileReader();
       reader.onload = () => {
-        dslInput.value = String(reader.result || "");
+        dslEditor.setText(String(reader.result || ""));
         compileDsl();
         renderPreview();
       };
@@ -699,14 +1033,14 @@
 
     document.getElementById("loadWeatherBtn").addEventListener("click", async () => {
       try {
-        dslInput.value = await loadRepoFile("/data/dsl/weather_now.json");
-        payloadInput.value = `{
+        dslEditor.setText(await loadRepoFile("/data/dsl/weather_now.json"));
+        payloadEditor.setText(`{
   "hourly": {
     "time": ["2026-02-20T00:00", "2026-02-20T01:00", "2026-02-20T02:00"],
     "temperature_2m": [10.6, 9.4, 8.2],
     "relative_humidity_2m": [56, 56, 62]
   }
-}`;
+}`);
         compileDsl();
         compilePayload();
         renderPreview();
@@ -717,8 +1051,8 @@
 
     document.getElementById("loadAdsbBtn").addEventListener("click", async () => {
       try {
-        dslInput.value = await loadRepoFile("/data/dsl/adsb_nearest.json");
-        payloadInput.value = `{
+        dslEditor.setText(await loadRepoFile("/data/dsl/adsb_nearest.json"));
+        payloadEditor.setText(`{
   "ac": [
     {"flight":"UAL2423","t":"B739","alt_baro":10025,"dst":35.6,"destination":"KSFO","lat":37.65,"lon":-121.98},
     {"flight":"VOI1772","t":"A20N","alt_baro":4475,"dst":37.9,"destination":"MMUN","lat":37.55,"lon":-121.96},
@@ -726,7 +1060,7 @@
     {"flight":"UAL1665","t":"B38M","alt_baro":9025,"dst":35.1,"destination":"KLAX","lat":37.47,"lon":-121.79},
     {"flight":"N441QF","t":"C172","alt_baro":1800,"dst":31.5,"destination":"?","lat":38.39,"lon":-121.59}
   ]
-}`;
+}`);
         compileDsl();
         compilePayload();
         renderPreview();
@@ -742,30 +1076,254 @@
       requestAnimationFrame(tick);
     }
 
-    dslInput.value = `{
+    dslEditor.setText(`{
   "version": 1,
   "data": {
     "source": "local_time",
+    "poll_ms": 1000,
     "fields": {
-      "clock": "time_24",
       "hour": "hour",
       "minute": "minute",
-      "second": "second"
+      "second": "second",
+      "date_long": {
+        "path": "iso_local",
+        "format": {
+          "tz": "local",
+          "time_format": "%B %d, %Y"
+        }
+      },
+      "week_day": {
+        "path": "iso_local",
+        "format": {
+          "tz": "local",
+          "time_format": "Week %V, %A"
+        }
+      }
     }
   },
   "ui": {
-    "title": "Editor Boot",
+    "title": "Analog Clock",
     "nodes": [
-      {"type":"label","x":8,"y":8,"font":2,"color":"#9FD3FF","text":"Widget DSL Editor"},
-      {"type":"label","x":8,"y":28,"font":2,"color":"#FFFFFF","text":"{{clock}}"},
-      {"type":"circle","x":260,"y":130,"r":52,"color":"#D0D0D0","bg":"#101010","thickness":2},
-      {"type":"hand","x":260,"y":130,"length":30,"thickness":3,"color":"#52E88A","angle_expr":"(hour%12)*30 + minute*0.5"},
-      {"type":"hand","x":260,"y":130,"length":40,"thickness":2,"color":"#FFD54A","angle_expr":"minute*6"},
-      {"type":"hand","x":260,"y":130,"length":48,"thickness":1,"color":"#FF5A5A","angle_expr":"second*6"}
+      {
+        "type": "circle",
+        "x": 80,
+        "y": 72,
+        "r": 62,
+        "color": "#7FB1FF",
+        "bg": "#000000",
+        "thickness": 1
+      },
+      {
+        "type": "circle",
+        "x": 80,
+        "y": 72,
+        "r": 58,
+        "color": "#2A3C5A",
+        "bg": "#000000",
+        "thickness": 1
+      },
+      {
+        "type": "label",
+        "x": 78,
+        "y": 14,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "12"
+      },
+      {
+        "type": "label",
+        "x": 110,
+        "y": 24,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "1"
+      },
+      {
+        "type": "label",
+        "x": 126,
+        "y": 46,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "2"
+      },
+      {
+        "type": "label",
+        "x": 132,
+        "y": 72,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "3"
+      },
+      {
+        "type": "label",
+        "x": 124,
+        "y": 98,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "4"
+      },
+      {
+        "type": "label",
+        "x": 108,
+        "y": 120,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "5"
+      },
+      {
+        "type": "label",
+        "x": 78,
+        "y": 128,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "6"
+      },
+      {
+        "type": "label",
+        "x": 46,
+        "y": 120,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "7"
+      },
+      {
+        "type": "label",
+        "x": 30,
+        "y": 98,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "8"
+      },
+      {
+        "type": "label",
+        "x": 24,
+        "y": 72,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "9"
+      },
+      {
+        "type": "label",
+        "x": 28,
+        "y": 46,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "10"
+      },
+      {
+        "type": "label",
+        "x": 46,
+        "y": 24,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "11"
+      },
+      {
+        "type": "repeat",
+        "var": "i",
+        "count": 60,
+        "start": 0,
+        "step": 1,
+        "nodes": [
+          {
+            "type": "circle",
+            "x": "80 + cos(i * 6 - 90) * 60",
+            "y": "72 + sin(i * 6 - 90) * 60",
+            "r": 1,
+            "color": "#7FB1FF",
+            "bg": "#7FB1FF",
+            "thickness": 1
+          }
+        ]
+      },
+      {
+        "type": "repeat",
+        "var": "h",
+        "count": 12,
+        "start": 0,
+        "step": 5,
+        "nodes": [
+          {
+            "type": "circle",
+            "x": "80 + cos(h * 6 - 90) * 60",
+            "y": "72 + sin(h * 6 - 90) * 60",
+            "r": 2,
+            "color": "#9FD3FF",
+            "bg": "#9FD3FF",
+            "thickness": 1
+          }
+        ]
+      },
+      {
+        "type": "hand",
+        "x": 80,
+        "y": 72,
+        "length": 28,
+        "thickness": 3,
+        "color": "#FFFFFF",
+        "angle_expr": "(hour % 12) * 30 + minute * 0.5"
+      },
+      {
+        "type": "hand",
+        "x": 80,
+        "y": 72,
+        "length": 46,
+        "thickness": 2,
+        "color": "#9FD3FF",
+        "angle_expr": "minute*6"
+      },
+      {
+        "type": "hand",
+        "x": 80,
+        "y": 72,
+        "length": 54,
+        "thickness": 1,
+        "color": "#F5E663",
+        "angle_expr": "second*6"
+      },
+      {
+        "type": "circle",
+        "x": 80,
+        "y": 72,
+        "r": 3,
+        "color": "#9FD3FF",
+        "bg": "#9FD3FF",
+        "thickness": 1
+      },
+      {
+        "type": "label",
+        "x": 80,
+        "y": 150,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "{{date_long}}",
+        "align": "center",
+        "valign": "top"
+      },
+      {
+        "type": "label",
+        "x": 80,
+        "y": 170,
+        "font": 2,
+        "color": "#9FD3FF",
+        "text": "{{week_day}}",
+        "align": "center",
+        "valign": "top"
+      },
+      {
+        "type": "label",
+        "x": 80,
+        "y": 192,
+        "font": 2,
+        "color": "#7FB1FF",
+        "text": "{{geo.label}}",
+        "align": "center",
+        "valign": "top"
+      }
     ]
   }
-}`;
-    payloadInput.value = "{}";
+}`);
+    payloadEditor.setText("{}");
     compileDsl();
     compilePayload();
     renderPreview();
