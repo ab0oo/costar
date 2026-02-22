@@ -21,6 +21,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/srwiley/oksvg"
+	"github.com/srwiley/rasterx"
 )
 
 const (
@@ -219,10 +222,15 @@ func (cfg serverConfig) convertHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 
-	srcImg, srcFmt, fetchURL, err := cfg.fetchImage(ctx, srcURL, fetchOptions{
+	body, fetchURL, err := cfg.fetchSourceBytes(ctx, srcURL, fetchOptions{
 		userAgent: firstNonEmpty(uaOverride, cfg.userAgent, defaultUserAgent),
 		referer:   refererOverride,
 	})
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	srcImg, srcFmt, err := decodeImageBytes(body, width, height)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -275,10 +283,12 @@ func (cfg serverConfig) mdiHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	srcURL := fmt.Sprintf("%s/%s.png?width=%d&height=%d", cfg.mdiBaseURL,
-		url.PathEscape(iconName), width, height)
+	srcURL := fmt.Sprintf("%s/%s.svg", cfg.mdiBaseURL, url.PathEscape(iconName))
 	if color != "" {
 		srcURL += "&color=" + url.QueryEscape("#"+color)
+	}
+	if strings.Contains(srcURL, ".svg&") {
+		srcURL = strings.Replace(srcURL, ".svg&", ".svg?", 1)
 	}
 	cacheKey := buildMDICacheKey(cfg.mdiBaseURL, iconName, color, width, height)
 	if cached, ok := cfg.cache.get(cacheKey); ok {
@@ -289,9 +299,14 @@ func (cfg serverConfig) mdiHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 
-	srcImg, srcFmt, fetchURL, err := cfg.fetchImage(ctx, srcURL, fetchOptions{
+	body, fetchURL, err := cfg.fetchSourceBytes(ctx, srcURL, fetchOptions{
 		userAgent: firstNonEmpty(cfg.userAgent, defaultUserAgent),
 	})
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	srcImg, srcFmt, err := decodeImageBytes(body, width, height)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -494,18 +509,18 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func (cfg serverConfig) fetchImage(ctx context.Context, rawURL string, opts fetchOptions) (image.Image, string, string, error) {
+func (cfg serverConfig) fetchSourceBytes(ctx context.Context, rawURL string, opts fetchOptions) ([]byte, string, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("invalid url: %w", err)
+		return nil, "", fmt.Errorf("invalid url: %w", err)
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return nil, "", "", errors.New("url must use http or https")
+		return nil, "", errors.New("url must use http or https")
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("build request: %w", err)
+		return nil, "", fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Accept", "image/*,*/*;q=0.8")
 	if ua := firstNonEmpty(sanitizeHeaderValue(opts.userAgent), sanitizeHeaderValue(cfg.userAgent), defaultUserAgent); ua != "" {
@@ -518,28 +533,56 @@ func (cfg serverConfig) fetchImage(ctx context.Context, rawURL string, opts fetc
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("fetch failed: %w", err)
+		return nil, "", fmt.Errorf("fetch failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", "", fmt.Errorf("fetch failed: HTTP %d", resp.StatusCode)
+		return nil, "", fmt.Errorf("fetch failed: HTTP %d", resp.StatusCode)
 	}
 
 	limited := io.LimitReader(resp.Body, cfg.maxDownloadBytes+1)
 	body, err := io.ReadAll(limited)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("read failed: %w", err)
+		return nil, "", fmt.Errorf("read failed: %w", err)
 	}
 	if int64(len(body)) > cfg.maxDownloadBytes {
-		return nil, "", "", fmt.Errorf("source exceeds %d bytes", cfg.maxDownloadBytes)
+		return nil, "", fmt.Errorf("source exceeds %d bytes", cfg.maxDownloadBytes)
+	}
+	return body, resp.Request.URL.String(), nil
+}
+
+func decodeImageBytes(body []byte, width, height int) (image.Image, string, error) {
+	if len(body) == 0 {
+		return nil, "", errors.New("decode failed: empty payload")
+	}
+	img, fmtName, err := image.Decode(bytes.NewReader(body))
+	if err == nil {
+		return img, fmtName, nil
 	}
 
-	img, fmtName, err := image.Decode(bytes.NewReader(body))
-	if err != nil {
-		return nil, "", "", fmt.Errorf("decode failed: %w", err)
+	svgImg, svgErr := decodeSVGBytes(body, width, height)
+	if svgErr == nil {
+		return svgImg, "svg", nil
 	}
-	return img, fmtName, resp.Request.URL.String(), nil
+
+	return nil, "", fmt.Errorf("decode failed: %v; svg fallback failed: %v", err, svgErr)
+}
+
+func decodeSVGBytes(svg []byte, width, height int) (image.Image, error) {
+	if width <= 0 || height <= 0 {
+		return nil, errors.New("invalid raster target size")
+	}
+	icon, err := oksvg.ReadIconStream(bytes.NewReader(svg))
+	if err != nil {
+		return nil, err
+	}
+	icon.SetTarget(0, 0, float64(width), float64(height))
+	dst := image.NewRGBA(image.Rect(0, 0, width, height))
+	scanner := rasterx.NewScannerGV(width, height, dst, dst.Bounds())
+	raster := rasterx.NewDasher(width, height, scanner)
+	icon.Draw(raster, 1.0)
+	return dst, nil
 }
 
 func resizeNearest(src image.Image, outW, outH int) *image.NRGBA {

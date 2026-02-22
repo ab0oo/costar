@@ -88,6 +88,7 @@ curl -L "http://localhost:8085/mdi?icon=mdi:weather-partly-cloudy&size=28&color=
 ### Notes
 
 - Resizing uses nearest-neighbor scaling.
+- `/mdi` fetches SVG and rasterizes server-side to the requested size.
 - Alpha is premultiplied against black before conversion (matches existing icon import behavior).
 - Max accepted source payload defaults to `8 MiB` (`-max-bytes` flag).
 - In-memory response cache is enabled by default:
@@ -101,4 +102,4 @@ curl -L "http://localhost:8085/mdi?icon=mdi:weather-partly-cloudy&size=28&color=
 - Canonical SVG repo/package source:
   - https://github.com/Pictogrammers/pictogrammers.com
   - https://www.npmjs.com/package/@mdi/svg
-- This utility defaults to an MDI raster mirror endpoint (`api.iconify.design`) for simple on-the-fly conversion.
+- This utility defaults to Iconify's MDI SVG endpoint (`api.iconify.design`) and rasterizes icons locally.
