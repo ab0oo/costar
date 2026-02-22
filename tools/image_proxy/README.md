@@ -6,7 +6,7 @@ Small utility service that fetches a remote image, rescales it, and returns raw 
 
 ```bash
 cd tools/image_proxy
-go run . -listen :8085 -cache-ttl 10m -cache-max-entries 256
+go run . -listen :8085 -cache-ttl 10m -cache-max-entries 256 -user-agent "CoStar-ImageProxy/1.0"
 ```
 
 ## Build
@@ -14,7 +14,7 @@ go run . -listen :8085 -cache-ttl 10m -cache-max-entries 256
 ```bash
 cd tools/image_proxy
 go build -o image_proxy .
-./image_proxy -listen :8085 -cache-ttl 10m -cache-max-entries 256
+./image_proxy -listen :8085 -cache-ttl 10m -cache-max-entries 256 -user-agent "CoStar-ImageProxy/1.0"
 ```
 
 ## API
@@ -30,11 +30,27 @@ Required query params:
 
 Alternative to `size`: `w` and `h` query params.
 
+Optional query params:
+
+- `ua`: override upstream `User-Agent` header for this request
+- `referer`: override upstream `Referer` header for this request
+
 ### Example
 
 ```bash
 curl -L "http://localhost:8085/cmh?url=https://example.com/image.png&size=64" \
   --output image_64x64.raw
+```
+
+With upstream header overrides:
+
+```bash
+curl -L --get "http://localhost:8085/cmh" \
+  --data-urlencode "url=https://example.com/logo.png" \
+  --data-urlencode "size=64" \
+  --data-urlencode "ua=CoStar-ImageProxy/1.0" \
+  --data-urlencode "referer=https://example.com/" \
+  --output logo_64.raw
 ```
 
 `GET /mdi`
@@ -77,6 +93,7 @@ curl -L "http://localhost:8085/mdi?icon=mdi:weather-partly-cloudy&size=28&color=
 - In-memory response cache is enabled by default:
   - `-cache-ttl` controls per-entry lifetime (default `10m`; `0` disables TTL expiry)
   - `-cache-max-entries` bounds memory use (default `256`; `0` disables caching)
+- Some upstream hosts still block automated traffic (HTTP 403) even with custom headers.
 
 ## MDI icon source
 

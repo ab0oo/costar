@@ -55,17 +55,26 @@ For arbitrary remote images, use `tools/image_proxy`:
 
 1. `cd tools/image_proxy`
 2. Build or run:
-   - `go build -o image_proxy .` then `./image_proxy -listen :8085 -cache-ttl 10m -cache-max-entries 256`
-   - or `go run . -listen :8085 -cache-ttl 10m -cache-max-entries 256`
+   - `go build -o image_proxy .` then `./image_proxy -listen :8085 -cache-ttl 10m -cache-max-entries 256 -user-agent "CoStar-ImageProxy/1.0"`
+   - or `go run . -listen :8085 -cache-ttl 10m -cache-max-entries 256 -user-agent "CoStar-ImageProxy/1.0"`
 3. Call:
    - `GET /cmh?url=<image_url>&size=<n|WxH>`
    - `GET /mdi?icon=<mdi_name>&size=<n|WxH>&color=<RRGGBB>`
    - Returns raw `rgb565le` bytes (`width * height * 2`)
 
+Current project relay endpoint (shared dev host):
+
+- `http://vps.gorkos.net:8085`
+
 Quick example:
 
 - `curl -L "http://localhost:8085/cmh?url=https://example.com/pic.png&size=64" --output pic_64.raw`
 - `curl -L "http://localhost:8085/mdi?icon=mdi:weather-partly-cloudy&size=28&color=FFFFFF" --output mdi_weather_partly_cloudy.raw`
+
+For stricter upstream hosts, `/cmh` also supports per-request overrides:
+
+- `ua=<User-Agent>`
+- `referer=<Referer>`
 
 See `tools/image_proxy/README.md` for full details.
 
@@ -149,7 +158,7 @@ Remote icon URLs (auto-cached to LittleFS):
 - Render path checks LittleFS first; on cache miss it downloads once, stores to `/icon_cache/*.raw`, then reuses local file.
 - Recommended for HA MDI:
   - Field: `"ha_icon": "attributes.icon"` (e.g. `mdi:weather-partly-cloudy`)
-  - Node path: `"http://<go-host>:8085/mdi?icon={{ha_icon}}&size=28&color=FFFFFF"`
+  - Node path: `"http://vps.gorkos.net:8085/mdi?icon={{ha_icon}}&size=28&color=FFFFFF"`
 - Keep node `w`/`h` matched to requested `size` (or exact `WxH`) for predictable bytes (`w*h*2`).
 
 `local_time` source fields (for `data.source: "local_time"`):

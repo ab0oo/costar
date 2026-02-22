@@ -27,12 +27,19 @@ const (
 	defaultListenAddr = ":8085"
 	maxDimension      = 1024
 	defaultMdiSize    = 28
+	defaultUserAgent  = "CoStar-ImageProxy/1.0"
 )
 
 type serverConfig struct {
 	maxDownloadBytes int64
 	mdiBaseURL       string
+	userAgent        string
 	cache            *responseCache
+}
+
+type fetchOptions struct {
+	userAgent string
+	referer   string
 }
 
 type cachedResponse struct {
@@ -138,6 +145,7 @@ func main() {
 	listenAddr := flag.String("listen", defaultListenAddr, "HTTP listen address")
 	maxBytes := flag.Int64("max-bytes", 8*1024*1024, "Maximum source image download bytes")
 	mdiBase := flag.String("mdi-base", "https://api.iconify.design/mdi", "Upstream base URL for MDI raster images")
+	userAgent := flag.String("user-agent", defaultUserAgent, "Default upstream User-Agent for source image fetches")
 	cacheTTL := flag.Duration("cache-ttl", 10*time.Minute, "In-memory cache TTL duration (e.g. 10m, 30s, 0 to disable TTL)")
 	cacheMaxEntries := flag.Int("cache-max-entries", 256, "Maximum in-memory cache entries (0 disables caching)")
 	flag.Parse()
@@ -145,6 +153,7 @@ func main() {
 	cfg := serverConfig{
 		maxDownloadBytes: *maxBytes,
 		mdiBaseURL:       strings.TrimRight(strings.TrimSpace(*mdiBase), "/"),
+		userAgent:        strings.TrimSpace(*userAgent),
 		cache:            newResponseCache(*cacheTTL, *cacheMaxEntries),
 	}
 
@@ -172,7 +181,8 @@ func rootHandler(w http.ResponseWriter, _ *http.Request) {
 		"GET /cmh?url=<image_url>&size=<n|WxH>\n" +
 			"GET /mdi?icon=<mdi_name>&size=<n|WxH>&color=<RRGGBB>\n" +
 			"Returns raw rgb565 little-endian bytes.\n" +
-			"Response includes X-Cache: HIT or MISS.\n",
+			"Response includes X-Cache: HIT or MISS.\n" +
+			"/cmh supports optional ua= and referer= query params.\n",
 	))
 }
 
@@ -198,7 +208,9 @@ func (cfg serverConfig) convertHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	cacheKey := buildCMHCacheKey(srcURL, width, height)
+	uaOverride := sanitizeHeaderValue(r.URL.Query().Get("ua"))
+	refererOverride := sanitizeHeaderValue(r.URL.Query().Get("referer"))
+	cacheKey := buildCMHCacheKey(srcURL, width, height, uaOverride, refererOverride)
 	if cached, ok := cfg.cache.get(cacheKey); ok {
 		writeRawResponse(w, cached, true)
 		return
@@ -207,7 +219,10 @@ func (cfg serverConfig) convertHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 
-	srcImg, srcFmt, fetchURL, err := cfg.fetchImage(ctx, srcURL)
+	srcImg, srcFmt, fetchURL, err := cfg.fetchImage(ctx, srcURL, fetchOptions{
+		userAgent: firstNonEmpty(uaOverride, cfg.userAgent, defaultUserAgent),
+		referer:   refererOverride,
+	})
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -274,7 +289,9 @@ func (cfg serverConfig) mdiHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 
-	srcImg, srcFmt, fetchURL, err := cfg.fetchImage(ctx, srcURL)
+	srcImg, srcFmt, fetchURL, err := cfg.fetchImage(ctx, srcURL, fetchOptions{
+		userAgent: firstNonEmpty(cfg.userAgent, defaultUserAgent),
+	})
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -295,8 +312,8 @@ func (cfg serverConfig) mdiHandler(w http.ResponseWriter, r *http.Request) {
 	writeRawResponse(w, resp, false)
 }
 
-func buildCMHCacheKey(srcURL string, width, height int) string {
-	return "cmh|" + srcURL + "|" + strconv.Itoa(width) + "x" + strconv.Itoa(height)
+func buildCMHCacheKey(srcURL string, width, height int, userAgent, referer string) string {
+	return "cmh|" + srcURL + "|" + strconv.Itoa(width) + "x" + strconv.Itoa(height) + "|ua=" + userAgent + "|ref=" + referer
 }
 
 func buildMDICacheKey(base, icon, color string, width, height int) string {
@@ -454,7 +471,30 @@ func normalizeHexColor(raw string) (string, error) {
 	return strings.ToUpper(color), nil
 }
 
-func (cfg serverConfig) fetchImage(ctx context.Context, rawURL string) (image.Image, string, string, error) {
+func sanitizeHeaderValue(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+	value = strings.ReplaceAll(value, "\r", "")
+	value = strings.ReplaceAll(value, "\n", "")
+	if len(value) > 256 {
+		value = value[:256]
+	}
+	return strings.TrimSpace(value)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func (cfg serverConfig) fetchImage(ctx context.Context, rawURL string, opts fetchOptions) (image.Image, string, string, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("invalid url: %w", err)
@@ -466,6 +506,13 @@ func (cfg serverConfig) fetchImage(ctx context.Context, rawURL string) (image.Im
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Accept", "image/*,*/*;q=0.8")
+	if ua := firstNonEmpty(sanitizeHeaderValue(opts.userAgent), sanitizeHeaderValue(cfg.userAgent), defaultUserAgent); ua != "" {
+		req.Header.Set("User-Agent", ua)
+	}
+	if referer := sanitizeHeaderValue(opts.referer); referer != "" {
+		req.Header.Set("Referer", referer)
 	}
 
 	client := &http.Client{Timeout: 15 * time.Second}

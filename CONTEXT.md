@@ -47,6 +47,8 @@ Quick restart snapshot for next session.
 - Go helper (`tools/image_proxy`) provides:
   - `/cmh` image URL -> RGB565 raw
   - `/mdi` icon name -> RGB565 raw
+  - shared dev relay endpoint:
+    - `http://vps.gorkos.net:8085`
   - in-memory response cache (`-cache-ttl`, `-cache-max-entries`)
   - build/run:
     - `go build -o image_proxy .`

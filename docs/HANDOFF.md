@@ -70,6 +70,8 @@ Key supported DSL features:
   - endpoints:
     - `/cmh` (arbitrary image URL -> RGB565 raw)
     - `/mdi` (MDI icon name -> RGB565 raw)
+  - shared dev relay endpoint:
+    - `http://vps.gorkos.net:8085`
   - in-memory cache flags:
     - `-cache-ttl`
     - `-cache-max-entries`
