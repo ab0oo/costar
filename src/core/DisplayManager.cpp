@@ -65,6 +65,15 @@ bool DisplayManager::reloadLayout() {
   return loadLayout();
 }
 
+bool DisplayManager::reloadLayout(const String& layoutPath) {
+  layoutPath_ = layoutPath;
+  return loadLayout();
+}
+
+void DisplayManager::setLayoutPath(const String& layoutPath) {
+  layoutPath_ = layoutPath;
+}
+
 void DisplayManager::onTouch(uint16_t rawX, uint16_t rawY) {
   (void)rawX;
   (void)rawY;

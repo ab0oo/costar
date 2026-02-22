@@ -3,7 +3,9 @@
 #include <Arduino.h>
 
 namespace AppConfig {
-constexpr char kDefaultLayoutPath[] = "/screen_layout.json";
+constexpr char kLayoutPathA[] = "/screen_layout_a.json";
+constexpr char kLayoutPathB[] = "/screen_layout_b.json";
+constexpr const char* kDefaultLayoutPath = kLayoutPathA;
 constexpr float kDefaultLatitude = 37.4220f;
 constexpr float kDefaultLongitude = -122.0841f;
 
@@ -18,6 +20,11 @@ constexpr bool kTftOnlyDiagnosticMode = false;
 constexpr bool kStaticFrameMode = false;
 constexpr int8_t kDiagnosticLedPin = 2;
 constexpr uint16_t kDiagnosticBlinkMs = 250;
+constexpr int8_t kBoardBlueLedPin = 17;
+constexpr bool kBoardBlueLedOffHigh = false;
+constexpr int8_t kUserButtonPin = 0;
+constexpr bool kUserButtonActiveLow = true;
+constexpr uint16_t kUserButtonDebounceMs = 45;
 
 // CYD XPT2046 calibration for landscape (TFT rotation=1, touch rotation=2).
 constexpr uint16_t kTouchRawMinX = 250;

@@ -1,6 +1,9 @@
 #include "services/GeoIpService.h"
 
 #include <ArduinoJson.h>
+#include <FS.h>
+#include <LittleFS.h>
+#include <WiFi.h>
 
 #include "RuntimeGeo.h"
 
@@ -21,6 +24,11 @@ constexpr char kManualLabelKey[] = "mlabel";
 constexpr char kManualCityKey[] = "mcity";
 constexpr int kModeAuto = 0;
 constexpr int kModeManual = 1;
+constexpr char kManualSsidPath[] = "/geo_manual_by_ssid.json";
+constexpr char kEntriesKey[] = "entries";
+constexpr char kSsidKey[] = "ssid";
+constexpr char kHasOffsetKey[] = "has_offset";
+constexpr char kCityKey[] = "city";
 
 constexpr char kGeoUrlPrimary[] = "https://ipwho.is/";
 constexpr char kGeoUrlFallback[] = "https://ipapi.co/json/";
@@ -52,13 +60,35 @@ void GeoIpService::setError(const String& msg) {
 }
 
 bool GeoIpService::loadOverride() {
+  const String ssid = currentWifiSsid();
+  float lat = NAN;
+  float lon = NAN;
+  String tz;
+  int offMin = 0;
+  bool hasOffset = false;
+  String label;
+  String city;
+  if (loadManualForSsid(ssid, lat, lon, tz, offMin, hasOffset, label, city)) {
+    String resolvedLabel = label;
+    if (resolvedLabel.isEmpty()) {
+      resolvedLabel = city;
+    }
+    if (resolvedLabel.isEmpty()) {
+      resolvedLabel = String(lat, 4) + "," + String(lon, 4);
+    }
+    RuntimeGeo::setLocation(lat, lon, tz, hasOffset ? offMin : 0, hasOffset, resolvedLabel);
+    lastSource_ = "manual";
+    setError("");
+    return true;
+  }
+
   prefs_.begin(kPrefsNs, true);
   const int mode = prefs_.getInt(kModeKey, kModeAuto);
-  const float lat = prefs_.getFloat(kManualLatKey, NAN);
-  const float lon = prefs_.getFloat(kManualLonKey, NAN);
-  const String tz = prefs_.getString(kManualTzKey, "");
-  const String label = prefs_.getString(kManualLabelKey, "");
-  const int offMin = prefs_.getInt(kManualOffsetKey, kOffsetUnknown);
+  lat = prefs_.getFloat(kManualLatKey, NAN);
+  lon = prefs_.getFloat(kManualLonKey, NAN);
+  tz = prefs_.getString(kManualTzKey, "");
+  label = prefs_.getString(kManualLabelKey, "");
+  offMin = prefs_.getInt(kManualOffsetKey, kOffsetUnknown);
   prefs_.end();
 
   if (mode != kModeManual || isnan(lat) || isnan(lon) || tz.isEmpty()) {
@@ -66,7 +96,7 @@ bool GeoIpService::loadOverride() {
     return false;
   }
 
-  const bool hasOffset = offMin != kOffsetUnknown;
+  hasOffset = offMin != kOffsetUnknown;
   RuntimeGeo::setLocation(lat, lon, tz, hasOffset ? offMin : 0, hasOffset, label);
   lastSource_ = "manual";
   setError("");
@@ -111,8 +141,11 @@ bool GeoIpService::saveCached(float lat, float lon, const String& tz, const Stri
 
 bool GeoIpService::saveManual(float lat, float lon, const String& tz, int offsetMinutes,
                               bool hasOffset, const String& label, const String& city) {
+  const String ssid = currentWifiSsid();
+  const bool hasSsid = !ssid.isEmpty();
+
   prefs_.begin(kPrefsNs, false);
-  prefs_.putInt(kModeKey, kModeManual);
+  prefs_.putInt(kModeKey, hasSsid ? kModeAuto : kModeManual);
   prefs_.putFloat(kManualLatKey, lat);
   prefs_.putFloat(kManualLonKey, lon);
   prefs_.putString(kManualTzKey, tz);
@@ -128,6 +161,10 @@ bool GeoIpService::saveManual(float lat, float lon, const String& tz, int offset
     prefs_.putString(kManualCityKey, city);
   }
   prefs_.end();
+
+  if (hasSsid) {
+    saveManualForSsid(ssid, lat, lon, tz, offsetMinutes, hasOffset, label, city);
+  }
   return true;
 }
 
@@ -135,9 +172,194 @@ bool GeoIpService::clearOverride() {
   prefs_.begin(kPrefsNs, false);
   prefs_.putInt(kModeKey, kModeAuto);
   prefs_.end();
+
+  const String ssid = currentWifiSsid();
+  if (!ssid.isEmpty()) {
+    clearManualForSsid(ssid);
+  }
+
   lastSource_ = "auto";
   setError("");
   return true;
+}
+
+String GeoIpService::currentWifiSsid() const {
+  String ssid = WiFi.SSID();
+  ssid.trim();
+  return ssid;
+}
+
+bool GeoIpService::loadManualForSsid(const String& ssid, float& lat, float& lon, String& tz,
+                                     int& offsetMinutes, bool& hasOffset, String& label,
+                                     String& city) const {
+  if (ssid.isEmpty()) {
+    return false;
+  }
+
+  fs::File f = LittleFS.open(kManualSsidPath, FILE_READ);
+  if (!f || f.isDirectory()) {
+    return false;
+  }
+
+  JsonDocument doc;
+  const DeserializationError err = deserializeJson(doc, f);
+  f.close();
+  if (err) {
+    return false;
+  }
+
+  JsonArrayConst entries = doc[kEntriesKey].as<JsonArrayConst>();
+  if (entries.isNull()) {
+    return false;
+  }
+
+  for (JsonObjectConst entry : entries) {
+    const String entrySsid = entry[kSsidKey] | String();
+    if (entrySsid != ssid) {
+      continue;
+    }
+
+    lat = entry[kManualLatKey] | NAN;
+    lon = entry[kManualLonKey] | NAN;
+    tz = entry[kManualTzKey] | String();
+    label = entry[kManualLabelKey] | String();
+    city = entry[kCityKey] | String();
+
+    hasOffset = entry[kHasOffsetKey] | false;
+    if (hasOffset) {
+      offsetMinutes = entry[kManualOffsetKey] | 0;
+    } else {
+      const int offRaw = entry[kManualOffsetKey] | kOffsetUnknown;
+      if (offRaw != kOffsetUnknown) {
+        offsetMinutes = offRaw;
+        hasOffset = true;
+      } else {
+        offsetMinutes = 0;
+      }
+    }
+
+    if (isnan(lat) || isnan(lon) || tz.isEmpty()) {
+      return false;
+    }
+    return true;
+  }
+
+  return false;
+}
+
+bool GeoIpService::saveManualForSsid(const String& ssid, float lat, float lon, const String& tz,
+                                     int offsetMinutes, bool hasOffset, const String& label,
+                                     const String& city) const {
+  if (ssid.isEmpty()) {
+    return false;
+  }
+
+  JsonDocument doc;
+  fs::File in = LittleFS.open(kManualSsidPath, FILE_READ);
+  if (in && !in.isDirectory()) {
+    deserializeJson(doc, in);
+    in.close();
+  } else if (in) {
+    in.close();
+  }
+
+  JsonArray entries = doc[kEntriesKey].as<JsonArray>();
+  if (entries.isNull()) {
+    entries = doc[kEntriesKey].to<JsonArray>();
+  }
+
+  JsonObject target;
+  for (JsonObject entry : entries) {
+    const String entrySsid = entry[kSsidKey] | String();
+    if (entrySsid == ssid) {
+      target = entry;
+      break;
+    }
+  }
+  if (target.isNull()) {
+    target = entries.add<JsonObject>();
+  }
+
+  target[kSsidKey] = ssid;
+  target[kManualLatKey] = lat;
+  target[kManualLonKey] = lon;
+  target[kManualTzKey] = tz;
+  target[kHasOffsetKey] = hasOffset;
+  if (hasOffset) {
+    target[kManualOffsetKey] = offsetMinutes;
+  } else {
+    target[kManualOffsetKey] = kOffsetUnknown;
+  }
+  if (!label.isEmpty()) {
+    target[kManualLabelKey] = label;
+  } else {
+    target.remove(kManualLabelKey);
+  }
+  if (!city.isEmpty()) {
+    target[kCityKey] = city;
+  } else {
+    target.remove(kCityKey);
+  }
+
+  fs::File out = LittleFS.open(kManualSsidPath, FILE_WRITE);
+  if (!out || out.isDirectory()) {
+    return false;
+  }
+  const size_t written = serializeJson(doc, out);
+  out.close();
+  return written > 0;
+}
+
+bool GeoIpService::clearManualForSsid(const String& ssid) const {
+  if (ssid.isEmpty()) {
+    return false;
+  }
+
+  fs::File in = LittleFS.open(kManualSsidPath, FILE_READ);
+  if (!in || in.isDirectory()) {
+    if (in) {
+      in.close();
+    }
+    return false;
+  }
+
+  JsonDocument doc;
+  const DeserializationError err = deserializeJson(doc, in);
+  in.close();
+  if (err) {
+    return false;
+  }
+
+  JsonArray entries = doc[kEntriesKey].as<JsonArray>();
+  if (entries.isNull()) {
+    return false;
+  }
+
+  bool removed = false;
+  for (int i = static_cast<int>(entries.size()) - 1; i >= 0; --i) {
+    JsonObject entry = entries[i].as<JsonObject>();
+    const String entrySsid = entry[kSsidKey] | String();
+    if (entrySsid == ssid) {
+      entries.remove(i);
+      removed = true;
+    }
+  }
+
+  if (!removed) {
+    return false;
+  }
+
+  if (entries.size() == 0) {
+    return LittleFS.remove(kManualSsidPath);
+  }
+
+  fs::File out = LittleFS.open(kManualSsidPath, FILE_WRITE);
+  if (!out || out.isDirectory()) {
+    return false;
+  }
+  const size_t written = serializeJson(doc, out);
+  out.close();
+  return written > 0;
 }
 
 bool GeoIpService::parseOffsetText(const String& raw, int& minutes) const {

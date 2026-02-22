@@ -210,6 +210,34 @@ bool readInt16(JsonVariantConst v, const VarContext* ctx, int16_t& out) {
   return true;
 }
 
+bool readBool(JsonVariantConst v, bool& out) {
+  if (v.isNull()) {
+    return false;
+  }
+  if (v.is<bool>()) {
+    out = v.as<bool>();
+    return true;
+  }
+  if (v.is<const char*>()) {
+    const String text = v.as<String>();
+    if (text == "1" || text.equalsIgnoreCase("true") || text.equalsIgnoreCase("yes") ||
+        text.equalsIgnoreCase("on")) {
+      out = true;
+      return true;
+    }
+    if (text == "0" || text.equalsIgnoreCase("false") || text.equalsIgnoreCase("no") ||
+        text.equalsIgnoreCase("off")) {
+      out = false;
+      return true;
+    }
+  }
+  if (v.is<float>() || v.is<double>() || v.is<long>() || v.is<int>()) {
+    out = fabsf(v.as<float>()) > 0.0001f;
+    return true;
+  }
+  return false;
+}
+
 void applyNode(JsonObjectConst nodeJson, dsl::Document& out, const VarContext* ctx) {
   dsl::Node n;
 
@@ -264,6 +292,15 @@ void applyNode(JsonObjectConst nodeJson, dsl::Document& out, const VarContext* c
   const String align = nodeJson["align"] | String();
   const String valign = nodeJson["valign"] | String();
   n.datum = parseDatum(align, valign);
+  readBool(nodeJson["wrap"], n.wrap);
+  readInt16(nodeJson["line_height"], ctx, n.lineHeight);
+  readInt16(nodeJson["max_lines"], ctx, n.maxLines);
+  const String overflow = nodeJson["overflow"] | String();
+  if (overflow.equalsIgnoreCase("ellipsis")) {
+    n.overflow = dsl::OverflowMode::kEllipsis;
+  } else {
+    n.overflow = dsl::OverflowMode::kClip;
+  }
 
   float fval = 0.0f;
   if (readFloat(nodeJson["min"], ctx, fval)) {
@@ -374,6 +411,22 @@ bool Parser::parseFile(const String& path, Document& out, String* error) {
   if (!data.isNull()) {
     out.source = data["source"] | out.source;
     out.url = data["url"] | String();
+    const JsonObjectConst headers = data["headers"];
+    if (!headers.isNull()) {
+      for (JsonPairConst p : headers) {
+        const String key = String(p.key().c_str());
+        String value;
+        if (p.value().is<const char*>()) {
+          value = p.value().as<String>();
+        } else if (p.value().is<float>() || p.value().is<double>() ||
+                   p.value().is<long>() || p.value().is<int>() || p.value().is<bool>()) {
+          value = p.value().as<String>();
+        }
+        if (!key.isEmpty() && !value.isEmpty()) {
+          out.headers[key] = value;
+        }
+      }
+    }
     out.debug = data["debug"] | out.debug;
     out.pollMs = data["poll_ms"] | out.pollMs;
 

@@ -23,6 +23,14 @@ class GeoIpService {
                               bool& hasOffset) const;
   bool saveManual(float lat, float lon, const String& tz, int offsetMinutes,
                   bool hasOffset, const String& label, const String& city);
+  bool loadManualForSsid(const String& ssid, float& lat, float& lon, String& tz,
+                         int& offsetMinutes, bool& hasOffset, String& label,
+                         String& city) const;
+  bool saveManualForSsid(const String& ssid, float lat, float lon, const String& tz,
+                         int offsetMinutes, bool hasOffset, const String& label,
+                         const String& city) const;
+  bool clearManualForSsid(const String& ssid) const;
+  String currentWifiSsid() const;
   bool parseGeoDoc(const JsonDocument& doc, float& lat, float& lon, String& tz,
                    int& offsetMinutes, bool& hasOffset) const;
   bool parseOffsetText(const String& raw, int& minutes) const;

@@ -28,6 +28,7 @@ class DslWidget final : public Widget {
   bool loadDslModel();
   String bindTemplate(const String& input) const;
   String bindRuntimeTemplate(const String& input) const;
+  std::map<String, String> resolveHttpHeaders() const;
   bool buildLocalTimeDoc(JsonDocument& outDoc, String& error) const;
   bool buildAdsbNearestDoc(const JsonDocument& rawDoc, JsonDocument& outDoc, String& error) const;
   float distanceKm(float lat1, float lon1, float lat2, float lon2) const;
@@ -41,6 +42,10 @@ class DslWidget final : public Widget {
 
   bool resolveVariant(const JsonDocument& doc, const String& path,
                       JsonVariantConst& out) const;
+  bool resolveVariantPath(const JsonVariantConst& root, const String& path,
+                          JsonVariantConst& out) const;
+  bool resolveSortVariant(const JsonDocument& doc, const String& path,
+                          JsonVariantConst& out) const;
   String toText(JsonVariantConst value) const;
 
   String applyFormat(const String& text, const dsl::FormatSpec& fmt,
@@ -69,7 +74,9 @@ class DslWidget final : public Widget {
   uint8_t adsbFailureStreak_ = 0;
 
   std::map<String, String> values_;
+  std::map<String, String> pathValues_;
   std::map<String, std::vector<float>> seriesValues_;
+  mutable JsonDocument transformDoc_;
 
   HttpJsonClient http_;
 };

@@ -380,27 +380,41 @@ bool DslWidget::update(uint32_t nowMs) {
     if (!error.isEmpty()) {
       logHttpFetchResult(fetchMeta.statusCode, fetchMeta.contentLengthBytes);
       if (dsl_.debug) {
+        if (fetchMeta.statusCode <= 0) {
+          Serial.printf(
+              "[%s] [%s] ADSB transport no-http-response code=%d reason='%s' elapsed=%lums\n",
+              widgetName().c_str(), logTimestamp().c_str(), fetchMeta.statusCode,
+              fetchMeta.transportReason.c_str(),
+              static_cast<unsigned long>(fetchMeta.elapsedMs));
+        }
         Serial.printf(
             "[%s] [%s] ADSB err=%s status=%d bytes=%u ctype='%s'\n", widgetName().c_str(),
-            logTimestamp().c_str(), clipText(error, 86).c_str(), fetchMeta.statusCode,
+            logTimestamp().c_str(), clipText(error, 140).c_str(), fetchMeta.statusCode,
             static_cast<unsigned>(fetchMeta.payloadBytes), fetchMeta.contentType.c_str());
       }
     }
   } else if (dsl_.source == "http") {
     const String resolvedUrl = bindRuntimeTemplate(dsl_.url);
+    const std::map<String, String> resolvedHeaders = resolveHttpHeaders();
+    const std::map<String, String>* headersPtr =
+        resolvedHeaders.empty() ? nullptr : &resolvedHeaders;
     if (dsl_.debug) {
       Serial.printf("[%s] [%s] URL %s\n", widgetName().c_str(), logTimestamp().c_str(),
                     clipText(resolvedUrl, 88).c_str());
+      if (!resolvedHeaders.empty()) {
+        Serial.printf("[%s] [%s] HTTP headers=%u\n", widgetName().c_str(),
+                      logTimestamp().c_str(), static_cast<unsigned>(resolvedHeaders.size()));
+      }
     }
     if (resolvedUrl.isEmpty()) {
       error = "resolved URL empty";
-    } else if (!http_.get(resolvedUrl, doc, &error, &fetchMeta)) {
+    } else if (!http_.get(resolvedUrl, doc, &error, &fetchMeta, headersPtr)) {
       if (error.startsWith("Empty payload")) {
         delay(40);
         JsonDocument retryDoc;
         String retryError;
         HttpFetchMeta retryMeta;
-        if (http_.get(resolvedUrl, retryDoc, &retryError, &retryMeta)) {
+        if (http_.get(resolvedUrl, retryDoc, &retryError, &retryMeta, headersPtr)) {
           doc = retryDoc;
           fetchMeta = retryMeta;
           error = "";
@@ -414,9 +428,20 @@ bool DslWidget::update(uint32_t nowMs) {
     if (!error.isEmpty()) {
       logHttpFetchResult(fetchMeta.statusCode, fetchMeta.contentLengthBytes);
       if (dsl_.debug) {
+        if (fetchMeta.statusCode <= 0) {
+          Serial.printf(
+              "[%s] [%s] DSL transport no-http-response code=%d reason='%s' elapsed=%lums\n",
+              widgetName().c_str(), logTimestamp().c_str(), fetchMeta.statusCode,
+              fetchMeta.transportReason.c_str(),
+              static_cast<unsigned long>(fetchMeta.elapsedMs));
+        } else if (fetchMeta.statusCode == 429 || fetchMeta.statusCode == 503) {
+          Serial.printf("[%s] [%s] DSL server throttle status=%d retry-after='%s'\n",
+                        widgetName().c_str(), logTimestamp().c_str(), fetchMeta.statusCode,
+                        fetchMeta.retryAfter.c_str());
+        }
         Serial.printf(
             "[%s] [%s] DSL err=%s status=%d bytes=%u ctype='%s'\n", widgetName().c_str(),
-            logTimestamp().c_str(), clipText(error, 86).c_str(), fetchMeta.statusCode,
+            logTimestamp().c_str(), clipText(error, 140).c_str(), fetchMeta.statusCode,
             static_cast<unsigned>(fetchMeta.payloadBytes), fetchMeta.contentType.c_str());
       }
     } else {

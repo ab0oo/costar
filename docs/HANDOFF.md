@@ -1,102 +1,127 @@
-# Handoff Runbook
+# Handoff Runbook (Release Prep)
 
 ## 1) Environment
 
 - Project root: `costar/`
 - Board/framework: ESP32 + Arduino (PlatformIO)
-- Display stack: `TFT_eSPI` + `XPT2046_Touchscreen`
-- Filesystem: SPIFFS
+- Display/touch: `TFT_eSPI` + `XPT2046_Touchscreen`
+- Filesystem: LittleFS
 
-## 2) Core Files to Know
+## 2) Current Runtime Architecture
 
-- Main boot + provisioning + setup UI:
-  - `src/main.cpp`
-- Layout manager:
-  - `src/core/DisplayManager.cpp`
-- DSL parser:
-  - `src/dsl/DslParser.cpp`
-- DSL widget runtime:
+- Active layout profiles:
+  - `data/screen_layout_a.json`
+  - `data/screen_layout_b.json`
+- Profile select:
+  - USER button (`GPIO 0`, active-low)
+  - persisted in NVS key `layout.profile`
+- Legacy compatibility layout file remains:
+  - `data/screen_layout.json` (not the active profile source)
+
+## 3) Widget/DSL Runtime
+
+- Widget type: DSL-only (`type: "dsl"`)
+- Core files:
   - `src/widgets/DslWidget.cpp`
   - `src/widgets/DslWidgetFetch.cpp`
   - `src/widgets/DslWidgetFormat.cpp`
   - `src/widgets/DslWidgetExpr.cpp`
   - `src/widgets/DslWidgetRender.cpp`
-- HTTP client:
+  - `src/dsl/DslParser.cpp`
+  - `src/dsl/DslExpr.cpp`
   - `src/services/HttpJsonClient.cpp`
 
-## 3) Current Active Widget Config
+Key supported DSL features:
 
-- Screen layout:
-  - `data/screen_layout.json`
-- ADS-B widget DSL:
-  - `data/dsl/adsb_nearest.json`
+- `repeat` parse-time expansion
+- numeric expressions (`sin/cos/...`, `haversine_m`, unit conversions)
+- sortable path transforms:
+  - `sort_num(...)`
+  - `sort_alpha(...)`
+  - `distance_sort(...)` / `sort_distance(...)`
+- label path rendering:
+  - `label.path`
+  - optional `{{value}}` injection in `text`
+- label wrapping:
+  - `wrap`, `line_height`, `max_lines`, `overflow`
 
-## 4) Common Commands
+## 4) Global Runtime Bindings
 
-- Build:
-  - `pio run`
-- Upload FS data:
-  - `pio run -t uploadfs`
-- Upload firmware:
-  - `pio run -t upload`
-- Serial monitor:
-  - `pio device monitor`
+- Geo:
+  - `{{geo.lat}}`, `{{geo.lon}}`, `{{geo.tz}}`, `{{geo.offset_min}}`, `{{geo.label}}`
+- Preferences:
+  - `{{pref.clock_24h}}`, `{{pref.temp_unit}}`, `{{pref.distance_unit}}`
+- Widget-local settings:
+  - `{{setting.<key>}}`
 
-## 5) Browser DSL Editor (Fast Iteration)
+## 5) Home Assistant Direct Support
 
-- Launch:
-  - `python3 -m http.server 8000`
-- Open:
-  - `http://localhost:8000/tools/dsl_editor/`
+- DSL now supports HTTP headers under `data.headers`.
+- Typical HA call:
+  - URL: `{{setting.ha_base_url}}/api/states/{{setting.entity_id}}`
+  - Header: `Authorization: Bearer {{setting.ha_token}}`
+- Reference DSL:
+  - `data/dsl/homeassistant_entity.json`
 
-Use it to validate DSL layout, path bindings, and formatting before flashing.
+## 6) Remote Icon Pipeline (No Reflash Asset Work)
 
-Editor notes:
+- Go utility:
+  - `tools/image_proxy/`
+  - endpoints:
+    - `/cmh` (arbitrary image URL -> RGB565 raw)
+    - `/mdi` (MDI icon name -> RGB565 raw)
+  - in-memory cache flags:
+    - `-cache-ttl`
+    - `-cache-max-entries`
 
-- The editor uses JSONEditor (tree + code) loaded from CDN.
-- Tab/indent behaves like a real code editor inside the JSON panes.
+- Firmware icon render behavior:
+  - local icon path: read from LittleFS directly
+  - remote icon path (`http/https`):
+    1. check in-memory icon cache
+    2. check LittleFS cache (`/icon_cache/*.raw`)
+    3. fetch/download/store on miss
+  - retry/backoff state for failed remote fetches is bounded and pruned
 
-## 5.1) DSL Advanced Features (Repeat + Math)
+## 7) Geo Persistence
 
-- `repeat` nodes expand at parse time to generate multiple nodes.
-- Fields: `count` (or `times`), `start`, `step`, `var` (default `i`), and `nodes` (array) or `node` (single object).
-- The repeat variable is available in numeric expressions and in text/path via `{{i}}`.
-- Numeric expression fields: `x`, `y`, `x2`, `y2`, `r`, `length`, `thickness`, `min`, `max`, `start_deg`, `end_deg`.
-- Supported functions: `sin`, `cos`, `tan`, `asin`, `acos`, `atan` (degrees), `abs`, `sqrt`, `floor`, `ceil`, `round`, `min`, `max`, `pow`, `rad`, `deg`, `pi`.
-- Safety: repeat expansion is capped at 512 iterations per node.
+- Manual setup location persists per SSID:
+  - LittleFS file: `/geo_manual_by_ssid.json`
+- Load priority:
+  1. SSID-scoped manual
+  2. legacy global NVS manual override
+  3. cached/online Geo-IP
 
-Label alignment:
+## 8) Hardware Flags
 
-- `align`: `left`, `center`, `right`
-- `valign`: `top`, `middle`, `bottom`, `baseline`
+- Board blue LED forced off at boot:
+  - `AppConfig::kBoardBlueLedPin = 17`
 
-Format units:
+## 9) Cleanup Done This Pass
 
-- `unit: "pressure"` pins to temperature units (`F` → `inHg`, `C` → `hPa`).
+- Removed obsolete DSL file:
+  - `data/dsl/clock_analog_quad.json`
+  - canonical quarter clock DSL is `data/dsl/clock_analog_quarter.json`
+- Added Go-tooling artifact ignore:
+  - `tools/image_proxy/.gitignore` (`image_proxy`)
+- Updated docs to reflect active A/B layout profile model and remote icon caching.
 
-## 6) Logging Guide
+## 10) Build/Run Commands
 
-Good cycle:
+- Build firmware: `pio run`
+- Upload assets: `pio run -t uploadfs`
+- Upload firmware: `pio run -t upload`
+- Monitor: `pio device monitor`
 
-- `URL ...`
-- `HTTP Fetch 200 content-length=...`
-- `DSL parse summary resolved=... missing=0 ...`
+Go utility:
 
-Failure cycle:
+- `cd tools/image_proxy`
+- `go build -o image_proxy .`
+- `./image_proxy -listen :8085 -cache-ttl 10m -cache-max-entries 256`
+- `go run . -listen :8085 -cache-ttl 10m -cache-max-entries 256`
 
-- `HTTP Fetch -1 ...`
-- `ADSB err=... reason='...'`
-- `ADSB cooldown ...`
+## 11) Immediate Release Checklist
 
-## 7) Known Risk Areas
-
-- Intermittent ADS-B transport failures (status `-1`)
-- Potential endpoint/network instability despite successful parses in prior cycles
-- Row spacing in ADS-B UI currently too loose (DSL `y` coordinates)
-
-## 8) First 15-Minute Plan for Next Session
-
-1. Flash latest (`uploadfs` + `upload`), monitor logs for 10+ minutes.
-2. Confirm cooldown behavior during failures and recovery logs on success.
-3. Tighten ADS-B row spacing in `data/dsl/adsb_nearest.json`.
-4. If failures persist, add endpoint failover ordering with explicit “selected source” telemetry.
+1. Verify A/B toggle and persistence across reboot.
+2. Verify HA direct fetch with auth header from one entity endpoint.
+3. Verify remote MDI icon first-fetch then LittleFS cache hit behavior.
+4. Confirm no regressions in weather/forecast/clock/ADSB widgets.

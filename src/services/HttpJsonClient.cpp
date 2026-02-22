@@ -120,10 +120,12 @@ class HttpMutexGuard {
 }  // namespace
 
 bool HttpJsonClient::get(const String& url, JsonDocument& outDoc,
-                         String* errorMessage, HttpFetchMeta* meta) const {
+                         String* errorMessage, HttpFetchMeta* meta,
+                         const std::map<String, String>* extraHeaders) const {
   if (meta != nullptr) {
     *meta = HttpFetchMeta();
   }
+  const uint32_t startMs = millis();
 
   if (WiFi.status() != WL_CONNECTED) {
     if (errorMessage != nullptr) {
@@ -166,30 +168,45 @@ bool HttpJsonClient::get(const String& url, JsonDocument& outDoc,
   http.useHTTP10(true);
   http.setReuse(false);
   const char* headerKeys[] = {"Content-Type", "Content-Length", "Transfer-Encoding",
-                              "Location", "Content-Encoding"};
-  http.collectHeaders(headerKeys, 5);
+                              "Location", "Content-Encoding", "Retry-After"};
+  http.collectHeaders(headerKeys, 6);
   http.addHeader("Accept", "application/json");
   http.addHeader("User-Agent", "CoStar-ESP32/1.0");
   http.addHeader("Accept-Encoding", "identity");
+  if (extraHeaders != nullptr) {
+    for (const auto& kv : *extraHeaders) {
+      String name = kv.first;
+      name.trim();
+      if (name.isEmpty()) {
+        continue;
+      }
+      if (name.indexOf('\r') >= 0 || name.indexOf('\n') >= 0) {
+        continue;
+      }
+      String value = kv.second;
+      value.replace("\r", "");
+      value.replace("\n", "");
+      if (value.isEmpty()) {
+        continue;
+      }
+      http.addHeader(name, value);
+    }
+  }
   statusCode = http.GET();
 
   if (meta != nullptr) {
     meta->statusCode = statusCode;
+    meta->elapsedMs = millis() - startMs;
   }
 
   if (statusCode <= 0) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "HTTP GET failed code=" + String(statusCode) + " reason='" +
-                      http.errorToString(statusCode) + "', " + heapDiag();
+    const String transportReason = http.errorToString(statusCode);
+    if (meta != nullptr) {
+      meta->transportReason = transportReason;
     }
-    http.end();
-    return false;
-  }
-
-  if (statusCode < 200 || statusCode >= 300) {
     if (errorMessage != nullptr) {
-      *errorMessage = "HTTP status " + String(statusCode) + ", location='" +
-                      http.header("Location") + "', " + heapDiag();
+      *errorMessage = "HTTP transport failure (no HTTP response) code=" +
+                      String(statusCode) + " reason='" + transportReason + "', " + heapDiag();
     }
     http.end();
     return false;
@@ -199,6 +216,7 @@ bool HttpJsonClient::get(const String& url, JsonDocument& outDoc,
   const String contentLengthHeader = http.header("Content-Length");
   const String transferEncodingHeader = http.header("Transfer-Encoding");
   const String contentEncodingHeader = http.header("Content-Encoding");
+  const String retryAfter = http.header("Retry-After");
   int contentLengthBytes = -1;
   if (!contentLengthHeader.isEmpty()) {
     char* endPtr = nullptr;
@@ -207,6 +225,29 @@ bool HttpJsonClient::get(const String& url, JsonDocument& outDoc,
       contentLengthBytes = static_cast<int>(parsed);
     }
   }
+
+  if (statusCode < 200 || statusCode >= 300) {
+    String errorPayload = http.getString();
+    if (errorPayload.length() == 0) {
+      errorPayload = readPayloadFromStream(http);
+    }
+    if (meta != nullptr) {
+      meta->contentType = contentType;
+      meta->contentLengthBytes = contentLengthBytes;
+      meta->payloadBytes = errorPayload.length();
+      meta->retryAfter = retryAfter;
+      meta->elapsedMs = millis() - startMs;
+    }
+    if (errorMessage != nullptr) {
+      *errorMessage = "HTTP status " + String(statusCode) + ", location='" +
+                      http.header("Location") + "', retry-after='" + retryAfter +
+                      "', preview='" + compactPreview(errorPayload, 120) + "', " +
+                      heapDiag();
+    }
+    http.end();
+    return false;
+  }
+
   String payload = http.getString();
   if (payload.length() == 0) {
     payload = readPayloadFromStream(http);
@@ -217,6 +258,8 @@ bool HttpJsonClient::get(const String& url, JsonDocument& outDoc,
     meta->contentType = contentType;
     meta->contentLengthBytes = contentLengthBytes;
     meta->payloadBytes = payload.length();
+    meta->retryAfter = retryAfter;
+    meta->elapsedMs = millis() - startMs;
   }
 
   if (payload.length() == 0) {

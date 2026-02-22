@@ -1,8 +1,11 @@
 {
   "version": 1,
+  "notes": {
+    "weather_code_ref": "Open-Meteo weather_code uses WMO weather interpretation codes (not consecutive integers). See https://open-meteo.com/en/docs#weather_variable_documentation"
+  },
   "data": {
     "source": "http",
-    "url": "https://api.open-meteo.com/v1/forecast?latitude={{geo.lat}}&longitude={{geo.lon}}&daily=weather_code,temperature_2m_min,temperature_2m_max&timezone=UTC&forecast_days=2",
+    "url": "https://api.open-meteo.com/v1/forecast?latitude={{geo.lat}}&longitude={{geo.lon}}&daily=weather_code,temperature_2m_min,temperature_2m_max&timezone=UTC&forecast_days=2&temperature_unit=fahrenheit",
     "debug": true,
     "poll_ms": 600000,
     "fields": {

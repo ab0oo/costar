@@ -1,89 +1,84 @@
-# Session Context (Updated: February 20, 2026)
+# Session Context (Updated: February 22, 2026)
 
-This file is a quick restart point for the next coding session.
+Quick restart snapshot for next session.
 
-## Current Goal
+## Runtime State
 
-Primary focus is the DSL-driven ADS-B nearest-aircraft widget on ESP32 + ILI9341 CYD (`ESP32-2432S028`), with stable fetch/parse/render behavior and faster iteration via browser tooling.
+- Layout profiles are A/B:
+  - `data/screen_layout_a.json`
+  - `data/screen_layout_b.json`
+- USER button toggles profile at runtime; profile is persisted to NVS key `layout.profile`.
+- Default profile path is A (`AppConfig::kDefaultLayoutPath`).
 
-## Current Runtime State
+## Active Layout Contents
 
-- Active screen layout is ADS-B only:
-  - `data/screen_layout.json`
-  - Region `adsb-main`, full screen `320x240`, DSL path `/dsl/adsb_nearest.json`
-- ADS-B DSL file:
-  - `data/dsl/adsb_nearest.json`
-  - `poll_ms = 30000`
-  - `debug = true`
-- Browser DSL editor exists:
-  - `tools/dsl_editor/index.html`
+- Layout A:
+  - weather now (top-left)
+  - forecast (bottom-left)
+  - full-height analog clock (right half)
+- Layout B:
+  - weather now (top-left)
+  - forecast (bottom-left)
+  - quarter analog clock (top-right)
+  - ADS-B nearest (bottom-right)
 
-## What Is Working
+## DSL/Runtime Capabilities
 
-- ADS-B fetch/parse succeeds intermittently and renders when transport is healthy:
-  - `HTTP Fetch 200`, non-zero content-length
-  - `DSL parse summary resolved=26 missing=0`
-- DSL runtime split into maintainable files:
-  - `src/widgets/DslWidget.cpp`
-  - `src/widgets/DslWidgetFetch.cpp`
-  - `src/widgets/DslWidgetFormat.cpp`
-  - `src/widgets/DslWidgetExpr.cpp`
-  - `src/widgets/DslWidgetRender.cpp`
-- Network/UI concurrency guard in `DisplayManager` to protect shared `widgets_`.
-- HTTP diagnostics improved (status, content-length, content-type, transport reason, heap metrics).
+- Sort transforms: `sort_num`, `sort_alpha`, `distance_sort` / `sort_distance`
+- Repeat expansion: `repeat` with `count/start/step/var`
+- Runtime label path mode:
+  - `label.path`
+  - optional `{{value}}` template replacement in label `text`
+- Label wrap controls:
+  - `wrap`, `line_height`, `max_lines`, `overflow`
+- Expression funcs include:
+  - `haversine_m`, `meters_to_miles`, `miles_to_meters`
 
-## Current Problem
+## Home Assistant Support
 
-Intermittent ADS-B transport failures still occur (`status = -1`) after periods of success.
+- Direct HA REST calls are supported from firmware DSL:
+  - use `data.headers` for auth headers
+  - template from widget settings (`{{setting.ha_*}}`)
+- Example DSL:
+  - `data/dsl/homeassistant_entity.json`
 
-Recent mitigation already added:
+## Icon Ingestion Flow
 
-- Retry `http://` transport for ADS-B primary failure.
-- Fallback attempts on `airplanes.live` via HTTPS and HTTP.
-- Adaptive cooldown/backoff for ADS-B failure streaks to reduce hammering.
-- Reduced ADS-B poll from 15s to 30s.
+- Go helper (`tools/image_proxy`) provides:
+  - `/cmh` image URL -> RGB565 raw
+  - `/mdi` icon name -> RGB565 raw
+  - in-memory response cache (`-cache-ttl`, `-cache-max-entries`)
+  - build/run:
+    - `go build -o image_proxy .`
+    - `./image_proxy -listen :8085 -cache-ttl 10m -cache-max-entries 256`
+- Firmware icon render path now supports remote URLs:
+  - check in-memory icon cache
+  - check LittleFS `/icon_cache/*.raw`
+  - fetch/store on miss
+  - retry/backoff tracking is pruned over time
 
-Code locations:
+## Geo/Prefs
 
-- Transport/fetch/backoff logic:
-  - `src/widgets/DslWidgetFetch.cpp`
-- HTTP timeouts + low-level error reason:
-  - `src/services/HttpJsonClient.cpp`
+- Manual geo is SSID-scoped in LittleFS:
+  - `/geo_manual_by_ssid.json`
+- Runtime global bindings available in DSL:
+  - geo: `{{geo.lat}}`, `{{geo.lon}}`, `{{geo.tz}}`, `{{geo.offset_min}}`, `{{geo.label}}`
+  - prefs: `{{pref.clock_24h}}`, `{{pref.temp_unit}}`, `{{pref.distance_unit}}`
 
-## Suspected Cause (Current Best Guess)
+## Hardware Notes
 
-Not a clean server throttle yet (no consistent HTTP 429/503 seen). Current evidence points to intermittent connection-level failures (WiFi/AP path, DNS/TLS/socket instability, or endpoint intermittency).
+- Board blue LED disabled at boot via GPIO 17.
+- USER button is GPIO 0 active-low with debounce.
 
-## Quick Start (Next Session)
+## Cleanup Notes
 
-1. Build firmware:
-   - `pio run`
-2. Upload filesystem (if JSON changed):
-   - `pio run -t uploadfs`
-3. Upload firmware:
-   - `pio run -t upload`
-4. Monitor serial:
-   - `pio device monitor`
+- Obsolete file removed: `data/dsl/clock_analog_quad.json`.
+- Added `tools/image_proxy/.gitignore` so local Go build binary is not tracked.
 
-## Fast UI Iteration (No Reflash)
+## Next Boot/Test
 
-Use browser editor:
-
-1. `python3 -m http.server 8000`
-2. Open `http://localhost:8000/tools/dsl_editor/`
-3. Edit DSL + payload and preview in real time.
-
-## Suggested Next Tasks (Priority Order)
-
-1. Improve ADS-B row density/legibility in `data/dsl/adsb_nearest.json` (tighten `y` spacing).
-2. Add explicit log when fallback source succeeds (primary vs alt transport vs fallback host).
-3. Add optional jitter to ADS-B poll schedule (spread requests, avoid cadence bursts).
-4. Add setup option to switch radius (`radius_nm`) from UI.
-5. Turn ADS-B debug logs down once stable (`debug: false`) and keep only error logs.
-
-## Important Notes
-
-- User’s IDE may still show `data/widgets.json` tab, but that file no longer exists.
-- Default geo fallback location is Google HQ (already configured):
-  - `lat=37.4220`, `lon=-122.0841` in `include/AppConfig.h`.
-- All display interaction is landscape mode.
+1. `pio run`
+2. `pio run -t uploadfs`
+3. `pio run -t upload`
+4. `pio device monitor`
+5. Verify profile toggle, HA fetch, and remote icon cache behavior.

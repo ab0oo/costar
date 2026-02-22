@@ -36,111 +36,6 @@
         "thickness": 1
       },
       {
-        "type": "circle",
-        "x": 80,
-        "y": 72,
-        "r": 58,
-        "color": "#2A3C5A",
-        "bg": "#000000",
-        "thickness": 1
-      },
-      {
-        "type": "label",
-        "x": 78,
-        "y": 14,
-        "font": 2,
-        "color": "#9FD3FF",
-        "text": "12"
-      },
-      {
-        "type": "label",
-        "x": 110,
-        "y": 24,
-        "font": 2,
-        "color": "#9FD3FF",
-        "text": "1"
-      },
-      {
-        "type": "label",
-        "x": 126,
-        "y": 46,
-        "font": 2,
-        "color": "#9FD3FF",
-        "text": "2"
-      },
-      {
-        "type": "label",
-        "x": 132,
-        "y": 72,
-        "font": 2,
-        "color": "#9FD3FF",
-        "text": "3"
-      },
-      {
-        "type": "label",
-        "x": 124,
-        "y": 98,
-        "font": 2,
-        "color": "#9FD3FF",
-        "text": "4"
-      },
-      {
-        "type": "label",
-        "x": 108,
-        "y": 120,
-        "font": 2,
-        "color": "#9FD3FF",
-        "text": "5"
-      },
-      {
-        "type": "label",
-        "x": 78,
-        "y": 128,
-        "font": 2,
-        "color": "#9FD3FF",
-        "text": "6"
-      },
-      {
-        "type": "label",
-        "x": 46,
-        "y": 120,
-        "font": 2,
-        "color": "#9FD3FF",
-        "text": "7"
-      },
-      {
-        "type": "label",
-        "x": 30,
-        "y": 98,
-        "font": 2,
-        "color": "#9FD3FF",
-        "text": "8"
-      },
-      {
-        "type": "label",
-        "x": 24,
-        "y": 72,
-        "font": 2,
-        "color": "#9FD3FF",
-        "text": "9"
-      },
-      {
-        "type": "label",
-        "x": 28,
-        "y": 46,
-        "font": 2,
-        "color": "#9FD3FF",
-        "text": "10"
-      },
-      {
-        "type": "label",
-        "x": 46,
-        "y": 24,
-        "font": 2,
-        "color": "#9FD3FF",
-        "text": "11"
-      },
-      {
         "type": "repeat",
         "var": "i",
         "count": 60,
@@ -173,6 +68,27 @@
             "color": "#9FD3FF",
             "bg": "#9FD3FF",
             "thickness": 1
+          }
+        ]
+      },
+      {
+        "type": "repeat",
+        "var": "h",
+        "count": 12,
+        "start": 1,
+        "step": 1,
+        "nodes": [
+          {
+            "type": "label",
+            "x": "80 + cos(h * 30  - 90) * 50",
+            "y": "66 + sin(h * 30 - 90) * 50",
+            "r": 2,
+            "font": 2,
+            "color": "#9FD3FF",
+            "bg": "#9FD3FF",
+            "text": "{{h}}",
+            "align": "center",
+            "valign": "center"
           }
         ]
       },
@@ -236,9 +152,15 @@
         "type": "label",
         "x": 80,
         "y": 192,
+        "w": 154,
+        "h": 40,
         "font": 2,
         "color": "#7FB1FF",
         "text": "{{geo.label}}",
+        "wrap": true,
+        "line_height": 14,
+        "max_lines": 2,
+        "overflow": "ellipsis",
         "align": "center",
         "valign": "top"
       }

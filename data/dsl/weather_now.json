@@ -1,10 +1,13 @@
 {
   "version": 1,
+  "notes": {
+    "weather_code_ref": "Open-Meteo weather_code uses WMO weather interpretation codes (not consecutive integers). See https://open-meteo.com/en/docs#weather_variable_documentation"
+  },
   "data": {
     "source": "http",
-    "url": "https://api.open-meteo.com/v1/forecast?latitude={{geo.lat}}&longitude={{geo.lon}}&current=temperature_2m,relative_humidity_2m,pressure_msl,wind_speed_10m,wind_direction_10m,weather_code&daily=sunrise,sunset&timezone=UTC&forecast_days=1&wind_speed_unit=mph",
+    "url": "https://api.open-meteo.com/v1/forecast?latitude={{geo.lat}}&longitude={{geo.lon}}&current=temperature_2m,relative_humidity_2m,pressure_msl,wind_speed_10m,wind_direction_10m,weather_code&daily=sunrise,sunset&timezone=UTC&forecast_days=1&wind_speed_unit=mph&temperature_unit=fahrenheit",
     "debug": true,
-    "poll_ms": 45000,
+    "poll_ms": 180000,
     "fields": {
       "temp_now": {
         "path": "current.temperature_2m",
@@ -95,7 +98,7 @@
         "y": 54,
         "font": 1,
         "color": "#C7D2D9",
-        "text": "Hum: {{humidity_now}}  Press: {{pressure_now}}"
+        "text": "Hum: {{humidity_now}} Press: {{pressure_now}}"
       },
       {
         "type": "label",

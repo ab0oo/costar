@@ -104,6 +104,7 @@ bool DslWidget::loadDslModel() {
   }
 
   dsl_ = parsed;
+  pathValues_.clear();
   if (debugOverride_) {
     dsl_.debug = true;
   }
@@ -157,6 +158,23 @@ String DslWidget::bindRuntimeTemplate(const String& input) const {
   }
 
   return out;
+}
+
+std::map<String, String> DslWidget::resolveHttpHeaders() const {
+  std::map<String, String> resolved;
+  for (const auto& kv : dsl_.headers) {
+    String key = kv.first;
+    key.trim();
+    if (key.isEmpty()) {
+      continue;
+    }
+    const String value = bindRuntimeTemplate(kv.second);
+    if (value.isEmpty()) {
+      continue;
+    }
+    resolved[key] = value;
+  }
+  return resolved;
 }
 
 uint32_t DslWidget::computeAdsbJitterMs(uint32_t pollMs) const {
@@ -310,6 +328,23 @@ bool DslWidget::applyFieldsFromDoc(const JsonDocument& doc, bool& changed) {
   applyWeather("day1_code", "day1_cond", "day1_icon");
   applyWeather("day2_code", "day2_cond", "day2_icon");
 
+  for (const auto& node : dsl_.nodes) {
+    if (node.type != dsl::NodeType::kLabel || node.path.isEmpty()) {
+      continue;
+    }
+    const String path = bindRuntimeTemplate(node.path);
+    JsonVariantConst v;
+    String text;
+    if (resolveVariant(doc, path, v)) {
+      text = toText(v);
+    }
+
+    if (pathValues_[node.path] != text) {
+      pathValues_[node.path] = text;
+      changed = true;
+    }
+  }
+
   return true;
 }
 
@@ -367,18 +402,25 @@ bool DslWidget::computeMoonPhaseFraction(float& out) const {
   return true;
 }
 
-bool DslWidget::resolveVariant(const JsonDocument& doc, const String& path,
-                               JsonVariantConst& out) const {
-  JsonVariantConst current = doc.as<JsonVariantConst>();
+bool DslWidget::resolveVariantPath(const JsonVariantConst& root, const String& path,
+                                   JsonVariantConst& out) const {
+  String workPath = path;
+  workPath.trim();
+  if (workPath.isEmpty()) {
+    out = root;
+    return !out.isNull();
+  }
+
+  JsonVariantConst current = root;
   int segStart = 0;
 
-  while (segStart < path.length()) {
-    int segEnd = path.indexOf('.', segStart);
+  while (segStart < workPath.length()) {
+    int segEnd = workPath.indexOf('.', segStart);
     if (segEnd < 0) {
-      segEnd = path.length();
+      segEnd = workPath.length();
     }
 
-    const String seg = path.substring(segStart, segEnd);
+    const String seg = workPath.substring(segStart, segEnd);
     if (seg.isEmpty()) {
       return false;
     }
@@ -412,6 +454,12 @@ bool DslWidget::resolveVariant(const JsonDocument& doc, const String& path,
       if (idxStr.isEmpty()) {
         return false;
       }
+      for (int i = 0; i < idxStr.length(); ++i) {
+        const char c = idxStr[i];
+        if (c < '0' || c > '9') {
+          return false;
+        }
+      }
 
       const int idx = idxStr.toInt();
       if (!current.is<JsonArrayConst>()) {
@@ -435,6 +483,314 @@ bool DslWidget::resolveVariant(const JsonDocument& doc, const String& path,
 
   out = current;
   return !out.isNull();
+}
+
+bool DslWidget::resolveSortVariant(const JsonDocument& doc, const String& path,
+                                   JsonVariantConst& out) const {
+  bool numericSort = false;
+  bool distanceSort = false;
+  int argsStart = -1;
+  if (path.startsWith("sort_num(")) {
+    numericSort = true;
+    argsStart = 9;
+  } else if (path.startsWith("sort_alpha(")) {
+    numericSort = false;
+    argsStart = 11;
+  } else if (path.startsWith("distance_sort(")) {
+    distanceSort = true;
+    argsStart = 14;
+  } else if (path.startsWith("sort_distance(")) {
+    distanceSort = true;
+    argsStart = 14;
+  } else {
+    return false;
+  }
+
+  const int close = path.indexOf(')', argsStart);
+  if (close < 0) {
+    return false;
+  }
+
+  String argsRaw = path.substring(argsStart, close);
+  std::vector<String> args;
+  int start = 0;
+  while (start <= argsRaw.length()) {
+    int comma = argsRaw.indexOf(',', start);
+    if (comma < 0) {
+      comma = argsRaw.length();
+    }
+    String part = argsRaw.substring(start, comma);
+    part.trim();
+    args.push_back(part);
+    if (comma >= argsRaw.length()) {
+      break;
+    }
+    start = comma + 1;
+  }
+
+  const String arrayPath = args[0];
+  if (arrayPath.isEmpty()) {
+    return false;
+  }
+
+  String keyPath;
+  float originLat = 0.0f;
+  float originLon = 0.0f;
+  String order = "asc";
+
+  if (distanceSort) {
+    if (args.size() < 3 || args.size() > 4) {
+      return false;
+    }
+    auto parseNumberArg = [&](const String& arg, float& outNum) -> bool {
+      String trimmed = arg;
+      trimmed.trim();
+      if (trimmed.isEmpty()) {
+        return false;
+      }
+
+      bool hasDigit = false;
+      bool hasAlpha = false;
+      for (int i = 0; i < trimmed.length(); ++i) {
+        const char c = trimmed[i];
+        if (c >= '0' && c <= '9') {
+          hasDigit = true;
+        } else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_') {
+          hasAlpha = true;
+        }
+      }
+      if (hasDigit && !hasAlpha) {
+        outNum = trimmed.toFloat();
+        return true;
+      }
+
+      JsonVariantConst v;
+      if (!resolveVariantPath(doc.as<JsonVariantConst>(), trimmed, v)) {
+        return false;
+      }
+      if (v.is<float>() || v.is<double>() || v.is<long>() || v.is<int>()) {
+        outNum = v.as<float>();
+        return true;
+      }
+      if (v.is<const char*>()) {
+        String text = v.as<String>();
+        text.trim();
+        bool digit = false;
+        for (int i = 0; i < text.length(); ++i) {
+          if (text[i] >= '0' && text[i] <= '9') {
+            digit = true;
+            break;
+          }
+        }
+        if (digit) {
+          outNum = text.toFloat();
+          return true;
+        }
+      }
+      return false;
+    };
+
+    if (!parseNumberArg(args[1], originLat) || !parseNumberArg(args[2], originLon)) {
+      return false;
+    }
+    order = args.size() == 4 ? args[3] : String("asc");
+  } else {
+    if (args.size() < 2 || args.size() > 3) {
+      return false;
+    }
+    keyPath = args[1];
+    order = args.size() == 3 ? args[2] : String("asc");
+  }
+
+  order.toLowerCase();
+  const bool descending = (order == "desc" || order == "reverse" || order == "rev");
+
+  String tail = path.substring(close + 1);
+  tail.trim();
+  if (tail.startsWith(".")) {
+    tail = tail.substring(1);
+  }
+
+  JsonVariantConst arrVariant;
+  if (!resolveVariantPath(doc.as<JsonVariantConst>(), arrayPath, arrVariant) ||
+      !arrVariant.is<JsonArrayConst>()) {
+    return false;
+  }
+  const JsonArrayConst arr = arrVariant.as<JsonArrayConst>();
+
+  auto resolveSortKey = [&](JsonVariantConst item, JsonVariantConst& keyOut) -> bool {
+    if (keyPath.isEmpty() || keyPath == "." || keyPath == "*") {
+      keyOut = item;
+      return !keyOut.isNull();
+    }
+    return resolveVariantPath(item, keyPath, keyOut);
+  };
+
+  auto numericOf = [&](JsonVariantConst v, float& outNum) -> bool {
+    if (v.is<float>() || v.is<double>() || v.is<long>() || v.is<int>()) {
+      outNum = v.as<float>();
+      return true;
+    }
+    if (v.is<const char*>()) {
+      const String text = v.as<String>();
+      String filtered;
+      filtered.reserve(text.length());
+      bool hasDigit = false;
+      for (int i = 0; i < text.length(); ++i) {
+        const char c = text[i];
+        if ((c >= '0' && c <= '9') || c == '.' || c == '-' || c == '+') {
+          filtered += c;
+          if (c >= '0' && c <= '9') {
+            hasDigit = true;
+          }
+        }
+      }
+      if (!hasDigit) {
+        return false;
+      }
+      outNum = filtered.toFloat();
+      return true;
+    }
+    return false;
+  };
+
+  auto textOf = [&](JsonVariantConst v) -> String {
+    if (v.is<const char*>()) {
+      return v.as<String>();
+    }
+    if (v.is<float>() || v.is<double>() || v.is<long>() || v.is<int>()) {
+      return String(v.as<double>(), 3);
+    }
+    if (v.is<bool>()) {
+      return v.as<bool>() ? "true" : "false";
+    }
+    return String();
+  };
+
+  auto distanceMetersOf = [&](JsonVariantConst item, float& outMeters) -> bool {
+    if (!item.is<JsonObjectConst>()) {
+      return false;
+    }
+    JsonObjectConst obj = item.as<JsonObjectConst>();
+    JsonVariantConst latV = obj["lat"];
+    JsonVariantConst lonV = obj["lon"];
+    if (latV.isNull() || lonV.isNull()) {
+      return false;
+    }
+
+    float lat = 0.0f;
+    float lon = 0.0f;
+    if (latV.is<float>() || latV.is<double>() || latV.is<long>() || latV.is<int>()) {
+      lat = latV.as<float>();
+    } else if (latV.is<const char*>()) {
+      const String s = latV.as<String>();
+      if (s.length() == 0) return false;
+      lat = s.toFloat();
+    } else {
+      return false;
+    }
+
+    if (lonV.is<float>() || lonV.is<double>() || lonV.is<long>() || lonV.is<int>()) {
+      lon = lonV.as<float>();
+    } else if (lonV.is<const char*>()) {
+      const String s = lonV.as<String>();
+      if (s.length() == 0) return false;
+      lon = s.toFloat();
+    } else {
+      return false;
+    }
+
+    outMeters = distanceKm(originLat, originLon, lat, lon) * 1000.0f;
+    return true;
+  };
+
+  std::vector<int> indexOrder(arr.size());
+  for (int i = 0; i < static_cast<int>(arr.size()); ++i) {
+    indexOrder[i] = i;
+  }
+
+  auto cmpAsc = [&](int lhs, int rhs) -> bool {
+    JsonVariantConst leftKey;
+    JsonVariantConst rightKey;
+    const bool haveLeft = resolveSortKey(arr[lhs], leftKey);
+    const bool haveRight = resolveSortKey(arr[rhs], rightKey);
+
+    if (distanceSort) {
+      float ldist = 0.0f;
+      float rdist = 0.0f;
+      const bool lOk = distanceMetersOf(arr[lhs], ldist);
+      const bool rOk = distanceMetersOf(arr[rhs], rdist);
+      if (lOk && rOk) {
+        if (fabsf(ldist - rdist) > 0.000001f) {
+          return ldist < rdist;
+        }
+        return lhs < rhs;
+      }
+      if (lOk != rOk) {
+        return lOk;
+      }
+      return lhs < rhs;
+    }
+
+    if (numericSort) {
+      float lnum = 0.0f;
+      float rnum = 0.0f;
+      const bool lOk = haveLeft && numericOf(leftKey, lnum);
+      const bool rOk = haveRight && numericOf(rightKey, rnum);
+      if (lOk && rOk) {
+        if (fabsf(lnum - rnum) > 0.000001f) {
+          return lnum < rnum;
+        }
+        return lhs < rhs;
+      }
+      if (lOk != rOk) {
+        return lOk;
+      }
+      return lhs < rhs;
+    }
+
+    String ls = haveLeft ? textOf(leftKey) : String();
+    String rs = haveRight ? textOf(rightKey) : String();
+    ls.toLowerCase();
+    rs.toLowerCase();
+    const int cmp = ls.compareTo(rs);
+    if (cmp != 0) {
+      return cmp < 0;
+    }
+    return lhs < rhs;
+  };
+
+  std::stable_sort(indexOrder.begin(), indexOrder.end(), [&](int lhs, int rhs) {
+    return descending ? cmpAsc(rhs, lhs) : cmpAsc(lhs, rhs);
+  });
+
+  transformDoc_.clear();
+  JsonArray sorted = transformDoc_.to<JsonArray>();
+  for (int idx : indexOrder) {
+    sorted.add(arr[idx]);
+  }
+
+  const JsonVariantConst sortedRoot = transformDoc_.as<JsonVariantConst>();
+  if (tail.isEmpty()) {
+    out = sortedRoot;
+    return !out.isNull();
+  }
+  return resolveVariantPath(sortedRoot, tail, out);
+}
+
+bool DslWidget::resolveVariant(const JsonDocument& doc, const String& path,
+                               JsonVariantConst& out) const {
+  String workPath = path;
+  workPath.trim();
+  if (workPath.isEmpty()) {
+    return false;
+  }
+
+  if (workPath.startsWith("sort_num(") || workPath.startsWith("sort_alpha(") ||
+      workPath.startsWith("distance_sort(") || workPath.startsWith("sort_distance(")) {
+    return resolveSortVariant(doc, workPath, out);
+  }
+  return resolveVariantPath(doc.as<JsonVariantConst>(), workPath, out);
 }
 
 String DslWidget::toText(JsonVariantConst value) const {

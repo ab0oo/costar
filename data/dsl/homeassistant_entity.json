@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "data": {
+    "source": "http",
+    "url": "{{setting.ha_base_url}}/api/states/{{setting.entity_id}}",
+    "headers": {
+      "Authorization": "Bearer {{setting.ha_token}}",
+      "Content-Type": "application/json"
+    },
+    "poll_ms": 30000,
+    "fields": {
+      "name": "attributes.friendly_name",
+      "state": "state",
+      "unit": "attributes.unit_of_measurement",
+      "when": "last_updated"
+    }
+  },
+  "ui": {
+    "title": "HA Entity",
+    "nodes": [
+      {
+        "type": "label",
+        "x": 6,
+        "y": 6,
+        "font": 2,
+        "color": "#8FA0B3",
+        "text": "Home Assistant"
+      },
+      {
+        "type": "label",
+        "x": 6,
+        "y": 26,
+        "font": 2,
+        "color": "#FFFFFF",
+        "text": "{{name}}"
+      },
+      {
+        "type": "label",
+        "x": 6,
+        "y": 54,
+        "font": 6,
+        "color": "#7CE2FF",
+        "text": "{{state}}"
+      },
+      {
+        "type": "label",
+        "x": 110,
+        "y": 62,
+        "font": 2,
+        "color": "#7CE2FF",
+        "text": "{{unit}}"
+      }
+    ]
+  }
+}

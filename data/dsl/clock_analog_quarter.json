@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "data": {
+    "source": "local_time",
+    "poll_ms": 1000,
+    "fields": {
+      "hour": "hour",
+      "minute": "minute",
+      "second": "second"
+    }
+  },
+  "ui": {
+    "title": "Analog Clock Quarter",
+    "nodes": [
+      {
+        "type": "circle",
+        "x": 80,
+        "y": 60,
+        "r": 56,
+        "color": "#7FB1FF",
+        "bg": "#000000",
+        "thickness": 1
+      },
+      {
+        "type": "circle",
+        "x": 80,
+        "y": 60,
+        "r": 53,
+        "color": "#1E2B3D",
+        "bg": "#000000",
+        "thickness": 1
+      },
+      {
+        "type": "repeat",
+        "var": "i",
+        "count": 60,
+        "start": 0,
+        "step": 1,
+        "nodes": [
+          {
+            "type": "line",
+            "x": "80 + cos(i * 6 - 90) * 50",
+            "y": "60 + sin(i * 6 - 90) * 50",
+            "x2": "80 + cos(i * 6 - 90) * 54",
+            "y2": "60 + sin(i * 6 - 90) * 54",
+            "thickness": 1,
+            "color": "#2A3C5A"
+          }
+        ]
+      },
+      {
+        "type": "repeat",
+        "var": "h",
+        "count": 12,
+        "start": 0,
+        "step": 5,
+        "nodes": [
+          {
+            "type": "line",
+            "x": "80 + cos(h * 6 - 90) * 46",
+            "y": "60 + sin(h * 6 - 90) * 46",
+            "x2": "80 + cos(h * 6 - 90) * 54",
+            "y2": "60 + sin(h * 6 - 90) * 54",
+            "thickness": 2,
+            "color": "#9FD3FF"
+          }
+        ]
+      },
+      {
+        "type": "hand",
+        "x": 80,
+        "y": 60,
+        "length": 30,
+        "thickness": 3,
+        "color": "#FFFFFF",
+        "angle_expr": "(hour % 12) * 30 + minute * 0.5"
+      },
+      {
+        "type": "hand",
+        "x": 80,
+        "y": 60,
+        "length": 42,
+        "thickness": 2,
+        "color": "#9FD3FF",
+        "angle_expr": "minute * 6"
+      },
+      {
+        "type": "hand",
+        "x": 80,
+        "y": 60,
+        "length": 50,
+        "thickness": 1,
+        "color": "#F5E663",
+        "angle_expr": "second * 6"
+      },
+      {
+        "type": "circle",
+        "x": 80,
+        "y": 60,
+        "r": 3,
+        "color": "#9FD3FF",
+        "bg": "#9FD3FF",
+        "thickness": 1
+      }
+    ]
+  }
+}

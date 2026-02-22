@@ -19,6 +19,8 @@ class DisplayManager {
   bool begin();
   void loop(uint32_t nowMs);
   bool reloadLayout();
+  bool reloadLayout(const String& layoutPath);
+  void setLayoutPath(const String& layoutPath);
   void onTouch(uint16_t rawX, uint16_t rawY);
 
  private:

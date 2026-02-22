@@ -26,6 +26,12 @@ bool wifiReady = false;
 bool diagnosticMode = AppConfig::kDiagnosticMode;
 bool tftOnlyDiagnosticMode = AppConfig::kTftOnlyDiagnosticMode;
 bool staticFrameMode = AppConfig::kStaticFrameMode;
+String setupGeoSource = "unknown";
+int activeLayoutProfile = 0;
+String activeLayoutPath = AppConfig::kLayoutPathA;
+bool userBtnRawPressed = false;
+bool userBtnStablePressed = false;
+uint32_t userBtnLastChangeMs = 0;
 uint32_t diagnosticLastBlinkMs = 0;
 bool diagnosticLedState = false;
 uint32_t tftDiagLastMs = 0;
@@ -36,9 +42,139 @@ constexpr char kColorSetKey[] = "color_set";
 constexpr char kColorBgrKey[] = "color_bgr";
 constexpr char kInvertSetKey[] = "inv_set";
 constexpr char kInvertOnKey[] = "inv_on";
+constexpr char kLayoutPrefsNs[] = "layout";
+constexpr char kLayoutProfileKey[] = "profile";
 constexpr uint16_t kAdsbRadiusOptions[] = {20, 40, 80, 120};
 void configureTimeFromGeo();
 bool ensureUtcTime(uint32_t timeoutMs = 6000);
+
+String layoutPathForProfile(int profile) {
+  return profile == 1 ? String(AppConfig::kLayoutPathB) : String(AppConfig::kLayoutPathA);
+}
+
+int sanitizeLayoutProfile(int profile) {
+  return profile == 1 ? 1 : 0;
+}
+
+void saveLayoutProfile(int profile) {
+  Preferences prefs;
+  prefs.begin(kLayoutPrefsNs, false);
+  prefs.putInt(kLayoutProfileKey, sanitizeLayoutProfile(profile));
+  prefs.end();
+}
+
+void loadLayoutProfile() {
+  Preferences prefs;
+  prefs.begin(kLayoutPrefsNs, true);
+  const int savedProfile = prefs.getInt(kLayoutProfileKey, 0);
+  prefs.end();
+  activeLayoutProfile = sanitizeLayoutProfile(savedProfile);
+  activeLayoutPath = layoutPathForProfile(activeLayoutProfile);
+  displayManager.setLayoutPath(activeLayoutPath);
+  Serial.printf("[layout] profile=%d path=%s\n", activeLayoutProfile, activeLayoutPath.c_str());
+}
+
+bool readUserButtonPressed() {
+  if (AppConfig::kUserButtonPin < 0) {
+    return false;
+  }
+  const int raw = digitalRead(AppConfig::kUserButtonPin);
+  if (AppConfig::kUserButtonActiveLow) {
+    return raw == LOW;
+  }
+  return raw == HIGH;
+}
+
+void initUserButton() {
+  if (AppConfig::kUserButtonPin < 0) {
+    return;
+  }
+  if (AppConfig::kUserButtonActiveLow) {
+    pinMode(AppConfig::kUserButtonPin, INPUT_PULLUP);
+  } else {
+    pinMode(AppConfig::kUserButtonPin, INPUT);
+  }
+  userBtnRawPressed = readUserButtonPressed();
+  userBtnStablePressed = userBtnRawPressed;
+  userBtnLastChangeMs = millis();
+  Serial.printf("[layout] USER button gpio=%d ready (active_%s)\n", AppConfig::kUserButtonPin,
+                AppConfig::kUserButtonActiveLow ? "low" : "high");
+}
+
+void toggleLayoutProfile() {
+  const int oldProfile = activeLayoutProfile;
+  const String oldPath = activeLayoutPath;
+
+  const int nextProfile = (activeLayoutProfile == 0) ? 1 : 0;
+  const String nextPath = layoutPathForProfile(nextProfile);
+
+  if (!displayManager.reloadLayout(nextPath)) {
+    Serial.printf("[layout] switch failed profile=%d path=%s, restoring profile=%d path=%s\n",
+                  nextProfile, nextPath.c_str(), oldProfile, oldPath.c_str());
+    displayManager.reloadLayout(oldPath);
+    return;
+  }
+
+  activeLayoutProfile = nextProfile;
+  activeLayoutPath = nextPath;
+  saveLayoutProfile(activeLayoutProfile);
+  Serial.printf("[layout] switched profile=%d path=%s\n", activeLayoutProfile,
+                activeLayoutPath.c_str());
+}
+
+void updateUserButton(uint32_t nowMs) {
+  if (AppConfig::kUserButtonPin < 0) {
+    return;
+  }
+
+  const bool pressedNow = readUserButtonPressed();
+  if (pressedNow != userBtnRawPressed) {
+    userBtnRawPressed = pressedNow;
+    userBtnLastChangeMs = nowMs;
+  }
+
+  if (pressedNow == userBtnStablePressed) {
+    return;
+  }
+  if (nowMs - userBtnLastChangeMs < AppConfig::kUserButtonDebounceMs) {
+    return;
+  }
+
+  userBtnStablePressed = pressedNow;
+  if (userBtnStablePressed) {
+    toggleLayoutProfile();
+  }
+}
+
+String compactGeoSource(const String& source) {
+  if (source.isEmpty()) {
+    return "unknown";
+  }
+  if (source == "manual") {
+    return "manual";
+  }
+  if (source == "nvs-cache") {
+    return "cache";
+  }
+  if (source == "none") {
+    return "none";
+  }
+  if (!source.startsWith("http")) {
+    return source;
+  }
+
+  int start = source.indexOf("://");
+  start = (start >= 0) ? (start + 3) : 0;
+  int end = source.indexOf('/', start);
+  if (end < 0) {
+    end = source.length();
+  }
+  String host = source.substring(start, end);
+  if (host.startsWith("www.")) {
+    host = host.substring(4);
+  }
+  return host;
+}
 
 void waitForTouchRelease() {
   if (!AppConfig::kTouchEnabled) {
@@ -214,6 +350,9 @@ void drawSetupScreen() {
   tft.fillRect(0, 0, AppConfig::kScreenWidth, 28, hdrBg);
   tft.setTextColor(TFT_WHITE, hdrBg);
   tft.drawString("Setup / Config", 8, 8, 2);
+  tft.setTextColor(TFT_LIGHTGREY, hdrBg);
+  tft.drawRightString(String("Geo: ") + compactGeoSource(setupGeoSource),
+                      AppConfig::kScreenWidth - 8, 10, 1);
 
   auto drawBtn = [&](int x, int y, int w, int h, const String& label, bool alt) {
     tft.fillRoundRect(x, y, w, h, 6, alt ? btnBgAlt : btnBg);
@@ -282,10 +421,16 @@ void runSetupScreen() {
       WifiProvisioner provisioner(tft, touch);
       wifiReady = provisioner.connectOrProvision();
       GeoIpService geo;
-      if (!geo.loadOverride()) {
-        geo.loadCached();
+      if (geo.loadOverride()) {
+        setupGeoSource = geo.lastSource();
+      } else {
+        if (geo.loadCached()) {
+          setupGeoSource = geo.lastSource();
+        }
         if (wifiReady) {
-          geo.refreshFromInternet();
+          if (geo.refreshFromInternet()) {
+            setupGeoSource = geo.lastSource();
+          }
         }
         configureTimeFromGeo();
       }
@@ -347,6 +492,7 @@ void runSetupScreen() {
       }
       GeoIpService geo;
       if (geo.setManualCity(city)) {
+        setupGeoSource = geo.lastSource();
         configureTimeFromGeo();
         showMessage("Location set", city, 1200);
       } else {
@@ -389,6 +535,7 @@ void runSetupScreen() {
       }
       GeoIpService geo;
       if (geo.setManualLatLon(lat, lon)) {
+        setupGeoSource = geo.lastSource();
         configureTimeFromGeo();
         showMessage("Location set", String(lat, 4) + "," + String(lon, 4), 1200);
       } else {
@@ -401,12 +548,16 @@ void runSetupScreen() {
     if (x >= 8 && x <= 156 && y >= 186 && y <= 220) {
       GeoIpService geo;
       geo.clearOverride();
-      geo.loadCached();
+      if (geo.loadCached()) {
+        setupGeoSource = geo.lastSource();
+      }
       if (wifiReady) {
-        geo.refreshFromInternet();
+        if (geo.refreshFromInternet()) {
+          setupGeoSource = geo.lastSource();
+        }
       }
       configureTimeFromGeo();
-      showMessage("Geo-IP enabled", geo.lastSource(), 1000);
+      showMessage("Geo-IP enabled", setupGeoSource, 1000);
       continue;
     }
 
@@ -426,6 +577,16 @@ void initBacklight() {
   digitalWrite(AppConfig::kBacklightPin, AppConfig::kBacklightOnHigh ? HIGH : LOW);
   Serial.printf("[boot] backlight pin %d set %s\n", AppConfig::kBacklightPin,
                 AppConfig::kBacklightOnHigh ? "HIGH" : "LOW");
+}
+
+void initBoardLedOff() {
+  if (AppConfig::kBoardBlueLedPin < 0) {
+    return;
+  }
+  pinMode(AppConfig::kBoardBlueLedPin, OUTPUT);
+  digitalWrite(AppConfig::kBoardBlueLedPin, AppConfig::kBoardBlueLedOffHigh ? HIGH : LOW);
+  Serial.printf("[boot] board LED pin %d forced %s\n", AppConfig::kBoardBlueLedPin,
+                AppConfig::kBoardBlueLedOffHigh ? "HIGH" : "LOW");
 }
 
 void initSpiDeviceChipSelects() {
@@ -564,6 +725,9 @@ void setup() {
   Serial.println();
   Serial.println("== WidgetOS boot ==");
   Serial.println("[boot] setup start");
+  initUserButton();
+  loadLayoutProfile();
+  initBoardLedOff();
 
   if (!LittleFS.begin(true)) {
     Serial.println("LittleFS mount failed");
@@ -616,22 +780,26 @@ void setup() {
 
   GeoIpService geo;
   if (geo.loadOverride()) {
+    setupGeoSource = geo.lastSource();
     Serial.printf("[geo] manual source=%s lat=%.4f lon=%.4f tz=%s off_min=%d known=%d\n",
                   geo.lastSource().c_str(), RuntimeGeo::latitude, RuntimeGeo::longitude,
                   RuntimeGeo::timezone.c_str(), RuntimeGeo::utcOffsetMinutes,
                   RuntimeGeo::hasUtcOffset ? 1 : 0);
   } else if (geo.loadCached()) {
+    setupGeoSource = geo.lastSource();
     Serial.printf("[geo] cache hit source=%s lat=%.4f lon=%.4f tz=%s off_min=%d known=%d\n",
                   geo.lastSource().c_str(), RuntimeGeo::latitude, RuntimeGeo::longitude,
                   RuntimeGeo::timezone.c_str(), RuntimeGeo::utcOffsetMinutes,
                   RuntimeGeo::hasUtcOffset ? 1 : 0);
   } else {
+    setupGeoSource = "none";
     Serial.printf("[geo] cache miss: %s\n", geo.lastError().c_str());
   }
 
   if (wifiReady && geo.lastSource() != "manual") {
     Serial.printf("WiFi connected: %s\n", WiFi.localIP().toString().c_str());
     if (geo.refreshFromInternet()) {
+      setupGeoSource = geo.lastSource();
       Serial.printf("[geo] online source=%s lat=%.4f lon=%.4f tz=%s off_min=%d known=%d\n",
                     geo.lastSource().c_str(), RuntimeGeo::latitude, RuntimeGeo::longitude,
                     RuntimeGeo::timezone.c_str(), RuntimeGeo::utcOffsetMinutes,
@@ -676,6 +844,7 @@ void loop() {
   }
 
   const uint32_t nowMs = millis();
+  updateUserButton(nowMs);
 
   if (AppConfig::kTouchEnabled && touch.touched()) {
     TouchPoint point;

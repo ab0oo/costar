@@ -34,6 +34,11 @@ enum class NodeType : uint8_t {
   kLine,
 };
 
+enum class OverflowMode : uint8_t {
+  kClip,
+  kEllipsis,
+};
+
 struct Node {
   NodeType type = NodeType::kLabel;
 
@@ -53,6 +58,10 @@ struct Node {
   String path;
   String angleExpr;
   uint8_t datum = TL_DATUM;
+  bool wrap = false;
+  int16_t lineHeight = 0;
+  int16_t maxLines = 0;
+  OverflowMode overflow = OverflowMode::kClip;
 
   float min = 0.0f;
   float max = 100.0f;
@@ -67,6 +76,7 @@ struct Document {
   String title = "DSL";
   String source = "http";
   String url;
+  std::map<String, String> headers;
   bool debug = false;
   uint32_t pollMs = 30000;
   std::map<String, FieldSpec> fields;

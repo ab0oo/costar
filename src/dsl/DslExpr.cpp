@@ -42,34 +42,38 @@ bool parseFunction(const String& name, const String& s, int& pos, const ExprCont
   ++pos;
   skipSpaces(s, pos);
 
-  float a = 0.0f;
-  float b = 0.0f;
+  float args[4] = {0.0f, 0.0f, 0.0f, 0.0f};
   int argc = 0;
 
   if (pos < s.length() && s[pos] == ')') {
     ++pos;
     argc = 0;
   } else {
-    if (!parseExpr(s, pos, ctx, a)) {
-      return false;
-    }
-    argc = 1;
-    skipSpaces(s, pos);
-    if (pos < s.length() && s[pos] == ',') {
-      ++pos;
-      if (!parseExpr(s, pos, ctx, b)) {
+    while (true) {
+      if (argc >= 4) {
         return false;
       }
-      argc = 2;
+      if (!parseExpr(s, pos, ctx, args[argc])) {
+        return false;
+      }
+      ++argc;
+      skipSpaces(s, pos);
+      if (pos < s.length() && s[pos] == ',') {
+        ++pos;
+        skipSpaces(s, pos);
+        continue;
+      }
+      if (pos >= s.length() || s[pos] != ')') {
+        return false;
+      }
+      ++pos;
+      break;
     }
-    skipSpaces(s, pos);
-    if (pos >= s.length() || s[pos] != ')') {
-      return false;
-    }
-    ++pos;
   }
 
   const float degToRad = static_cast<float>(M_PI / 180.0);
+  const float a = args[0];
+  const float b = args[1];
   if (name == "sin") {
     if (argc != 1) return false;
     out = sinf(a * degToRad);
@@ -148,6 +152,32 @@ bool parseFunction(const String& name, const String& s, int& pos, const ExprCont
   if (name == "deg") {
     if (argc != 1) return false;
     out = a / degToRad;
+    return true;
+  }
+  if (name == "haversine_m") {
+    if (argc != 4) return false;
+    const float lat1 = args[0];
+    const float lon1 = args[1];
+    const float lat2 = args[2];
+    const float lon2 = args[3];
+    const float dLat = (lat2 - lat1) * degToRad;
+    const float dLon = (lon2 - lon1) * degToRad;
+    const float s1 = sinf(dLat * 0.5f);
+    const float s2 = sinf(dLon * 0.5f);
+    float hv = (s1 * s1) + cosf(lat1 * degToRad) * cosf(lat2 * degToRad) * (s2 * s2);
+    hv = fmaxf(0.0f, fminf(1.0f, hv));
+    const float c = 2.0f * atan2f(sqrtf(hv), sqrtf(fmaxf(0.0f, 1.0f - hv)));
+    out = 6371000.0f * c;
+    return true;
+  }
+  if (name == "meters_to_miles") {
+    if (argc != 1) return false;
+    out = a * 0.000621371f;
+    return true;
+  }
+  if (name == "miles_to_meters") {
+    if (argc != 1) return false;
+    out = a * 1609.344f;
     return true;
   }
 

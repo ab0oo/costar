@@ -99,10 +99,21 @@
     .editorArea {
       width: 100%;
       height: 360px;
+      min-height: 220px;
       border: 1px solid #344764;
       border-radius: 8px;
-      overflow: hidden;
+      overflow: auto;
       background: #0f1723;
+      resize: vertical;
+    }
+
+    .editorArea .jsoneditor {
+      height: 100% !important;
+      border: 0;
+    }
+
+    .editorArea .jsoneditor-outer {
+      height: 100% !important;
     }
 
     #payloadEditor {
@@ -171,6 +182,7 @@
           <button id="downloadBtn" type="button">Download JSON</button>
           <input id="fileOpen" type="file" accept=".json,application/json">
         </div>
+        <div class="hint">Drag the lower-right corner of either JSON editor to resize vertically.</div>
         <div id="dslEditor" class="editorArea"></div>
         <div id="dslStatus" class="status"></div>
       </div>
@@ -190,6 +202,40 @@
           <button id="applyPayloadBtn" type="button">Apply Payload</button>
           <label><input id="animateClock" type="checkbox" checked> animate local_time widgets</label>
         </div>
+        <div class="row">
+          <label>Temp
+            <select id="prefTempUnit">
+              <option value="auto">Auto (Browser)</option>
+              <option value="F">F</option>
+              <option value="C">C</option>
+            </select>
+          </label>
+          <label>Distance
+            <select id="prefDistanceUnit">
+              <option value="auto">Auto (Browser)</option>
+              <option value="mi">mi</option>
+              <option value="km">km</option>
+            </select>
+          </label>
+          <label>Clock
+            <select id="prefClockMode">
+              <option value="auto">Auto (Browser)</option>
+              <option value="24h">24h</option>
+              <option value="12h">12h</option>
+            </select>
+          </label>
+        </div>
+        <div class="row">
+          <label>Lat
+            <input id="geoLatInput" type="text" value="37.4220" size="10">
+          </label>
+          <label>Lon
+            <input id="geoLonInput" type="text" value="-122.0841" size="10">
+          </label>
+          <button id="useBrowserGeoBtn" type="button">Use Browser Geo</button>
+        </div>
+        <div id="runtimePrefHint" class="hint"></div>
+        <div id="runtimeGeoHint" class="hint"></div>
         <div id="payloadStatus" class="status"></div>
         <div class="previewWrap">
           <div class="screenFrame">
@@ -211,6 +257,14 @@
     const dslStatus = document.getElementById("dslStatus");
     const payloadStatus = document.getElementById("payloadStatus");
     const animateClock = document.getElementById("animateClock");
+    const prefTempUnit = document.getElementById("prefTempUnit");
+    const prefDistanceUnit = document.getElementById("prefDistanceUnit");
+    const prefClockMode = document.getElementById("prefClockMode");
+    const geoLatInput = document.getElementById("geoLatInput");
+    const geoLonInput = document.getElementById("geoLonInput");
+    const useBrowserGeoBtn = document.getElementById("useBrowserGeoBtn");
+    const runtimePrefHint = document.getElementById("runtimePrefHint");
+    const runtimeGeoHint = document.getElementById("runtimeGeoHint");
     const canvas = document.getElementById("screen");
     const ctx = canvas.getContext("2d");
 
@@ -219,10 +273,93 @@
       "geo.lon": "-122.0841",
       "geo.tz": "America/Los_Angeles",
       "geo.offset_min": "-480",
+      "geo.label": "Mountain View, CA, USA",
       "pref.clock_24h": "true",
       "pref.temp_unit": "F",
       "pref.distance_unit": "mi"
     };
+
+    function detectBrowserRuntimePrefs() {
+      const locale = (navigator.languages && navigator.languages[0]) || navigator.language || "en-US";
+
+      let region = "";
+      try {
+        if (typeof Intl !== "undefined" && typeof Intl.Locale === "function") {
+          region = (new Intl.Locale(locale)).region || "";
+        }
+      } catch {
+        region = "";
+      }
+      if (!region) {
+        const m = locale.match(/[-_]([A-Za-z]{2})\b/);
+        if (m) region = m[1].toUpperCase();
+      }
+
+      const fahrenheitRegions = new Set(["US", "BS", "BZ", "KY", "PW", "LR", "FM", "MH"]);
+      const mileRegions = new Set(["US", "GB", "LR", "MM"]);
+      const tempUnit = fahrenheitRegions.has(region) ? "F" : "C";
+      const distanceUnit = mileRegions.has(region) ? "mi" : "km";
+
+      let clock24h = true;
+      try {
+        const ro = new Intl.DateTimeFormat(locale, { hour: "numeric" }).resolvedOptions();
+        if (typeof ro.hour12 === "boolean") {
+          clock24h = !ro.hour12;
+        } else if (typeof ro.hourCycle === "string") {
+          clock24h = (ro.hourCycle === "h23" || ro.hourCycle === "h24");
+        } else {
+          const sample = new Intl.DateTimeFormat(locale, { hour: "numeric" }).format(new Date(2020, 0, 1, 13, 0, 0));
+          clock24h = !(/[AaPp]\.?[Mm]\.?/.test(sample));
+        }
+      } catch {
+        clock24h = true;
+      }
+
+      return { locale, region, tempUnit, distanceUnit, clock24h };
+    }
+
+    const browserPrefs = detectBrowserRuntimePrefs();
+
+    function applyRuntimePreferenceOverrides() {
+      const tempChoice = prefTempUnit.value || "auto";
+      const distChoice = prefDistanceUnit.value || "auto";
+      const clockChoice = prefClockMode.value || "auto";
+
+      const tempUnit = tempChoice === "auto" ? browserPrefs.tempUnit : tempChoice;
+      const distanceUnit = distChoice === "auto" ? browserPrefs.distanceUnit : distChoice;
+      const clock24h = clockChoice === "auto" ? browserPrefs.clock24h : (clockChoice === "24h");
+
+      runtimeContext["pref.temp_unit"] = tempUnit;
+      runtimeContext["pref.distance_unit"] = distanceUnit;
+      runtimeContext["pref.clock_24h"] = clock24h ? "true" : "false";
+
+      const regionText = browserPrefs.region ? `${browserPrefs.locale} (${browserPrefs.region})` : browserPrefs.locale;
+      runtimePrefHint.textContent =
+        `Browser defaults from ${regionText}: temp=${browserPrefs.tempUnit}, distance=${browserPrefs.distanceUnit}, clock=${browserPrefs.clock24h ? "24h" : "12h"}; ` +
+        `active preview prefs: temp=${tempUnit}, distance=${distanceUnit}, clock=${clock24h ? "24h" : "12h"}.`;
+    }
+
+    prefTempUnit.value = "auto";
+    prefDistanceUnit.value = "auto";
+    prefClockMode.value = "auto";
+    applyRuntimePreferenceOverrides();
+
+    function applyRuntimeGeoOverrides() {
+      const lat = Number(geoLatInput.value);
+      const lon = Number(geoLonInput.value);
+      if (Number.isFinite(lat)) {
+        runtimeContext["geo.lat"] = lat.toFixed(4);
+      }
+      if (Number.isFinite(lon)) {
+        runtimeContext["geo.lon"] = lon.toFixed(4);
+      }
+      runtimeGeoHint.textContent =
+        `Active geo context: lat=${runtimeContext["geo.lat"]}, lon=${runtimeContext["geo.lon"]}, tz=${runtimeContext["geo.tz"]}.`;
+    }
+
+    geoLatInput.value = runtimeContext["geo.lat"];
+    geoLonInput.value = runtimeContext["geo.lon"];
+    applyRuntimeGeoOverrides();
 
     let parsedDsl = null;
     let parsedPayload = {};
@@ -260,6 +397,19 @@
         }, 180);
       }
     });
+
+    function resizeJsonEditors() {
+      if (typeof dslEditor.refresh === "function") dslEditor.refresh();
+      if (typeof payloadEditor.refresh === "function") payloadEditor.refresh();
+      if (typeof dslEditor.resize === "function") dslEditor.resize();
+      if (typeof payloadEditor.resize === "function") payloadEditor.resize();
+    }
+
+    if (typeof ResizeObserver !== "undefined") {
+      const editorResizeObserver = new ResizeObserver(() => resizeJsonEditors());
+      editorResizeObserver.observe(dslEditorEl);
+      editorResizeObserver.observe(payloadEditorEl);
+    }
 
     function setStatus(el, text, ok) {
       el.textContent = text || "";
@@ -341,7 +491,7 @@
       return tokens;
     }
 
-    function resolvePath(obj, path) {
+    function resolvePathSimple(obj, path) {
       const tokens = tokenizePath(path);
       if (!tokens.length) return undefined;
       let cur = obj;
@@ -355,6 +505,174 @@
         }
       }
       return cur;
+    }
+
+    function splitSortArgs(argsRaw) {
+      const parts = [];
+      let start = 0;
+      while (start <= argsRaw.length) {
+        let comma = argsRaw.indexOf(",", start);
+        if (comma < 0) comma = argsRaw.length;
+        parts.push(argsRaw.substring(start, comma).trim());
+        if (comma >= argsRaw.length) break;
+        start = comma + 1;
+      }
+      return parts;
+    }
+
+    function haversineMeters(lat1, lon1, lat2, lon2) {
+      const toRad = Math.PI / 180;
+      const dLat = (lat2 - lat1) * toRad;
+      const dLon = (lon2 - lon1) * toRad;
+      const a = Math.sin(dLat / 2) ** 2 +
+        Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin(dLon / 2) ** 2;
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0, 1 - a)));
+      return 6371000.0 * c;
+    }
+
+    function resolveSortPath(obj, path) {
+      let numericSort;
+      let distanceSort = false;
+      let argsStart;
+      if (path.startsWith("sort_num(")) {
+        numericSort = true;
+        argsStart = 9;
+      } else if (path.startsWith("sort_alpha(")) {
+        numericSort = false;
+        argsStart = 11;
+      } else if (path.startsWith("distance_sort(")) {
+        numericSort = false;
+        distanceSort = true;
+        argsStart = 14;
+      } else if (path.startsWith("sort_distance(")) {
+        numericSort = false;
+        distanceSort = true;
+        argsStart = 14;
+      } else {
+        return undefined;
+      }
+
+      const close = path.indexOf(")", argsStart);
+      if (close < 0) return undefined;
+
+      const args = splitSortArgs(path.substring(argsStart, close));
+
+      const arrayPath = args[0];
+      if (!arrayPath) return undefined;
+
+      let keyPath = "";
+      let order = "asc";
+      let originLat = null;
+      let originLon = null;
+
+      if (distanceSort) {
+        if (args.length < 3 || args.length > 4) return undefined;
+        const latArg = args[1];
+        const lonArg = args[2];
+
+        let lat = parseNumberMaybe(latArg);
+        if (lat == null) lat = parseNumberMaybe(resolvePathSimple(obj, latArg));
+        let lon = parseNumberMaybe(lonArg);
+        if (lon == null) lon = parseNumberMaybe(resolvePathSimple(obj, lonArg));
+        if (lat == null || lon == null) return undefined;
+
+        originLat = lat;
+        originLon = lon;
+        order = (args[3] || "asc");
+      } else {
+        if (args.length < 2 || args.length > 3) return undefined;
+        keyPath = args[1];
+        order = (args[2] || "asc");
+      }
+
+      order = String(order).toLowerCase();
+      const descending = (order === "desc" || order === "reverse" || order === "rev");
+
+      let tail = path.substring(close + 1).trim();
+      if (tail.startsWith(".")) tail = tail.slice(1);
+
+      const arr = resolvePathSimple(obj, arrayPath);
+      if (!Array.isArray(arr)) return undefined;
+
+      const rows = arr.map((item, idx) => {
+        let keyValue;
+        let hasDistance = false;
+        let distanceValue = null;
+
+        if (distanceSort) {
+          const lat = parseNumberMaybe(item?.lat);
+          const lon = parseNumberMaybe(item?.lon);
+          if (lat != null && lon != null) {
+            hasDistance = true;
+            distanceValue = haversineMeters(originLat, originLon, lat, lon);
+          }
+        } else {
+          if (!keyPath || keyPath === "." || keyPath === "*") {
+            keyValue = item;
+          } else {
+            keyValue = resolvePathSimple(item, keyPath);
+          }
+        }
+        const numericValue = parseNumberMaybe(keyValue);
+        const textValue = (keyValue == null) ? "" : String(keyValue).toLowerCase();
+        return {
+          item,
+          idx,
+          hasDistance,
+          distanceValue,
+          hasNumeric: numericValue != null,
+          numericValue,
+          textValue
+        };
+      });
+
+      rows.sort((a, b) => {
+        if (distanceSort) {
+          if (a.hasDistance && b.hasDistance) {
+            if (Math.abs(a.distanceValue - b.distanceValue) > 0.000001) {
+              return a.distanceValue - b.distanceValue;
+            }
+            return a.idx - b.idx;
+          }
+          if (a.hasDistance !== b.hasDistance) return a.hasDistance ? -1 : 1;
+          return a.idx - b.idx;
+        }
+
+        if (numericSort) {
+          if (a.hasNumeric && b.hasNumeric) {
+            if (Math.abs(a.numericValue - b.numericValue) > 0.000001) {
+              return a.numericValue - b.numericValue;
+            }
+            return a.idx - b.idx;
+          }
+          if (a.hasNumeric !== b.hasNumeric) return a.hasNumeric ? -1 : 1;
+          return a.idx - b.idx;
+        }
+
+        if (a.textValue !== b.textValue) return a.textValue < b.textValue ? -1 : 1;
+        return a.idx - b.idx;
+      });
+
+      if (descending) rows.reverse();
+
+      const sorted = rows.map((r) => r.item);
+      if (!tail) return sorted;
+      return resolvePathSimple(sorted, tail);
+    }
+
+    function resolvePath(obj, path) {
+      if (typeof path !== "string") return undefined;
+      const workPath = path.trim();
+      if (!workPath) return undefined;
+      if (
+        workPath.startsWith("sort_num(") ||
+        workPath.startsWith("sort_alpha(") ||
+        workPath.startsWith("distance_sort(") ||
+        workPath.startsWith("sort_distance(")
+      ) {
+        return resolveSortPath(obj, workPath);
+      }
+      return resolvePathSimple(obj, workPath);
     }
 
     function parseNumberMaybe(v) {
@@ -436,18 +754,25 @@
       }
     }
 
-    function applyFormat(raw, fmt) {
+    function applyFormat(raw, fmt, values) {
       if (!fmt) return String(raw ?? "");
+      const scope = values || {};
+      const resolvedPrefix = bindTemplate(String(fmt.prefix || ""), scope);
+      const resolvedSuffix = bindTemplate(String(fmt.suffix || ""), scope);
+      const resolvedUnit = bindTemplate(String(fmt.unit || ""), scope);
+      const resolvedLocale = bindTemplate(String(fmt.locale || "en-US"), scope);
+      const resolvedTz = bindTemplate(String(fmt.tz || ""), scope);
+      const resolvedTimeFormat = bindTemplate(String(fmt.time_format || fmt.timeFormat || "%Y-%m-%d %H:%M"), scope);
       let numeric = typeof raw === "number" ? raw : parseNumberMaybe(raw);
       let out = (raw == null) ? "" : String(raw);
 
-      if (fmt.tz) {
-        out = formatTimestamp(String(raw ?? ""), fmt.tz, fmt.time_format || fmt.timeFormat);
+      if (resolvedTz) {
+        out = formatTimestamp(String(raw ?? ""), resolvedTz, resolvedTimeFormat);
       }
 
       if (numeric != null) {
         let v = numeric;
-        const unit = String(fmt.unit || "").toLowerCase();
+        const unit = resolvedUnit.toLowerCase();
         let unitSuffix = "";
         if (unit === "f" || unit === "fahrenheit" || unit === "c_to_f") {
           v = (v * 9 / 5) + 32;
@@ -475,14 +800,14 @@
         } else {
           digits = 2;
         }
-        out = formatLocaleNumber(v, digits, fmt.locale || "en-US");
+        out = formatLocaleNumber(v, digits, resolvedLocale);
 
-        if (fmt.prefix) out = String(fmt.prefix) + out;
-        if (fmt.suffix) out += String(fmt.suffix);
+        if (resolvedPrefix) out = resolvedPrefix + out;
+        if (resolvedSuffix) out += resolvedSuffix;
         else if (unitSuffix) out += unitSuffix;
       } else {
-        if (fmt.prefix) out = String(fmt.prefix) + out;
-        if (fmt.suffix) out += String(fmt.suffix);
+        if (resolvedPrefix) out = resolvedPrefix + out;
+        if (resolvedSuffix) out += resolvedSuffix;
       }
       return out;
     }
@@ -507,6 +832,59 @@
         millis: d.getMilliseconds(),
         tz: runtimeContext["geo.tz"]
       };
+    }
+
+    function mapWeatherCode(code) {
+      let text = "Unknown";
+      let icon = "/icons/meteocons/cloudy.raw";
+
+      if (code === 0) {
+        text = "Clear";
+        icon = "/icons/meteocons/clear-day.raw";
+      } else if (code === 1) {
+        text = "Mostly Clear";
+        icon = "/icons/meteocons/partly-cloudy-day.raw";
+      } else if (code === 2) {
+        text = "Partly Cloudy";
+        icon = "/icons/meteocons/partly-cloudy-day.raw";
+      } else if (code === 3) {
+        text = "Overcast";
+        icon = "/icons/meteocons/cloudy.raw";
+      } else if (code === 45 || code === 48) {
+        text = "Fog";
+        icon = "/icons/meteocons/fog.raw";
+      } else if (code === 51 || code === 53 || code === 55 || code === 56 || code === 57) {
+        text = "Drizzle";
+        icon = "/icons/meteocons/drizzle.raw";
+      } else if (
+        code === 61 || code === 63 || code === 65 || code === 66 || code === 67 ||
+        code === 80 || code === 81 || code === 82
+      ) {
+        text = "Rain";
+        icon = "/icons/meteocons/rain.raw";
+      } else if (code === 71 || code === 73 || code === 75 || code === 77 || code === 85 || code === 86) {
+        text = "Snow";
+        icon = "/icons/meteocons/snow.raw";
+      } else if (code === 95 || code === 96 || code === 99) {
+        text = "Storm";
+        icon = "/icons/meteocons/thunderstorms-day.raw";
+      }
+
+      return { text, icon };
+    }
+
+    function applyDerivedWeather(values, codeKey, textKey, iconKey) {
+      const raw = values[codeKey];
+      if (raw == null || String(raw).trim() === "") {
+        values[textKey] = "";
+        values[iconKey] = "";
+        return;
+      }
+      const parsed = parseInt(String(raw), 10);
+      const code = Number.isFinite(parsed) ? parsed : 0;
+      const mapped = mapWeatherCode(code);
+      values[textKey] = mapped.text;
+      values[iconKey] = mapped.icon;
     }
 
     function buildResolvedData(dslDoc, payload) {
@@ -540,7 +918,7 @@
           const nums = raw.map(v => (typeof v === "number" ? v : Number(v))).filter(Number.isFinite);
           series[key] = nums;
           if (nums.length > 0) {
-            values[key] = applyFormat(nums[nums.length - 1], fmt || {});
+            values[key] = applyFormat(nums[nums.length - 1], fmt || {}, values);
             numerics[key] = nums[nums.length - 1];
           } else {
             values[key] = "";
@@ -548,12 +926,17 @@
           continue;
         }
 
-        values[key] = fmt ? applyFormat(raw, fmt) : String(raw);
+        values[key] = fmt ? applyFormat(raw, fmt, values) : String(raw);
         const n = parseNumberMaybe(raw);
         if (n != null) numerics[key] = n;
       }
 
-      return { values, numerics, series };
+      // Mirror firmware's derived weather fields from weather codes.
+      applyDerivedWeather(values, "code_now", "cond_now", "icon_now");
+      applyDerivedWeather(values, "day1_code", "day1_cond", "day1_icon");
+      applyDerivedWeather(values, "day2_code", "day2_cond", "day2_icon");
+
+      return { values, numerics, series, dataDoc };
     }
 
     function textPx(font) {
@@ -579,6 +962,156 @@
       ctx.fillText(String(text ?? ""), x, y);
     }
 
+    function parseBoolish(value, fallback = false) {
+      if (typeof value === "boolean") return value;
+      if (typeof value === "number") return value !== 0;
+      if (typeof value === "string") {
+        const v = value.trim().toLowerCase();
+        if (v === "1" || v === "true" || v === "yes" || v === "on") return true;
+        if (v === "0" || v === "false" || v === "no" || v === "off") return false;
+      }
+      return fallback;
+    }
+
+    function measureTextWidth(text, font) {
+      ctx.save();
+      ctx.font = `${textPx(font)}px monospace`;
+      const width = ctx.measureText(String(text ?? "")).width;
+      ctx.restore();
+      return width;
+    }
+
+    function ellipsizeText(text, font, maxWidth) {
+      const src = String(text ?? "");
+      if (maxWidth <= 0) return "";
+      if (measureTextWidth(src, font) <= maxWidth) return src;
+      const dots = "...";
+      if (measureTextWidth(dots, font) > maxWidth) {
+        for (let i = dots.length; i > 0; i--) {
+          const d = dots.slice(0, i);
+          if (measureTextWidth(d, font) <= maxWidth) return d;
+        }
+        return "";
+      }
+      for (let len = src.length; len > 0; len--) {
+        const candidate = src.slice(0, len) + dots;
+        if (measureTextWidth(candidate, font) <= maxWidth) return candidate;
+      }
+      return dots;
+    }
+
+    function wrapTextLines(text, font, maxWidth) {
+      const lines = [];
+      if (maxWidth <= 0) return [String(text ?? "")];
+
+      let currentLine = "";
+      let currentWord = "";
+
+      function placeWord(word) {
+        if (!word) return;
+
+        function placeLongWord(longWord) {
+          let start = 0;
+          while (start < longWord.length) {
+            let bestEnd = start;
+            for (let end = start + 1; end <= longWord.length; end++) {
+              const piece = longWord.slice(start, end);
+              if (measureTextWidth(piece, font) <= maxWidth) {
+                bestEnd = end;
+                continue;
+              }
+              break;
+            }
+            if (bestEnd === start) bestEnd = start + 1;
+            const piece = longWord.slice(start, bestEnd);
+            start = bestEnd;
+            if (start < longWord.length) lines.push(piece);
+            else currentLine = piece;
+          }
+        }
+
+        if (!currentLine) {
+          if (measureTextWidth(word, font) <= maxWidth) currentLine = word;
+          else placeLongWord(word);
+          return;
+        }
+
+        const candidate = `${currentLine} ${word}`;
+        if (measureTextWidth(candidate, font) <= maxWidth) {
+          currentLine = candidate;
+          return;
+        }
+
+        lines.push(currentLine);
+        currentLine = "";
+        if (measureTextWidth(word, font) <= maxWidth) currentLine = word;
+        else placeLongWord(word);
+      }
+
+      function flushWord() {
+        if (!currentWord) return;
+        placeWord(currentWord);
+        currentWord = "";
+      }
+
+      const src = String(text ?? "");
+      for (let i = 0; i < src.length; i++) {
+        const ch = src[i];
+        if (ch === "\n") {
+          flushWord();
+          lines.push(currentLine);
+          currentLine = "";
+          continue;
+        }
+        if (ch === " " || ch === "\t" || ch === "\r") {
+          flushWord();
+          continue;
+        }
+        currentWord += ch;
+      }
+
+      flushWord();
+      if (currentLine || lines.length === 0) lines.push(currentLine);
+      return lines;
+    }
+
+    function drawWrappedString(text, x, y, font, color, align, valign, width, lineHeight, maxLines, overflow, height) {
+      if (!(width > 0)) {
+        drawString(text, x, y, font, color, align, valign);
+        return;
+      }
+
+      const effectiveLineHeight = Number(lineHeight) > 0
+        ? Math.round(Number(lineHeight))
+        : Math.max(10, Math.round(textPx(font) * 1.15));
+      let effectiveMaxLines = Number(maxLines) > 0 ? Math.round(Number(maxLines)) : 0;
+      if (Number(height) > 0) {
+        const byHeight = Math.floor(Number(height) / effectiveLineHeight);
+        if (byHeight > 0) {
+          effectiveMaxLines = effectiveMaxLines > 0 ? Math.min(effectiveMaxLines, byHeight) : byHeight;
+        }
+      }
+
+      const lines = wrapTextLines(text, font, width);
+      let truncated = false;
+      if (effectiveMaxLines > 0 && lines.length > effectiveMaxLines) {
+        lines.length = effectiveMaxLines;
+        truncated = true;
+      }
+      if (truncated && lines.length > 0 && overflow === "ellipsis") {
+        lines[lines.length - 1] = ellipsizeText(lines[lines.length - 1], font, width);
+      }
+
+      const blockHeight = lines.length * effectiveLineHeight;
+      let startY = y;
+      if (valign === "middle") startY = y - (blockHeight / 2);
+      else if (valign === "bottom") startY = y - blockHeight;
+
+      for (let i = 0; i < lines.length; i++) {
+        drawString(lines[i], x, startY + (i * effectiveLineHeight), font, color, align, "top");
+      }
+    }
+
     function evalExpression(expr, vars) {
       if (!expr || typeof expr !== "string") return null;
       const scope = Object.assign({}, vars || {});
@@ -598,6 +1131,18 @@
       scope.pow = Math.pow;
       scope.rad = (deg) => deg * Math.PI / 180;
       scope.deg = (rad) => rad * 180 / Math.PI;
+      scope.haversine_m = (lat1, lon1, lat2, lon2) => {
+        const toRad = Math.PI / 180;
+        const dLat = (lat2 - lat1) * toRad;
+        const dLon = (lon2 - lon1) * toRad;
+        const a = Math.sin(dLat / 2) ** 2 +
+          Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) *
+          Math.sin(dLon / 2) ** 2;
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0, 1 - a)));
+        return 6371000.0 * c;
+      };
+      scope.meters_to_miles = (m) => m * 0.000621371;
+      scope.miles_to_meters = (mi) => mi * 1609.344;
       scope.pi = Math.PI;
 
       try {
@@ -623,7 +1168,7 @@
       return phase / synodic;
     }
 
-    const intFields = new Set(["x","y","w","h","x2","y2","r","length","thickness"]);
+    const intFields = new Set(["x","y","w","h","x2","y2","r","length","thickness","line_height","max_lines"]);
     const floatFields = new Set(["min","max","start_deg","end_deg"]);
 
     function resolveNumber(value, vars) {
@@ -639,7 +1184,7 @@
 
     function resolveNode(node, vars) {
       const out = Object.assign({}, node);
-      const stringKeys = ["text","key","path","icon","angle_expr","align","valign"];
+      const stringKeys = ["text","key","path","icon","angle_expr","align","valign","overflow","wrap"];
       for (const key of stringKeys) {
         if (typeof out[key] === "string") {
           let val = applyVarTemplate(out[key], vars);
@@ -773,10 +1318,49 @@
       }
     }
 
+    function drawGuideGrid() {
+      const w = 320;
+      const h = 240;
+      const step = 20;
+      const midX = Math.floor(w / 2);
+      const midY = Math.floor(h / 2);
+
+      ctx.save();
+
+      // Base light grid at 20px intervals.
+      ctx.strokeStyle = "rgba(159, 211, 255, 0.16)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let x = step; x < w; x += step) {
+        if (x === midX) continue;
+        ctx.moveTo(x + 0.5, 0);
+        ctx.lineTo(x + 0.5, h);
+      }
+      for (let y = step; y < h; y += step) {
+        if (y === midY) continue;
+        ctx.moveTo(0, y + 0.5);
+        ctx.lineTo(w, y + 0.5);
+      }
+      ctx.stroke();
+
+      // Bolder halfway crosshair.
+      ctx.strokeStyle = "rgba(159, 211, 255, 0.34)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(midX + 0.5, 0);
+      ctx.lineTo(midX + 0.5, h);
+      ctx.moveTo(0, midY + 0.5);
+      ctx.lineTo(w, midY + 0.5);
+      ctx.stroke();
+
+      ctx.restore();
+    }
+
     function renderPreview() {
       ctx.clearRect(0, 0, 320, 240);
       ctx.fillStyle = "#000";
       ctx.fillRect(0, 0, 320, 240);
+      drawGuideGrid();
       ctx.strokeStyle = "#555";
       ctx.strokeRect(0.5, 0.5, 319, 239);
 
@@ -790,7 +1374,7 @@
 
       const rawNodes = (((parsedDsl || {}).ui || {}).nodes) || [];
       const nodeList = expandNodes(rawNodes, null);
-      const { values, numerics, series } = buildResolvedData(parsedDsl, parsedPayload);
+      const { values, numerics, series, dataDoc } = buildResolvedData(parsedDsl, parsedPayload);
 
       for (const node of nodeList) {
         const type = node.type || "label";
@@ -805,7 +1389,24 @@
         if (type === "label") {
           const align = (node.align || "left").toLowerCase();
           const valign = (node.valign || "top").toLowerCase();
-          drawString(bindTemplate(node.text || "", values), x, y, font, fg, align, valign);
+          let text = bindTemplate(node.text || "", values);
+          if (typeof node.path === "string" && node.path.length > 0) {
+            const path = bindTemplate(node.path, {});
+            const raw = resolvePath(dataDoc || {}, path);
+            const valueText = (raw == null || raw === undefined) ? "" : String(raw);
+            if ((node.text || "").length === 0) {
+              text = valueText;
+            } else {
+              text = text.split("{{value}}").join(valueText);
+            }
+          }
+          const wrapEnabled = parseBoolish(node.wrap, false);
+          const overflow = String(node.overflow || "clip").toLowerCase();
+          if (wrapEnabled && w > 0) {
+            drawWrappedString(text, x, y, font, fg, align, valign, w, node.line_height, node.max_lines, overflow, h);
+          } else {
+            drawString(text, x, y, font, fg, align, valign);
+          }
           continue;
         }
 
@@ -997,6 +1598,40 @@
       renderPreview();
     });
 
+    for (const prefEl of [prefTempUnit, prefDistanceUnit, prefClockMode]) {
+      prefEl.addEventListener("change", () => {
+        applyRuntimePreferenceOverrides();
+        renderPreview();
+      });
+    }
+
+    for (const geoEl of [geoLatInput, geoLonInput]) {
+      geoEl.addEventListener("change", () => {
+        applyRuntimeGeoOverrides();
+        renderPreview();
+      });
+    }
+
+    useBrowserGeoBtn.addEventListener("click", () => {
+      if (!("geolocation" in navigator)) {
+        setStatus(payloadStatus, "Browser geolocation unavailable.", false);
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          geoLatInput.value = String(pos.coords.latitude.toFixed(4));
+          geoLonInput.value = String(pos.coords.longitude.toFixed(4));
+          applyRuntimeGeoOverrides();
+          renderPreview();
+          setStatus(payloadStatus, "Applied browser geolocation to runtime context.", true);
+        },
+        (err) => {
+          setStatus(payloadStatus, `Geolocation failed: ${err.message}`, false);
+        },
+        { enableHighAccuracy: false, timeout: 5000, maximumAge: 300000 }
+      );
+    });
+
     document.getElementById("formatBtn").addEventListener("click", () => {
       formatJsonInEditor(dslEditor);
       compileDsl();
@@ -1035,10 +1670,17 @@
       try {
         dslEditor.setText(await loadRepoFile("/data/dsl/weather_now.json"));
         payloadEditor.setText(`{
-  "hourly": {
-    "time": ["2026-02-20T00:00", "2026-02-20T01:00", "2026-02-20T02:00"],
-    "temperature_2m": [10.6, 9.4, 8.2],
-    "relative_humidity_2m": [56, 56, 62]
+  "current": {
+    "temperature_2m": 18.2,
+    "relative_humidity_2m": 52,
+    "pressure_msl": 1015.6,
+    "wind_speed_10m": 6.3,
+    "wind_direction_10m": 247,
+    "weather_code": 2
+  },
+  "daily": {
+    "sunrise": ["2026-02-21T14:47"],
+    "sunset": ["2026-02-22T01:49"]
   }
 }`);
         compileDsl();
@@ -1314,9 +1956,15 @@
         "type": "label",
         "x": 80,
         "y": 192,
+        "w": 154,
+        "h": 40,
         "font": 2,
         "color": "#7FB1FF",
         "text": "{{geo.label}}",
+        "wrap": true,
+        "line_height": 14,
+        "max_lines": 2,
+        "overflow": "ellipsis",
         "align": "center",
         "valign": "top"
       }
