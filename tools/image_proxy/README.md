@@ -84,6 +84,7 @@ curl -L "http://localhost:8085/mdi?icon=mdi:weather-partly-cloudy&size=28&color=
   - `X-Source-URL`
   - `X-Cache: HIT|MISS`
   - `X-Cache-Age-Seconds`
+  - `X-Fallback: oversize-request` (only when size exceeded)
 
 ### Notes
 
@@ -91,6 +92,8 @@ curl -L "http://localhost:8085/mdi?icon=mdi:weather-partly-cloudy&size=28&color=
 - `/mdi` fetches SVG and rasterizes server-side to the requested size.
 - Alpha is premultiplied against black before conversion (matches existing icon import behavior).
 - Max accepted source payload defaults to `8 MiB` (`-max-bytes` flag).
+- Requests larger than `320x320`, or `/cmh` sources whose decoded dimensions exceed `320x320`,
+  return a generated default `X` fallback image (output dimensions are clamped to max `320x320`).
 - In-memory response cache is enabled by default:
   - `-cache-ttl` controls per-entry lifetime (default `10m`; `0` disables TTL expiry)
   - `-cache-max-entries` bounds memory use (default `256`; `0` disables caching)

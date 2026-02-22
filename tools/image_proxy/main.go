@@ -27,10 +27,11 @@ import (
 )
 
 const (
-	defaultListenAddr = ":8085"
-	maxDimension      = 1024
-	defaultMdiSize    = 28
-	defaultUserAgent  = "CoStar-ImageProxy/1.0"
+	defaultListenAddr  = ":8085"
+	maxDimension       = 1024
+	defaultMdiSize     = 28
+	defaultUserAgent   = "CoStar-ImageProxy/1.0"
+	maxOutputDimension = 320
 )
 
 type serverConfig struct {
@@ -211,6 +212,13 @@ func (cfg serverConfig) convertHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	if width > maxOutputDimension || height > maxOutputDimension {
+		resp := buildOversizeFallback(width, height)
+		writeRawResponse(w, resp, false)
+		return
+	}
+
 	uaOverride := sanitizeHeaderValue(r.URL.Query().Get("ua"))
 	refererOverride := sanitizeHeaderValue(r.URL.Query().Get("referer"))
 	cacheKey := buildCMHCacheKey(srcURL, width, height, uaOverride, refererOverride)
@@ -233,6 +241,11 @@ func (cfg serverConfig) convertHandler(w http.ResponseWriter, r *http.Request) {
 	srcImg, srcFmt, err := decodeImageBytes(body, width, height)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if srcImg.Bounds().Dx() > maxOutputDimension || srcImg.Bounds().Dy() > maxOutputDimension {
+		resp := buildOversizeFallback(width, height)
+		writeRawResponse(w, resp, false)
 		return
 	}
 
@@ -275,6 +288,13 @@ func (cfg serverConfig) mdiHandler(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+	}
+
+	if width > maxOutputDimension || height > maxOutputDimension {
+		resp := buildOversizeFallback(width, height)
+		resp.iconName = "mdi:oversize-fallback"
+		writeRawResponse(w, resp, false)
+		return
 	}
 
 	color, err := normalizeHexColor(r.URL.Query().Get("color"))
@@ -350,6 +370,9 @@ func writeRawResponse(w http.ResponseWriter, resp cachedResponse, cacheHit bool)
 	if resp.iconName != "" {
 		w.Header().Set("X-Icon", resp.iconName)
 	}
+	if resp.sourceFormat == "fallback-x" {
+		w.Header().Set("X-Fallback", "oversize-request")
+	}
 	if cacheHit {
 		w.Header().Set("X-Cache", "HIT")
 	} else {
@@ -364,6 +387,94 @@ func writeRawResponse(w http.ResponseWriter, resp cachedResponse, cacheHit bool)
 	}
 	w.Header().Set("Content-Length", strconv.Itoa(len(resp.raw)))
 	_, _ = w.Write(resp.raw)
+}
+
+func clampOutputSize(width, height int) (int, int) {
+	if width > maxOutputDimension {
+		width = maxOutputDimension
+	}
+	if height > maxOutputDimension {
+		height = maxOutputDimension
+	}
+	if width < 1 {
+		width = 1
+	}
+	if height < 1 {
+		height = 1
+	}
+	return width, height
+}
+
+func buildOversizeFallback(requestedW, requestedH int) cachedResponse {
+	w, h := clampOutputSize(requestedW, requestedH)
+	raw := generateXIconRGB565LE(w, h)
+	return cachedResponse{
+		raw:          raw,
+		width:        w,
+		height:       h,
+		sourceFormat: "fallback-x",
+		sourceURL:    fmt.Sprintf("fallback://oversize/%dx%d", requestedW, requestedH),
+		storedAt:     time.Now(),
+	}
+}
+
+func absInt(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func rgb565LE(r, g, b uint8) (byte, byte) {
+	v := (uint16(r&0xF8) << 8) | (uint16(g&0xFC) << 3) | (uint16(b) >> 3)
+	return byte(v & 0xFF), byte((v >> 8) & 0xFF)
+}
+
+func generateXIconRGB565LE(width, height int) []byte {
+	out := make([]byte, width*height*2)
+
+	// Dark background with a red X.
+	bgLo, bgHi := rgb565LE(8, 8, 8)
+	fgLo, fgHi := rgb565LE(255, 70, 70)
+
+	maxWH := width
+	if height > maxWH {
+		maxWH = height
+	}
+	thickness := maxWH / 20
+	if thickness < 2 {
+		thickness = 2
+	}
+	scale := maxWH
+	if scale < 1 {
+		scale = 1
+	}
+	xDen := width - 1
+	yDen := height - 1
+	if xDen < 1 {
+		xDen = 1
+	}
+	if yDen < 1 {
+		yDen = 1
+	}
+
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			diagA := absInt(x*yDen - y*xDen)
+			diagB := absInt(x*yDen - (height-1-y)*xDen)
+			useFg := diagA <= thickness*scale || diagB <= thickness*scale
+			i := (y*width + x) * 2
+			if useFg {
+				out[i] = fgLo
+				out[i+1] = fgHi
+			} else {
+				out[i] = bgLo
+				out[i+1] = bgHi
+			}
+		}
+	}
+
+	return out
 }
 
 func parseTargetSize(values url.Values) (int, int, error) {
