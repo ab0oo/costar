@@ -32,6 +32,7 @@ const (
 	defaultMdiSize     = 28
 	defaultUserAgent   = "CoStar-ImageProxy/1.0"
 	maxOutputDimension = 320
+	defaultMdiBaseURL  = "https://cdn.jsdelivr.net/npm/@mdi/svg/svg"
 )
 
 type serverConfig struct {
@@ -148,7 +149,7 @@ func (c *responseCache) removeElement(el *list.Element) {
 func main() {
 	listenAddr := flag.String("listen", defaultListenAddr, "HTTP listen address")
 	maxBytes := flag.Int64("max-bytes", 8*1024*1024, "Maximum source image download bytes")
-	mdiBase := flag.String("mdi-base", "https://api.iconify.design/mdi", "Upstream base URL for MDI raster images")
+	mdiBase := flag.String("mdi-base", defaultMdiBaseURL, "Upstream base URL for MDI SVG icons")
 	userAgent := flag.String("user-agent", defaultUserAgent, "Default upstream User-Agent for source image fetches")
 	cacheTTL := flag.Duration("cache-ttl", 10*time.Minute, "In-memory cache TTL duration (e.g. 10m, 30s, 0 to disable TTL)")
 	cacheMaxEntries := flag.Int("cache-max-entries", 256, "Maximum in-memory cache entries (0 disables caching)")
@@ -304,12 +305,6 @@ func (cfg serverConfig) mdiHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	srcURL := fmt.Sprintf("%s/%s.svg", cfg.mdiBaseURL, url.PathEscape(iconName))
-	if color != "" {
-		srcURL += "&color=" + url.QueryEscape("#"+color)
-	}
-	if strings.Contains(srcURL, ".svg&") {
-		srcURL = strings.Replace(srcURL, ".svg&", ".svg?", 1)
-	}
 	cacheKey := buildMDICacheKey(cfg.mdiBaseURL, iconName, color, width, height)
 	if cached, ok := cfg.cache.get(cacheKey); ok {
 		writeRawResponse(w, cached, true)
@@ -327,11 +322,32 @@ func (cfg serverConfig) mdiHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	srcImg, srcFmt, err := decodeImageBytes(body, width, height)
+	// Some SVG sources (notably Iconify compact paths) are not compatible with oksvg.
+	// Retry with parser-compatible MDI SVG source to keep /mdi resilient.
+	if err != nil && cfg.mdiBaseURL != defaultMdiBaseURL {
+		fallbackURL := fmt.Sprintf("%s/%s.svg", defaultMdiBaseURL, url.PathEscape(iconName))
+		fallbackBody, fallbackFetchURL, fallbackErr := cfg.fetchSourceBytes(ctx, fallbackURL, fetchOptions{
+			userAgent: firstNonEmpty(cfg.userAgent, defaultUserAgent),
+		})
+		if fallbackErr == nil {
+			fallbackImg, fallbackFmt, fallbackDecodeErr := decodeImageBytes(fallbackBody, width, height)
+			if fallbackDecodeErr == nil {
+				srcImg = fallbackImg
+				srcFmt = fallbackFmt
+				fetchURL = fallbackFetchURL
+				err = nil
+			}
+		}
+	}
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	dst := resizeNearest(srcImg, width, height)
+	if color != "" {
+		r, g, b := hexColorRGB(color)
+		tintNRGBA(dst, r, g, b)
+	}
 	raw := encodeRGB565LE(dst)
 
 	resp := cachedResponse{
@@ -428,6 +444,39 @@ func absInt(v int) int {
 func rgb565LE(r, g, b uint8) (byte, byte) {
 	v := (uint16(r&0xF8) << 8) | (uint16(g&0xFC) << 3) | (uint16(b) >> 3)
 	return byte(v & 0xFF), byte((v >> 8) & 0xFF)
+}
+
+func hexColorRGB(hex string) (uint8, uint8, uint8) {
+	if len(hex) != 6 {
+		return 0xFF, 0xFF, 0xFF
+	}
+	rv, err := strconv.ParseUint(hex[0:2], 16, 8)
+	if err != nil {
+		return 0xFF, 0xFF, 0xFF
+	}
+	gv, err := strconv.ParseUint(hex[2:4], 16, 8)
+	if err != nil {
+		return 0xFF, 0xFF, 0xFF
+	}
+	bv, err := strconv.ParseUint(hex[4:6], 16, 8)
+	if err != nil {
+		return 0xFF, 0xFF, 0xFF
+	}
+	return uint8(rv), uint8(gv), uint8(bv)
+}
+
+func tintNRGBA(img *image.NRGBA, r, g, b uint8) {
+	if img == nil {
+		return
+	}
+	for i := 0; i+3 < len(img.Pix); i += 4 {
+		if img.Pix[i+3] == 0 {
+			continue
+		}
+		img.Pix[i] = r
+		img.Pix[i+1] = g
+		img.Pix[i+2] = b
+	}
 }
 
 func generateXIconRGB565LE(width, height int) []byte {

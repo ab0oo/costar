@@ -90,6 +90,9 @@ curl -L "http://localhost:8085/mdi?icon=mdi:weather-partly-cloudy&size=28&color=
 
 - Resizing uses nearest-neighbor scaling.
 - `/mdi` fetches SVG and rasterizes server-side to the requested size.
+- `/mdi` defaults to the jsDelivr MDI SVG source (`@mdi/svg`), which is parser-compatible with this proxy.
+- If a custom `-mdi-base` is configured and decoding fails, `/mdi` retries from the default jsDelivr source.
+- `/mdi` `color` is applied locally after rasterization (so tinting does not depend on upstream query support).
 - Alpha is premultiplied against black before conversion (matches existing icon import behavior).
 - Max accepted source payload defaults to `8 MiB` (`-max-bytes` flag).
 - Requests larger than `320x320`, or `/cmh` sources whose decoded dimensions exceed `320x320`,
@@ -105,4 +108,4 @@ curl -L "http://localhost:8085/mdi?icon=mdi:weather-partly-cloudy&size=28&color=
 - Canonical SVG repo/package source:
   - https://github.com/Pictogrammers/pictogrammers.com
   - https://www.npmjs.com/package/@mdi/svg
-- This utility defaults to Iconify's MDI SVG endpoint (`api.iconify.design`) and rasterizes icons locally.
+- This utility defaults to jsDelivr-hosted `@mdi/svg` assets and rasterizes icons locally.
