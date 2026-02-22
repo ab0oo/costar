@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <math.h>
 #include <map>
+#include <string.h>
 #include <utility>
 #include <vector>
 
@@ -39,6 +40,19 @@ void pruneRemoteIconRetryMap(uint32_t nowMs) {
 
 bool isRemoteIconPath(const String& path) {
   return path.startsWith("http://") || path.startsWith("https://");
+}
+
+bool hasEmptyIconQuery(const String& path) {
+  const int iconPos = path.indexOf("icon=");
+  if (iconPos < 0) {
+    return false;
+  }
+  const int valStart = iconPos + 5;
+  if (valStart >= path.length()) {
+    return true;
+  }
+  const char next = path[valStart];
+  return next == '&' || next == '#';
 }
 
 uint32_t fnv1a32(const String& text) {
@@ -277,6 +291,9 @@ const IconCacheEntry* loadIcon(const String& path, int16_t w, int16_t h) {
   if (!isRemoteIconPath(path)) {
     return nullptr;
   }
+  if (hasEmptyIconQuery(path)) {
+    return nullptr;
+  }
   if (!ensureIconCacheDir()) {
     return nullptr;
   }
@@ -322,9 +339,56 @@ uint8_t topLineDatum(uint8_t datum) {
   return TL_DATUM;
 }
 
+uint8_t safeFontId(uint8_t font) {
+  // TFT_eSPI built-in bitmap fonts are 1..8.
+  if (font < 1 || font > 8) {
+    return 2;
+  }
+  return font;
+}
+
 template <typename Gfx>
 int16_t textWidthPx(Gfx& gfx, const String& text, uint8_t font) {
-  return static_cast<int16_t>(gfx.textWidth(text, font));
+  if (text.length() == 0) {
+    return 0;
+  }
+  String safe = text;
+  if (safe.length() > 160) {
+    safe = safe.substring(0, 160);
+  }
+  safe.replace('\r', ' ');
+  safe.replace('\n', ' ');
+  safe.trim();
+  if (safe.length() == 0) {
+    return 0;
+  }
+  char buf[161];
+  const size_t n = safe.length() > 160 ? 160 : safe.length();
+  memcpy(buf, safe.c_str(), n);
+  buf[n] = '\0';
+  return static_cast<int16_t>(gfx.textWidth(buf, safeFontId(font)));
+}
+
+template <typename Gfx>
+void safeDrawString(Gfx& gfx, const String& text, int16_t x, int16_t y, uint8_t font) {
+  if (text.length() == 0) {
+    return;
+  }
+  String safe = text;
+  if (safe.length() > 160) {
+    safe = safe.substring(0, 160);
+  }
+  safe.replace('\r', ' ');
+  safe.replace('\n', ' ');
+  safe.trim();
+  if (safe.length() == 0) {
+    return;
+  }
+  char buf[161];
+  const size_t n = safe.length() > 160 ? 160 : safe.length();
+  memcpy(buf, safe.c_str(), n);
+  buf[n] = '\0';
+  gfx.drawString(buf, x, y, safeFontId(font));
 }
 
 template <typename Gfx>
@@ -459,12 +523,17 @@ void DslWidget::render(TFT_eSPI& tft) {
     }
   };
 
-  auto renderNodes = [&](auto& gfx, int16_t baseX, int16_t baseY) {
+  auto renderNodes = [&](auto& gfx, int16_t baseX, int16_t baseY, int16_t clipW, int16_t clipH) {
     for (const auto& node : dsl_.nodes) {
       const int16_t x = baseX + node.x;
       const int16_t y = baseY + node.y;
 
       if (node.type == dsl::NodeType::kLabel) {
+        if ((node.font < 1 || node.font > 8) && dsl_.debug) {
+          Serial.printf("[%s] [%s] invalid font id=%u; using 2\n", widgetName().c_str(),
+                        logTimestamp().c_str(), static_cast<unsigned>(node.font));
+        }
+        const uint8_t font = safeFontId(node.font);
         gfx.setTextColor(node.color565, TFT_BLACK);
         String labelText = bindTemplate(node.text);
         if (!node.path.isEmpty()) {
@@ -481,11 +550,11 @@ void DslWidget::render(TFT_eSPI& tft) {
         }
         if (!node.wrap || node.w <= 0) {
           gfx.setTextDatum(node.datum);
-          gfx.drawString(labelText, x, y, node.font);
+          safeDrawString(gfx, labelText, x, y, font);
           continue;
         }
 
-        int16_t lineHeight = node.lineHeight > 0 ? node.lineHeight : gfx.fontHeight(node.font);
+        int16_t lineHeight = node.lineHeight > 0 ? node.lineHeight : gfx.fontHeight(font);
         if (lineHeight <= 0) {
           lineHeight = 10;
         }
@@ -498,14 +567,14 @@ void DslWidget::render(TFT_eSPI& tft) {
           }
         }
 
-        std::vector<String> lines = wrapLabelLines(gfx, labelText, node.font, node.w);
+        std::vector<String> lines = wrapLabelLines(gfx, labelText, font, node.w);
         bool truncated = false;
         if (maxLines > 0 && lines.size() > static_cast<size_t>(maxLines)) {
           lines.resize(static_cast<size_t>(maxLines));
           truncated = true;
         }
         if (truncated && !lines.empty() && node.overflow == dsl::OverflowMode::kEllipsis) {
-          lines.back() = ellipsizeToWidth(gfx, lines.back(), node.font, node.w);
+          lines.back() = ellipsizeToWidth(gfx, lines.back(), font, node.w);
         }
 
         const int16_t blockHeight = static_cast<int16_t>(lines.size()) * lineHeight;
@@ -518,22 +587,30 @@ void DslWidget::render(TFT_eSPI& tft) {
 
         gfx.setTextDatum(topLineDatum(node.datum));
         for (size_t i = 0; i < lines.size(); ++i) {
+          if (lines[i].length() == 0) {
+            continue;
+          }
           const int16_t lineY = startY + static_cast<int16_t>(i) * lineHeight;
-          gfx.drawString(lines[i], x, lineY, node.font);
+          safeDrawString(gfx, lines[i], x, lineY, font);
         }
         continue;
       }
 
       if (node.type == dsl::NodeType::kValueBox) {
+        if ((node.font < 1 || node.font > 8) && dsl_.debug) {
+          Serial.printf("[%s] [%s] invalid font id=%u; using 2\n", widgetName().c_str(),
+                        logTimestamp().c_str(), static_cast<unsigned>(node.font));
+        }
+        const uint8_t font = safeFontId(node.font);
         gfx.fillRect(x, y, node.w, node.h, node.bg565);
         gfx.drawRect(x, y, node.w, node.h, node.color565);
         gfx.setTextColor(node.color565, node.bg565);
         gfx.setTextDatum(TL_DATUM);
         if (!node.text.isEmpty()) {
-          gfx.drawString(bindTemplate(node.text), x + 4, y + 4, 1);
+          safeDrawString(gfx, bindTemplate(node.text), x + 4, y + 4, 1);
         }
         const String value = node.key.isEmpty() ? String() : values_[node.key];
-        gfx.drawString(value, x + 4, y + 16, node.font);
+        safeDrawString(gfx, value, x + 4, y + 16, font);
         continue;
       }
 
@@ -556,7 +633,7 @@ void DslWidget::render(TFT_eSPI& tft) {
 
         gfx.setTextColor(TFT_WHITE, node.bg565);
         gfx.setTextDatum(MC_DATUM);
-        gfx.drawString(String(value, 1), x + node.w / 2, y + node.h / 2, 1);
+        safeDrawString(gfx, String(value, 1), x + node.w / 2, y + node.h / 2, 1);
         continue;
       }
 
@@ -667,21 +744,33 @@ void DslWidget::render(TFT_eSPI& tft) {
       continue;
     }
 
-    if (node.type == dsl::NodeType::kIcon) {
-      const String rawPath = node.path.isEmpty() ? node.text : node.path;
-      const String iconPath = bindTemplate(rawPath);
-      if (iconPath.isEmpty()) {
-        continue;
-      }
-      const IconCacheEntry* icon = loadIcon(iconPath, node.w, node.h);
-      if (!icon) {
-        continue;
-      }
-      const bool swap = gfx.getSwapBytes();
-      gfx.setSwapBytes(true);
-      gfx.pushImage(x, y, icon->w, icon->h, icon->pixels.data());
-      gfx.setSwapBytes(swap);
-      continue;
+	    if (node.type == dsl::NodeType::kIcon) {
+	      const String rawPath = node.path.isEmpty() ? node.text : node.path;
+	      const String iconPath = bindTemplate(rawPath);
+	      if (iconPath.isEmpty()) {
+	        continue;
+	      }
+	      const IconCacheEntry* icon = loadIcon(iconPath, node.w, node.h);
+	      if (!icon) {
+	        continue;
+	      }
+	      if (icon->w <= 0 || icon->h <= 0) {
+	        continue;
+	      }
+	      const size_t needPixels = static_cast<size_t>(icon->w) * static_cast<size_t>(icon->h);
+	      if (icon->pixels.empty() || icon->pixels.size() < needPixels ||
+	          icon->pixels.data() == nullptr) {
+	        continue;
+	      }
+	      if (x < baseX || y < baseY || (x + icon->w) > (baseX + clipW) ||
+	          (y + icon->h) > (baseY + clipH)) {
+	        continue;
+	      }
+	      const bool swap = gfx.getSwapBytes();
+	      gfx.setSwapBytes(true);
+	      gfx.pushImage(x, y, icon->w, icon->h, icon->pixels.data());
+	      gfx.setSwapBytes(swap);
+	      continue;
     }
 
     if (node.type == dsl::NodeType::kMoonPhase) {
@@ -749,15 +838,15 @@ void DslWidget::render(TFT_eSPI& tft) {
     }
     if (spriteReady_) {
       drawPanelTo(*sprite_);
-      renderNodes(*sprite_, 0, 0);
+      renderNodes(*sprite_, 0, 0, config_.w, config_.h);
       sprite_->pushSprite(config_.x, config_.y);
     } else {
       drawPanel(tft, dslLoaded_ ? dsl_.title : String("DSL"));
-      renderNodes(tft, config_.x, config_.y);
+      renderNodes(tft, config_.x, config_.y, config_.w, config_.h);
     }
   } else {
     drawPanel(tft, dslLoaded_ ? dsl_.title : String("DSL"));
-    renderNodes(tft, config_.x, config_.y);
+    renderNodes(tft, config_.x, config_.y, config_.w, config_.h);
   }
 
   const int16_t cx = config_.x + config_.w - 6;

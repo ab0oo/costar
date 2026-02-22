@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "data": {
+    "source": "http",
+    "url": "{{setting.ha_base_url}}/api/states/{{setting.entity_id}}",
+    "headers": {
+      "Authorization": "Bearer {{setting.ha_token}}",
+      "Content-Type": "application/json"
+    },
+    "poll_ms": 30000,
+    "fields": {
+      "name": "attributes.friendly_name",
+      "entity": "entity_id",
+      "state": "state",
+      "ha_icon": "attributes.icon",
+      "when": {
+        "path": "last_updated",
+        "format": {
+          "tz": "local",
+          "time_format": "%H:%M"
+        }
+      }
+    }
+  },
+  "ui": {
+    "title": "HA Control Card",
+    "nodes": [
+      {
+        "type": "label",
+        "x": 4,
+        "y": 4,
+        "w": 98,
+        "h": 10,
+        "max_lines": 2,
+        "overflow": "ellipsis",
+        "font": 1,
+        "color": "#C7D2D9",
+        "text": "{{name}}"
+      },
+      {
+        "type": "line",
+        "x": 4,
+        "y": 28,
+        "x2": 102,
+        "y2": 28,
+        "thickness": 1,
+        "color": "#1E2B3D"
+      },
+      {
+        "type": "icon",
+        "x": 6,
+        "y": 36,
+        "w": 24,
+        "h": 24,
+        "path": "http://vps.gorkos.net:8085/mdi?icon={{ha_icon}}&size=24&color=7CE2FF"
+      },
+      {
+        "type": "label",
+        "x": 36,
+        "y": 40,
+        "font": 2,
+        "color": "#7CE2FF",
+        "text": "{{state}}"
+      },
+      {
+        "type": "line",
+        "x": 4,
+        "y": 66,
+        "x2": 102,
+        "y2": 66,
+        "thickness": 1,
+        "color": "#1E2B3D"
+      },
+      {
+        "type": "label",
+        "x": 4,
+        "y": 74,
+        "font": 1,
+        "color": "#6CA0C8",
+        "text": "Updated {{when}}"
+      }
+    ]
+  }
+}

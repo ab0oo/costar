@@ -1,5 +1,9 @@
 #include "widgets/DslWidget.h"
 
+#include <HTTPClient.h>
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+
 #include <algorithm>
 #include <math.h>
 #include <time.h>
@@ -44,6 +48,134 @@ String clipText(const String& text, size_t maxLen = 96) {
   return text.substring(0, head) + "..." + text.substring(text.length() - tail);
 }
 }  // namespace
+
+std::map<String, String> DslWidget::resolveTapHeaders() const {
+  std::map<String, String> headers;
+  for (const auto& kv : config_.settings) {
+    if (!kv.first.startsWith("tap_header_")) {
+      continue;
+    }
+    String name = kv.first.substring(String("tap_header_").length());
+    name.trim();
+    if (name.isEmpty()) {
+      continue;
+    }
+    name.replace("_", "-");
+    String value = bindTemplate(kv.second);
+    value.trim();
+    if (!value.isEmpty()) {
+      headers[name] = value;
+    }
+  }
+  return headers;
+}
+
+bool DslWidget::executeTapAction(String& errorOut) {
+  const String action = parseTapActionType();
+  if (action != "http") {
+    return false;
+  }
+
+  auto urlIt = config_.settings.find("tap_url");
+  if (urlIt == config_.settings.end()) {
+    errorOut = "tap_url missing";
+    return false;
+  }
+  const String url = bindTemplate(urlIt->second);
+  if (url.isEmpty()) {
+    errorOut = "tap_url empty";
+    return false;
+  }
+
+  String method = "POST";
+  auto methodIt = config_.settings.find("tap_method");
+  if (methodIt != config_.settings.end()) {
+    method = methodIt->second;
+    method.trim();
+    method.toUpperCase();
+  }
+  if (method.isEmpty()) {
+    method = "POST";
+  }
+
+  String body;
+  auto bodyIt = config_.settings.find("tap_body");
+  if (bodyIt != config_.settings.end()) {
+    body = bindTemplate(bodyIt->second);
+  }
+
+  String contentType = "application/json";
+  auto ctypeIt = config_.settings.find("tap_content_type");
+  if (ctypeIt != config_.settings.end()) {
+    contentType = bindTemplate(ctypeIt->second);
+    contentType.trim();
+  }
+  if (contentType.isEmpty()) {
+    contentType = "application/json";
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    errorOut = "WiFi disconnected";
+    return false;
+  }
+
+  HTTPClient http;
+  WiFiClientSecure secureClient;
+  bool begun = false;
+  if (url.startsWith("https://")) {
+    secureClient.setInsecure();
+    begun = http.begin(secureClient, url);
+  } else {
+    begun = http.begin(url);
+  }
+  if (!begun) {
+    errorOut = "HTTP begin failed";
+    return false;
+  }
+
+  http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+  http.setRedirectLimit(5);
+  http.setConnectTimeout(4500);
+  http.setTimeout(6500);
+  http.useHTTP10(true);
+  http.setReuse(false);
+  http.addHeader("User-Agent", "CoStar-ESP32/1.0");
+  const std::map<String, String> headers = resolveTapHeaders();
+  for (const auto& kv : headers) {
+    if (kv.first.isEmpty() || kv.second.isEmpty()) {
+      continue;
+    }
+    http.addHeader(kv.first, kv.second);
+  }
+  if (!body.isEmpty()) {
+    http.addHeader("Content-Type", contentType);
+  }
+
+  int status = 0;
+  if (method == "GET") {
+    status = http.GET();
+  } else if (method == "POST") {
+    status = http.POST(body);
+  } else if (method == "PUT") {
+    status = http.PUT(body);
+  } else if (method == "PATCH") {
+    status = http.sendRequest("PATCH", body);
+  } else if (method == "DELETE") {
+    status = http.sendRequest("DELETE", body);
+  } else {
+    status = http.sendRequest(method.c_str(), body);
+  }
+
+  if (status < 200 || status >= 300) {
+    const String response = http.getString();
+    errorOut = "status=" + String(status) + " body='" + clipText(response, 72) + "'";
+    http.end();
+    return false;
+  }
+
+  http.end();
+  return true;
+}
 
 bool DslWidget::buildLocalTimeDoc(JsonDocument& outDoc, String& error) const {
   const time_t nowUtc = time(nullptr);
@@ -249,20 +381,44 @@ bool DslWidget::update(uint32_t nowMs) {
   if (!dslLoaded_) {
     return false;
   }
+  if (firstFetch_ && startDelayMs_ > 0 &&
+      static_cast<int32_t>(nowMs - firstFetchNotBeforeMs_) < 0) {
+    return false;
+  }
 
-  if (dsl_.source == "adsb_nearest") {
-    if (adsbBackoffUntilMs_ != 0 && static_cast<int32_t>(nowMs - adsbBackoffUntilMs_) < 0) {
-      return false;
+  if (tapActionPending_) {
+    String actionError;
+    if (!executeTapAction(actionError)) {
+      status_ = "tap err";
+      if (dsl_.debug) {
+        Serial.printf("[%s] [%s] TAP err=%s\n", widgetName().c_str(), logTimestamp().c_str(),
+                      clipText(actionError, 120).c_str());
+      }
+    } else {
+      status_ = "ok";
+      if (dsl_.debug) {
+        Serial.printf("[%s] [%s] TAP ok\n", widgetName().c_str(), logTimestamp().c_str());
+      }
     }
-    if (nextFetchMs_ == 0) {
-      nextFetchMs_ = nowMs;
-    }
-    if (!firstFetch_ && static_cast<int32_t>(nowMs - nextFetchMs_) < 0) {
-      return false;
-    }
-  } else if (nowMs - lastFetchMs_ < dsl_.pollMs) {
-    if (!firstFetch_) {
-      return false;
+    tapActionPending_ = false;
+    forceFetchNow_ = true;
+  }
+
+  if (!forceFetchNow_) {
+    if (dsl_.source == "adsb_nearest") {
+      if (adsbBackoffUntilMs_ != 0 && static_cast<int32_t>(nowMs - adsbBackoffUntilMs_) < 0) {
+        return false;
+      }
+      if (nextFetchMs_ == 0) {
+        nextFetchMs_ = nowMs;
+      }
+      if (!firstFetch_ && static_cast<int32_t>(nowMs - nextFetchMs_) < 0) {
+        return false;
+      }
+    } else if (nowMs - lastFetchMs_ < dsl_.pollMs) {
+      if (!firstFetch_) {
+        return false;
+      }
     }
   }
   lastFetchMs_ = nowMs;
@@ -270,6 +426,7 @@ bool DslWidget::update(uint32_t nowMs) {
     nextFetchMs_ = nowMs + dsl_.pollMs + computeAdsbJitterMs(dsl_.pollMs);
   }
   firstFetch_ = false;
+  forceFetchNow_ = false;
 
   JsonDocument doc;
   String error;
@@ -409,7 +566,7 @@ bool DslWidget::update(uint32_t nowMs) {
     if (resolvedUrl.isEmpty()) {
       error = "resolved URL empty";
     } else if (!http_.get(resolvedUrl, doc, &error, &fetchMeta, headersPtr)) {
-      if (error.startsWith("Empty payload")) {
+      if (fetchMeta.statusCode <= 0 || error.startsWith("Empty payload")) {
         delay(40);
         JsonDocument retryDoc;
         String retryError;
@@ -427,6 +584,13 @@ bool DslWidget::update(uint32_t nowMs) {
 
     if (!error.isEmpty()) {
       logHttpFetchResult(fetchMeta.statusCode, fetchMeta.contentLengthBytes);
+      if (fetchMeta.statusCode <= 0) {
+        Serial.printf("[%s] [%s] DSL no-http-response url=%s code=%d reason='%s' elapsed=%lums\n",
+                      widgetName().c_str(), logTimestamp().c_str(),
+                      clipText(resolvedUrl, 96).c_str(), fetchMeta.statusCode,
+                      fetchMeta.transportReason.c_str(),
+                      static_cast<unsigned long>(fetchMeta.elapsedMs));
+      }
       if (dsl_.debug) {
         if (fetchMeta.statusCode <= 0) {
           Serial.printf(

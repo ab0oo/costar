@@ -10,6 +10,8 @@
 
 class Widget {
  public:
+  enum class TouchType : uint8_t { kTap };
+
   explicit Widget(const WidgetConfig& cfg) : config_(cfg) { mutex_ = xSemaphoreCreateMutex(); }
   virtual ~Widget() {
     if (mutex_ != nullptr) {
@@ -24,13 +26,20 @@ class Widget {
     lastUpdateMs_ = millis() - config_.updateMs;
   }
   virtual bool isNetworkWidget() const { return false; }
+  virtual bool wantsImmediateUpdate() const { return false; }
+  virtual bool onTouch(uint16_t localX, uint16_t localY, TouchType type) {
+    (void)localX;
+    (void)localY;
+    (void)type;
+    return false;
+  }
 
   void tick(uint32_t nowMs) {
     if (mutex_ == nullptr) {
       return;
     }
     xSemaphoreTake(mutex_, portMAX_DELAY);
-    if (nowMs - lastUpdateMs_ < config_.updateMs) {
+    if (!wantsImmediateUpdate() && (nowMs - lastUpdateMs_ < config_.updateMs)) {
       xSemaphoreGive(mutex_);
       return;
     }
@@ -43,8 +52,10 @@ class Widget {
   }
 
   bool isDirty() const { return dirty_; }
+  const WidgetConfig& config() const { return config_; }
 
   void clearDirty() { dirty_ = false; }
+  void markDirty() { dirty_ = true; }
 
   bool renderIfDirty(TFT_eSPI& tft) {
     if (!dirty_ || mutex_ == nullptr) {

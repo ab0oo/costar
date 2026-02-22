@@ -1,61 +1,138 @@
 {
   "version": 1,
   "screen": {
-    "id": "weather-left-a",
+    "id": "homeassistant-6up-b",
     "orientation": "landscape",
     "width": 320,
     "height": 240,
     "regions": [
       {
-        "id": "weather-now",
-        "widget": "weather-now",
+        "id": "ha-card-1",
+        "widget": "ha-card-1",
         "x": 0,
         "y": 0,
-        "w": 160,
+        "w": 107,
         "h": 120,
         "draw_border": false
       },
       {
-        "id": "forecast",
-        "widget": "forecast",
+        "id": "ha-card-2",
+        "widget": "ha-card-2",
+        "x": 107,
+        "y": 0,
+        "w": 107,
+        "h": 120,
+        "draw_border": false
+      },
+      {
+        "id": "ha-card-3",
+        "widget": "ha-card-3",
+        "x": 214,
+        "y": 0,
+        "w": 106,
+        "h": 120,
+        "draw_border": false
+      },
+      {
+        "id": "ha-card-4",
+        "widget": "ha-card-4",
         "x": 0,
         "y": 120,
-        "w": 160,
+        "w": 107,
         "h": 120,
         "draw_border": false
       },
       {
-        "id": "clock-full",
-        "widget": "clock-full",
-        "x": 160,
-        "y": 0,
-        "w": 160,
-        "h": 240,
+        "id": "ha-card-5",
+        "widget": "ha-card-5",
+        "x": 107,
+        "y": 120,
+        "w": 107,
+        "h": 120,
+        "draw_border": false
+      },
+      {
+        "id": "ha-card-6",
+        "widget": "ha-card-6",
+        "x": 214,
+        "y": 120,
+        "w": 106,
+        "h": 120,
         "draw_border": false
       }
     ]
   },
   "widget_defs": {
-    "weather-now": {
+    "ha-card-1": {
       "type": "dsl",
       "update_ms": 1000,
       "settings": {
-        "dsl_path": "/dsl/weather_now.json"
+        "dsl_path": "/dsl/homeassistant_control_card.json",
+        "ha_base_url": "https://homeassistant.edh.gorkos.net",
+        "entity_id": "light.family_room_lamp",
+        "ha_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkOTJlMjRkMmI4NzY0NjUwYWY5Yzc1ZDZhMDY3OTYxNSIsImlhdCI6MTc3MTcxMjIzNCwiZXhwIjoyMDg3MDcyMjM0fQ.A9fTF3UIZzjTg6yJjKwYY82EuT8NIxU1TK-a00ru7mc",
+        "start_delay_ms": "0",
+        "use_sprite": "false"
       }
     },
-    "forecast": {
+    "ha-card-2": {
       "type": "dsl",
       "update_ms": 1000,
       "settings": {
-        "dsl_path": "/dsl/forecast.json"
+        "dsl_path": "/dsl/homeassistant_control_card.json",
+        "ha_base_url": "https://homeassistant.edh.gorkos.net",
+        "entity_id": "light.torchier_socket_1",
+        "ha_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkOTJlMjRkMmI4NzY0NjUwYWY5Yzc1ZDZhMDY3OTYxNSIsImlhdCI6MTc3MTcxMjIzNCwiZXhwIjoyMDg3MDcyMjM0fQ.A9fTF3UIZzjTg6yJjKwYY82EuT8NIxU1TK-a00ru7mc",
+        "start_delay_ms": "1500",
+        "use_sprite": "false"
       }
     },
-    "clock-full": {
+    "ha-card-3": {
       "type": "dsl",
       "update_ms": 1000,
       "settings": {
-        "dsl_path": "/dsl/clock_analog_full.json",
-        "use_sprite": "true"
+        "dsl_path": "/dsl/homeassistant_control_card.json",
+        "ha_base_url": "https://homeassistant.edh.gorkos.net",
+        "entity_id": "light.torchier_socket_1_2",
+        "ha_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkOTJlMjRkMmI4NzY0NjUwYWY5Yzc1ZDZhMDY3OTYxNSIsImlhdCI6MTc3MTcxMjIzNCwiZXhwIjoyMDg3MDcyMjM0fQ.A9fTF3UIZzjTg6yJjKwYY82EuT8NIxU1TK-a00ru7mc",
+        "start_delay_ms": "3000",
+        "use_sprite": "false"
+      }
+    },
+    "ha-card-4": {
+      "type": "dsl",
+      "update_ms": 1000,
+      "settings": {
+        "dsl_path": "/dsl/homeassistant_control_card.json",
+        "ha_base_url": "https://homeassistant.edh.gorkos.net",
+        "entity_id": "light.outside_entry_lights",
+        "ha_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkOTJlMjRkMmI4NzY0NjUwYWY5Yzc1ZDZhMDY3OTYxNSIsImlhdCI6MTc3MTcxMjIzNCwiZXhwIjoyMDg3MDcyMjM0fQ.A9fTF3UIZzjTg6yJjKwYY82EuT8NIxU1TK-a00ru7mc",
+        "start_delay_ms": "4500",
+        "use_sprite": "false"
+      }
+    },
+    "ha-card-5": {
+      "type": "dsl",
+      "update_ms": 1000,
+      "settings": {
+        "dsl_path": "/dsl/homeassistant_control_card.json",
+        "ha_base_url": "https://homeassistant.edh.gorkos.net",
+        "entity_id": "light.outside_garage_lights",
+        "ha_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkOTJlMjRkMmI4NzY0NjUwYWY5Yzc1ZDZhMDY3OTYxNSIsImlhdCI6MTc3MTcxMjIzNCwiZXhwIjoyMDg3MDcyMjM0fQ.A9fTF3UIZzjTg6yJjKwYY82EuT8NIxU1TK-a00ru7mc",
+        "start_delay_ms": "6000",
+        "use_sprite": "false"
+      }
+    },
+    "ha-card-6": {
+      "type": "dsl",
+      "update_ms": 1000,
+      "settings": {
+        "dsl_path": "/dsl/homeassistant_control_card.json",
+        "ha_base_url": "https://homeassistant.edh.gorkos.net",
+        "entity_id": "light.john_s_lamp",
+        "ha_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkOTJlMjRkMmI4NzY0NjUwYWY5Yzc1ZDZhMDY3OTYxNSIsImlhdCI6MTc3MTcxMjIzNCwiZXhwIjoyMDg3MDcyMjM0fQ.A9fTF3UIZzjTg6yJjKwYY82EuT8NIxU1TK-a00ru7mc",
+        "start_delay_ms": "7500",
+        "use_sprite": "false"
       }
     }
   }

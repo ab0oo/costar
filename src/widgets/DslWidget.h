@@ -19,8 +19,11 @@ class DslWidget final : public Widget {
 
   void begin() override;
   bool isNetworkWidget() const override {
-    return dslLoaded_ && (dsl_.source == "http" || dsl_.source == "adsb_nearest");
+    return dslLoaded_ && (dsl_.source == "http" || dsl_.source == "adsb_nearest" ||
+                          hasTapHttpAction_);
   }
+  bool wantsImmediateUpdate() const override { return tapActionPending_ || forceFetchNow_; }
+  bool onTouch(uint16_t localX, uint16_t localY, TouchType type) override;
   bool update(uint32_t nowMs) override;
   void render(TFT_eSPI& tft) override;
 
@@ -39,6 +42,9 @@ class DslWidget final : public Widget {
   bool getNumeric(const String& key, float& out) const;
   static bool resolveNumericVar(void* ctx, const String& name, float& out);
   bool evaluateAngleExpr(const String& expr, float& outDegrees) const;
+  bool executeTapAction(String& errorOut);
+  std::map<String, String> resolveTapHeaders() const;
+  String parseTapActionType() const;
 
   bool resolveVariant(const JsonDocument& doc, const String& path,
                       JsonVariantConst& out) const;
@@ -70,8 +76,13 @@ class DslWidget final : public Widget {
   uint32_t lastFetchMs_ = 0;
   uint32_t nextFetchMs_ = 0;
   bool firstFetch_ = true;
+  uint32_t startDelayMs_ = 0;
+  uint32_t firstFetchNotBeforeMs_ = 0;
   uint32_t adsbBackoffUntilMs_ = 0;
   uint8_t adsbFailureStreak_ = 0;
+  bool hasTapHttpAction_ = false;
+  bool tapActionPending_ = false;
+  bool forceFetchNow_ = false;
 
   std::map<String, String> values_;
   std::map<String, String> pathValues_;

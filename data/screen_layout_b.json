@@ -1,7 +1,7 @@
 {
   "version": 1,
   "screen": {
-    "id": "weather-left-b",
+    "id": "weather-left-a",
     "orientation": "landscape",
     "width": 320,
     "height": 240,
@@ -25,21 +25,12 @@
         "draw_border": false
       },
       {
-        "id": "clock-quarter",
-        "widget": "clock-quarter",
+        "id": "clock-full",
+        "widget": "clock-full",
         "x": 160,
         "y": 0,
         "w": 160,
-        "h": 120,
-        "draw_border": false
-      },
-      {
-        "id": "adsb-nearest",
-        "widget": "adsb-nearest",
-        "x": 160,
-        "y": 120,
-        "w": 160,
-        "h": 120,
+        "h": 240,
         "draw_border": false
       }
     ]
@@ -59,19 +50,11 @@
         "dsl_path": "/dsl/forecast.json"
       }
     },
-    "clock-quarter": {
+    "clock-full": {
       "type": "dsl",
       "update_ms": 1000,
       "settings": {
-        "dsl_path": "/dsl/clock_analog_quarter.json",
-        "use_sprite": "true"
-      }
-    },
-    "adsb-nearest": {
-      "type": "dsl",
-      "update_ms": 1000,
-      "settings": {
-        "dsl_path": "/dsl/adsb_nearest.json",
+        "dsl_path": "/dsl/clock_analog_full.json",
         "use_sprite": "true"
       }
     }

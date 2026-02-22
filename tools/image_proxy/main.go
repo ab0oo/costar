@@ -70,6 +70,26 @@ type responseCache struct {
 	items      map[string]*list.Element
 }
 
+type loggingResponseWriter struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
+func (w *loggingResponseWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *loggingResponseWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	n, err := w.ResponseWriter.Write(p)
+	w.bytes += n
+	return n, err
+}
+
 func newResponseCache(ttl time.Duration, maxEntries int) *responseCache {
 	if maxEntries < 0 {
 		maxEntries = 0
@@ -170,7 +190,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              *listenAddr,
-		Handler:           mux,
+		Handler:           loggingMiddleware(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -178,6 +198,24 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("server failed: %v", err)
 	}
+}
+
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		lrw := &loggingResponseWriter{ResponseWriter: w}
+		next.ServeHTTP(lrw, r)
+		status := lrw.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		requestURI := r.URL.Path
+		if r.URL.RawQuery != "" {
+			requestURI += "?" + r.URL.RawQuery
+		}
+		log.Printf("%s %s status=%d bytes=%d from=%s dur=%s", r.Method, requestURI, status,
+			lrw.bytes, r.RemoteAddr, time.Since(start).Truncate(time.Millisecond))
+	})
 }
 
 func rootHandler(w http.ResponseWriter, _ *http.Request) {

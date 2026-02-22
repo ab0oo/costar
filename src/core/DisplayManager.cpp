@@ -75,21 +75,48 @@ void DisplayManager::setLayoutPath(const String& layoutPath) {
 }
 
 void DisplayManager::onTouch(uint16_t rawX, uint16_t rawY) {
-  (void)rawX;
-  (void)rawY;
   if (widgetsMutex_ == nullptr) {
     return;
   }
 
-  touchOverlay_ = !touchOverlay_;
-  if (!touchOverlay_) {
-    xSemaphoreTake(widgetsMutex_, portMAX_DELAY);
-    tft_.fillRect(0, AppConfig::kScreenHeight - 20, AppConfig::kScreenWidth, 20, TFT_BLACK);
-    for (const auto& widget : widgets_) {
-      widget->forceRender(tft_);
+  xSemaphoreTake(widgetsMutex_, portMAX_DELAY);
+  bool handled = false;
+
+  // Dispatch to top-most region first.
+  for (auto it = widgets_.rbegin(); it != widgets_.rend(); ++it) {
+    Widget* widget = it->get();
+    if (widget == nullptr) {
+      continue;
     }
-    xSemaphoreGive(widgetsMutex_);
+    const WidgetConfig& cfg = widget->config();
+    if (rawX < cfg.x || rawY < cfg.y) {
+      continue;
+    }
+    if (rawX >= static_cast<uint16_t>(cfg.x + cfg.w) ||
+        rawY >= static_cast<uint16_t>(cfg.y + cfg.h)) {
+      continue;
+    }
+
+    const uint16_t localX = rawX - cfg.x;
+    const uint16_t localY = rawY - cfg.y;
+    if (widget->onTouch(localX, localY, Widget::TouchType::kTap)) {
+      handled = true;
+      widget->markDirty();
+      break;
+    }
   }
+
+  if (!handled) {
+    // Keep an escape hatch for touch diagnostics.
+    touchOverlay_ = !touchOverlay_;
+    if (!touchOverlay_) {
+      tft_.fillRect(0, AppConfig::kScreenHeight - 20, AppConfig::kScreenWidth, 20, TFT_BLACK);
+      for (const auto& widget : widgets_) {
+        widget->forceRender(tft_);
+      }
+    }
+  }
+  xSemaphoreGive(widgetsMutex_);
 }
 
 bool DisplayManager::loadLayout() {

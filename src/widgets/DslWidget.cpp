@@ -69,6 +69,16 @@ DslWidget::DslWidget(const WidgetConfig& cfg) : Widget(cfg) {
       debugOverride_ = true;
     }
   }
+
+  auto delayIt = config_.settings.find("start_delay_ms");
+  if (delayIt != config_.settings.end()) {
+    const long parsed = delayIt->second.toInt();
+    if (parsed > 0) {
+      startDelayMs_ = static_cast<uint32_t>(parsed);
+    }
+  }
+
+  hasTapHttpAction_ = !parseTapActionType().isEmpty();
 }
 
 DslWidget::~DslWidget() {
@@ -86,6 +96,7 @@ void DslWidget::begin() {
     const uint32_t nowMs = millis();
     lastFetchMs_ = (nowMs > dsl_.pollMs) ? (nowMs - dsl_.pollMs) : 0;
     nextFetchMs_ = nowMs;
+    firstFetchNotBeforeMs_ = nowMs + startDelayMs_;
     firstFetch_ = true;
   }
 }
@@ -110,6 +121,49 @@ bool DslWidget::loadDslModel() {
   }
   status_ = "dsl ok";
   return true;
+}
+
+String DslWidget::parseTapActionType() const {
+  auto it = config_.settings.find("tap_action");
+  if (it == config_.settings.end()) {
+    return String();
+  }
+  String action = it->second;
+  action.trim();
+  action.toLowerCase();
+  if (action == "refresh" || action == "http") {
+    return action;
+  }
+  return String();
+}
+
+bool DslWidget::onTouch(uint16_t localX, uint16_t localY, TouchType type) {
+  (void)localX;
+  (void)localY;
+  if (type != TouchType::kTap || !dslLoaded_) {
+    return false;
+  }
+
+  const String action = parseTapActionType();
+  if (action.isEmpty()) {
+    return false;
+  }
+
+  if (action == "refresh") {
+    forceFetchNow_ = true;
+    return true;
+  }
+
+  if (action == "http") {
+    auto urlIt = config_.settings.find("tap_url");
+    if (urlIt == config_.settings.end() || urlIt->second.isEmpty()) {
+      return false;
+    }
+    tapActionPending_ = true;
+    return true;
+  }
+
+  return false;
 }
 
 String DslWidget::bindRuntimeTemplate(const String& input) const {

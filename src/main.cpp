@@ -876,6 +876,7 @@ void loop() {
         }
       } else {
         displayManager.onTouch(point.x, point.y);
+        waitForTouchRelease();
       }
     }
   }
