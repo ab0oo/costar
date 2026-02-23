@@ -43,8 +43,16 @@ class DslWidget final : public Widget {
   static bool resolveNumericVar(void* ctx, const String& name, float& out);
   bool evaluateAngleExpr(const String& expr, float& outDegrees) const;
   bool executeTapAction(String& errorOut);
-  std::map<String, String> resolveTapHeaders() const;
+  std::map<String, String> resolveTapHeaders(const dsl::TouchAction& action) const;
   String parseTapActionType() const;
+  bool actionIsHttp(const dsl::TouchAction& action) const;
+  bool actionIsRefresh(const dsl::TouchAction& action) const;
+  bool actionIsModal(const dsl::TouchAction& action) const;
+  bool actionIsDismissModal(const dsl::TouchAction& action) const;
+  dsl::TouchAction buildLegacyTouchAction() const;
+  bool triggerTouchAction(const dsl::TouchAction& action);
+  const dsl::ModalSpec* findModalById(const String& id) const;
+  const dsl::ModalSpec* activeModal() const;
 
   bool resolveVariant(const JsonDocument& doc, const String& path,
                       JsonVariantConst& out) const;
@@ -80,9 +88,16 @@ class DslWidget final : public Widget {
   uint32_t firstFetchNotBeforeMs_ = 0;
   uint32_t adsbBackoffUntilMs_ = 0;
   uint8_t adsbFailureStreak_ = 0;
+  uint32_t httpBackoffUntilMs_ = 0;
+  uint8_t httpFailureStreak_ = 0;
   bool hasTapHttpAction_ = false;
   bool tapActionPending_ = false;
   bool forceFetchNow_ = false;
+  bool hasPendingTouchAction_ = false;
+  dsl::TouchAction pendingTouchAction_;
+  bool modalVisible_ = false;
+  String activeModalId_;
+  uint32_t modalDismissAtMs_ = 0;
 
   std::map<String, String> values_;
   std::map<String, String> pathValues_;

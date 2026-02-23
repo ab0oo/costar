@@ -127,3 +127,56 @@ Go utility:
 2. Verify HA direct fetch with auth header from one entity endpoint.
 3. Verify remote MDI icon first-fetch then LittleFS cache hit behavior.
 4. Confirm no regressions in weather/forecast/clock/ADSB widgets.
+
+## 12) Latest Session Status (2026-02-23 night)
+
+### What changed this session
+
+- Added clearer transport-stage logging for HTTP failures in `DslWidgetFetch`:
+  - `request-not-attempted (tls-preflight)`
+  - `request-not-attempted (http-begin)`
+  - `request-not-attempted (transport-gate-timeout)`
+  - `request-skipped (transport-cooldown)`
+  - `transport-failure (no-http-status)`
+- Added conditional template logic in `bindRuntimeTemplate`:
+  - `if_eq`, `if_ne`, `if_true`, `if_gt`, `if_gte`, `if_lt`, `if_lte`
+  - use case now active in `data/dsl/homeassistant_control_card.json`:
+    - icon color yellow when `state == "on"`.
+- Added shared transport gate across JSON fetch and remote icon fetch:
+  - `src/services/HttpTransportGate.*`
+  - `src/services/HttpJsonClient.cpp`
+  - `src/widgets/DslWidgetRender.cpp`
+- Added cache purge on layout reload to reduce post-switch memory pressure:
+  - `clearDslRuntimeCaches()` in `src/widgets/DslWidgetRender.cpp`
+  - called from `src/core/DisplayManager.cpp` after `widgets_.clear()`.
+- Started migration of JSON HTTP path to IDF native client:
+  - `src/services/HttpJsonClient.cpp` now uses `esp_http_client` (not Arduino `HTTPClient`) for `HttpJsonClient::get`.
+  - keeps existing `HttpJsonClient` interface and metadata outputs.
+
+### Current known instability / open issues
+
+- Device still shows intermittent ESP-side connect/TLS failures (`code=-1`) under layout switches + mixed source polling.
+- During initial `esp_http_client` migration, startup failed with `UNKNOWN ERROR`; patched by:
+  - using CA bundle attach: `arduino_esp_crt_bundle_attach`
+  - restored CN checks (`skip_cert_common_name_check = false`)
+  - raised outage threshold from 3 to 6 to avoid startup black-hole.
+- Need fresh on-device validation after this patch set (not yet confirmed stable by user).
+
+### Important behavior changes to remember
+
+- HTTP widget cooldown tuning now favors faster retries for transport statuses:
+  - `-2` ~ 5s
+  - `-3` ~ 4s
+  - other transport errors exponential up to 30s (not 120s blackout).
+- Transport outage cooldown still exists globally in `HttpJsonClient` (12s window once threshold reached).
+
+### Next actions (first thing next session)
+
+1. Flash latest firmware and validate boot + first fetch cycle:
+   - Geo startup calls
+   - HA cards
+   - weather/forecast after layout switch.
+2. Capture first failure logs with new `esp_http_client` error reason strings.
+3. Migrate remote icon fetch path (`DslWidgetRender` `fetchRemoteIconToFile`) to `esp_http_client` too, so JSON + icons share same backend.
+4. Implement a single network worker queue for all outbound requests (JSON + icon/raster fetch) with deterministic scheduling.
+5. After transport is stable, continue runtime array-driven rendering work (`repeat_over` style DSL feature).

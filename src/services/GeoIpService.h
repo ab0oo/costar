@@ -18,7 +18,8 @@ class GeoIpService {
 
  private:
   bool fetchGeoForName(const String& name, float& lat, float& lon, String& tz,
-                       int& offsetMinutes, bool& hasOffset, String& label) const;
+                       int& offsetMinutes, bool& hasOffset, String& label,
+                       String* errorOut = nullptr) const;
   bool fetchTimezoneForLatLon(float lat, float lon, String& tz, int& offsetMinutes,
                               bool& hasOffset) const;
   bool saveManual(float lat, float lon, const String& tz, int offsetMinutes,

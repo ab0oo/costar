@@ -1,0 +1,176 @@
+{
+  "version": 1,
+  "data": {
+    "source": "http",
+    "url": "{{setting.ha_base_url}}/api/states/{{setting.entity_id}}",
+    "headers": {
+      "Authorization": "Bearer {{setting.ha_token}}",
+      "Content-Type": "application/json"
+    },
+    "poll_ms": 30000,
+    "fields": {
+      "name": "attributes.friendly_name",
+      "state": "state",
+      "ha_icon": "attributes.icon",
+      "when": {
+        "path": "last_updated",
+        "format": {
+          "tz": "local",
+          "time_format": "%H:%M"
+        }
+      }
+    }
+  },
+  "ui": {
+    "title": "HA Speaker Card",
+    "modals": [
+      {
+        "id": "speaker_details",
+        "title": "{{name}}",
+        "text": "State: {{state}}\nUpdated: {{when}}\nTap anywhere to close.",
+        "x": 8,
+        "y": 18,
+        "w": 90,
+        "h": 80,
+        "font": 1,
+        "line_height": 10,
+        "max_lines": 6,
+        "bg": "#101820",
+        "border": "#4A90E2",
+        "title_color": "#FFFFFF",
+        "text_color": "#C7D2D9"
+      }
+    ],
+    "touch_regions": [
+      {
+        "x": 4,
+        "y": 4,
+        "w": 98,
+        "h": 24,
+        "on_touch": {
+          "action": "modal",
+          "modal_id": "speaker_details",
+          "dismiss_ms": 10000
+        }
+      },
+      {
+        "x": 4,
+        "y": 84,
+        "w": 48,
+        "h": 32,
+        "on_touch": {
+          "action": "http",
+          "url": "{{setting.ha_base_url}}/api/services/media_player/volume_down",
+          "method": "POST",
+          "content_type": "application/json",
+          "headers": {
+            "Authorization": "Bearer {{setting.ha_token}}"
+          },
+          "body": "{\"entity_id\":\"{{setting.entity_id}}\"}"
+        }
+      },
+      {
+        "x": 54,
+        "y": 84,
+        "w": 48,
+        "h": 32,
+        "on_touch": {
+          "action": "http",
+          "url": "{{setting.ha_base_url}}/api/services/media_player/volume_up",
+          "method": "POST",
+          "content_type": "application/json",
+          "headers": {
+            "Authorization": "Bearer {{setting.ha_token}}"
+          },
+          "body": "{\"entity_id\":\"{{setting.entity_id}}\"}"
+        }
+      }
+    ],
+    "nodes": [
+      {
+        "type": "label",
+        "x": 4,
+        "y": 4,
+        "w": 98,
+        "h": 16,
+        "wrap": true,
+        "max_lines": 2,
+        "overflow": "ellipsis",
+        "font": 1,
+        "color": "#C7D2D9",
+        "text": "{{name}}"
+      },
+      {
+        "type": "line",
+        "x": 4,
+        "y": 28,
+        "x2": 102,
+        "y2": 28,
+        "thickness": 1,
+        "color": "#1E2B3D"
+      },
+      {
+        "type": "icon",
+        "x": 6,
+        "y": 36,
+        "w": 24,
+        "h": 24,
+        "path": "http://vps.gorkos.net:8085/mdi?icon={{ha_icon}}&size=24&color=7CE2FF"
+      },
+      {
+        "type": "label",
+        "x": 36,
+        "y": 40,
+        "font": 2,
+        "color": "#7CE2FF",
+        "text": "{{state}}"
+      },
+      {
+        "type": "line",
+        "x": 4,
+        "y": 66,
+        "x2": 102,
+        "y2": 66,
+        "thickness": 1,
+        "color": "#1E2B3D"
+      },
+      {
+        "type": "label",
+        "x": 4,
+        "y": 72,
+        "font": 1,
+        "color": "#6CA0C8",
+        "text": "Updated {{when}}"
+      },
+      {
+        "type": "line",
+        "x": 53,
+        "y": 84,
+        "x2": 53,
+        "y2": 116,
+        "thickness": 1,
+        "color": "#1E2B3D"
+      },
+      {
+        "type": "label",
+        "x": 28,
+        "y": 98,
+        "align": "center",
+        "valign": "middle",
+        "font": 2,
+        "color": "#FFAA66",
+        "text": "VOL-"
+      },
+      {
+        "type": "label",
+        "x": 78,
+        "y": 98,
+        "align": "center",
+        "valign": "middle",
+        "font": 2,
+        "color": "#66FFAA",
+        "text": "VOL+"
+      }
+    ]
+  }
+}

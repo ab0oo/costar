@@ -6,6 +6,7 @@
 
 #include "AppConfig.h"
 #include "core/WidgetFactory.h"
+#include "widgets/DslRuntimeCaches.h"
 
 DisplayManager::DisplayManager(TFT_eSPI& tft, const String& layoutPath)
     : tft_(tft), layoutPath_(layoutPath) {
@@ -126,6 +127,7 @@ bool DisplayManager::loadLayout() {
 
   xSemaphoreTake(widgetsMutex_, portMAX_DELAY);
   widgets_.clear();
+  clearDslRuntimeCaches();
 
   fs::File manifest = LittleFS.open(layoutPath_, FILE_READ);
   if (!manifest || manifest.isDirectory()) {

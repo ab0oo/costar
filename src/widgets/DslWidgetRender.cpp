@@ -1,4 +1,5 @@
 #include "widgets/DslWidget.h"
+#include "widgets/DslRuntimeCaches.h"
 
 #include <algorithm>
 #include <math.h>
@@ -12,6 +13,8 @@
 #include <LittleFS.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+
+#include "services/HttpTransportGate.h"
 
 namespace {
 struct IconCacheEntry {
@@ -154,6 +157,10 @@ uint32_t parseRetryAfterMs(const String& retryAfter) {
 
 bool fetchRemoteIconToFile(const String& url, const String& outPath, int16_t w, int16_t h) {
   if (WiFi.status() != WL_CONNECTED) {
+    return false;
+  }
+  httpgate::Guard gate(12000);
+  if (!gate.locked()) {
     return false;
   }
 
@@ -515,6 +522,12 @@ std::vector<String> wrapLabelLines(Gfx& gfx, const String& text, uint8_t font,
 }
 }  // namespace
 
+void clearDslRuntimeCaches() {
+  sIconCache.clear();
+  sIconCache.shrink_to_fit();
+  sRemoteIconRetryAfterMs.clear();
+}
+
 void DslWidget::render(TFT_eSPI& tft) {
   auto drawPanelTo = [&](auto& gfx) {
     gfx.fillRect(0, 0, config_.w, config_.h, TFT_BLACK);
@@ -822,6 +835,82 @@ void DslWidget::render(TFT_eSPI& tft) {
   }
   };
 
+  auto renderModal = [&](auto& gfx, int16_t baseX, int16_t baseY, int16_t clipW, int16_t clipH) {
+    const dsl::ModalSpec* modal = activeModal();
+    if (modal == nullptr) {
+      return;
+    }
+
+    int16_t mw = modal->w > 0 ? modal->w : static_cast<int16_t>(clipW - 16);
+    int16_t mh = modal->h > 0 ? modal->h : static_cast<int16_t>(clipH - 16);
+    if (mw < 40) mw = 40;
+    if (mh < 30) mh = 30;
+    if (mw > clipW - 4) mw = clipW - 4;
+    if (mh > clipH - 4) mh = clipH - 4;
+
+    int16_t mx = modal->x >= 0 ? modal->x : static_cast<int16_t>((clipW - mw) / 2);
+    int16_t my = modal->y >= 0 ? modal->y : static_cast<int16_t>((clipH - mh) / 2);
+    if (mx < 0) mx = 0;
+    if (my < 0) my = 0;
+    if (mx + mw > clipW) mx = clipW - mw;
+    if (my + mh > clipH) my = clipH - mh;
+    if (mx < 0) mx = 0;
+    if (my < 0) my = 0;
+
+    const int16_t x = baseX + mx;
+    const int16_t y = baseY + my;
+    const uint8_t bodyFont = safeFontId(modal->font);
+    const uint8_t titleFont = safeFontId(modal->font > 1 ? static_cast<uint8_t>(modal->font - 1) : 1);
+
+    gfx.fillRect(x, y, mw, mh, modal->bgColor565);
+    gfx.drawRect(x, y, mw, mh, modal->borderColor565);
+
+    int16_t cursorY = y + 4;
+    if (!modal->title.isEmpty()) {
+      gfx.setTextColor(modal->titleColor565, modal->bgColor565);
+      gfx.setTextDatum(TL_DATUM);
+      safeDrawString(gfx, bindTemplate(modal->title), x + 4, cursorY, titleFont);
+      cursorY += gfx.fontHeight(titleFont) + 2;
+      gfx.drawLine(x + 2, cursorY, x + mw - 3, cursorY, modal->borderColor565);
+      cursorY += 3;
+    }
+
+    gfx.setTextColor(modal->textColor565, modal->bgColor565);
+    const String body = bindTemplate(modal->text);
+    const int16_t textW = mw - 8;
+    int16_t lineHeight = modal->lineHeight > 0 ? modal->lineHeight : gfx.fontHeight(bodyFont);
+    if (lineHeight <= 0) {
+      lineHeight = 10;
+    }
+    int16_t maxLines = modal->maxLines > 0 ? modal->maxLines : 0;
+    const int16_t availH = (y + mh - 4) - cursorY;
+    if (availH > 0) {
+      const int16_t fromH = availH / lineHeight;
+      if (fromH > 0) {
+        maxLines = (maxLines > 0) ? std::min(maxLines, fromH) : fromH;
+      }
+    }
+
+    std::vector<String> lines = wrapLabelLines(gfx, body, bodyFont, textW);
+    bool truncated = false;
+    if (maxLines > 0 && lines.size() > static_cast<size_t>(maxLines)) {
+      lines.resize(static_cast<size_t>(maxLines));
+      truncated = true;
+    }
+    if (truncated && !lines.empty()) {
+      lines.back() = ellipsizeToWidth(gfx, lines.back(), bodyFont, textW);
+    }
+
+    gfx.setTextDatum(TL_DATUM);
+    for (size_t i = 0; i < lines.size(); ++i) {
+      if (lines[i].isEmpty()) {
+        continue;
+      }
+      const int16_t ly = cursorY + static_cast<int16_t>(i) * lineHeight;
+      safeDrawString(gfx, lines[i], x + 4, ly, bodyFont);
+    }
+  };
+
   if (!dslLoaded_) {
     drawPanel(tft, String("DSL"));
     const int16_t cx = config_.x + config_.w - 6;
@@ -839,14 +928,17 @@ void DslWidget::render(TFT_eSPI& tft) {
     if (spriteReady_) {
       drawPanelTo(*sprite_);
       renderNodes(*sprite_, 0, 0, config_.w, config_.h);
+      renderModal(*sprite_, 0, 0, config_.w, config_.h);
       sprite_->pushSprite(config_.x, config_.y);
     } else {
       drawPanel(tft, dslLoaded_ ? dsl_.title : String("DSL"));
       renderNodes(tft, config_.x, config_.y, config_.w, config_.h);
+      renderModal(tft, config_.x, config_.y, config_.w, config_.h);
     }
   } else {
     drawPanel(tft, dslLoaded_ ? dsl_.title : String("DSL"));
     renderNodes(tft, config_.x, config_.y, config_.w, config_.h);
+    renderModal(tft, config_.x, config_.y, config_.w, config_.h);
   }
 
   const int16_t cx = config_.x + config_.w - 6;

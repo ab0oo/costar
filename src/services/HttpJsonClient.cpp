@@ -1,209 +1,19 @@
 #include "services/HttpJsonClient.h"
+#include "services/HttpTransportGate.h"
 
-#include <HTTPClient.h>
 #include <WiFi.h>
-#include <WiFiClient.h>
-#include <WiFiClientSecure.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/semphr.h>
 #include <cstdlib>
+#include <esp_crt_bundle.h>
+#include <esp_err.h>
 #include <esp_heap_caps.h>
+#include <esp_http_client.h>
 
 namespace {
-struct ParsedUrl {
-  String scheme;
-  String host;
-  uint16_t port = 0;
-  String path;
-};
-
-bool parseUrl(const String& url, ParsedUrl& out) {
-  const int schemeSep = url.indexOf("://");
-  if (schemeSep <= 0) {
-    return false;
-  }
-  out.scheme = url.substring(0, schemeSep);
-  const int hostStart = schemeSep + 3;
-  int pathStart = url.indexOf('/', hostStart);
-  if (pathStart < 0) {
-    pathStart = url.length();
-    out.path = "/";
-  } else {
-    out.path = url.substring(pathStart);
-  }
-  if (out.path.isEmpty()) {
-    out.path = "/";
-  }
-
-  const String hostPort = url.substring(hostStart, pathStart);
-  if (hostPort.isEmpty()) {
-    return false;
-  }
-  const int colon = hostPort.lastIndexOf(':');
-  if (colon > 0) {
-    const String maybePort = hostPort.substring(colon + 1);
-    bool numeric = !maybePort.isEmpty();
-    for (size_t i = 0; i < maybePort.length(); ++i) {
-      if (maybePort[i] < '0' || maybePort[i] > '9') {
-        numeric = false;
-        break;
-      }
-    }
-    if (numeric) {
-      out.host = hostPort.substring(0, colon);
-      out.port = static_cast<uint16_t>(maybePort.toInt());
-    } else {
-      out.host = hostPort;
-    }
-  } else {
-    out.host = hostPort;
-  }
-
-  if (out.port == 0) {
-    out.port = out.scheme == "https" ? 443 : 80;
-  }
-  return !out.host.isEmpty();
-}
-
-bool manualHttpsGetJson(const String& url, const std::map<String, String>* extraHeaders,
-                        String& responseBody, int& statusCode, String& contentType,
-                        int& contentLength) {
-  ParsedUrl parsed;
-  if (!parseUrl(url, parsed) || parsed.scheme != "https") {
-    return false;
-  }
-
-  WiFiClientSecure client;
-  client.setInsecure();
-  client.setTimeout(9000);
-  if (!client.connect(parsed.host.c_str(), parsed.port, 2000)) {
-    return false;
-  }
-
-  String req = "GET " + parsed.path + " HTTP/1.1\r\n";
-  req += "Host: " + parsed.host + "\r\n";
-  req += "Accept: application/json\r\n";
-  req += "User-Agent: CoStar-ESP32/1.0\r\n";
-  req += "Accept-Encoding: identity\r\n";
-  req += "Connection: close\r\n";
-  if (extraHeaders != nullptr) {
-    for (const auto& kv : *extraHeaders) {
-      String name = kv.first;
-      name.trim();
-      if (name.isEmpty() || name.indexOf('\r') >= 0 || name.indexOf('\n') >= 0) {
-        continue;
-      }
-      String value = kv.second;
-      value.replace("\r", "");
-      value.replace("\n", "");
-      if (value.isEmpty()) {
-        continue;
-      }
-      req += name + ": " + value + "\r\n";
-    }
-  }
-  req += "\r\n";
-  client.print(req);
-
-  String statusLine = client.readStringUntil('\n');
-  statusLine.trim();
-  if (!statusLine.startsWith("HTTP/")) {
-    client.stop();
-    return false;
-  }
-  const int firstSpace = statusLine.indexOf(' ');
-  if (firstSpace < 0) {
-    client.stop();
-    return false;
-  }
-  const int secondSpace = statusLine.indexOf(' ', firstSpace + 1);
-  const String codeText =
-      (secondSpace > firstSpace) ? statusLine.substring(firstSpace + 1, secondSpace)
-                                 : statusLine.substring(firstSpace + 1);
-  statusCode = codeText.toInt();
-
-  contentType = "";
-  contentLength = -1;
-  for (;;) {
-    String line = client.readStringUntil('\n');
-    line.trim();
-    if (line.isEmpty()) {
-      break;
-    }
-    const int sep = line.indexOf(':');
-    if (sep <= 0) {
-      continue;
-    }
-    String key = line.substring(0, sep);
-    String value = line.substring(sep + 1);
-    key.trim();
-    value.trim();
-    key.toLowerCase();
-    if (key == "content-type") {
-      contentType = value;
-    } else if (key == "content-length") {
-      contentLength = value.toInt();
-    }
-  }
-
-  responseBody = "";
-  const uint32_t startMs = millis();
-  uint32_t lastByteMs = startMs;
-  while ((client.connected() || client.available() > 0) && (millis() - startMs) < 12000) {
-    while (client.available() > 0) {
-      const int ch = client.read();
-      if (ch < 0) {
-        break;
-      }
-      responseBody += static_cast<char>(ch);
-      lastByteMs = millis();
-    }
-    if ((millis() - lastByteMs) > 800) {
-      break;
-    }
-    delay(2);
-  }
-  client.stop();
-  return true;
-}
-
-String readPayloadFromStream(HTTPClient& http) {
-  WiFiClient* stream = http.getStreamPtr();
-  if (stream == nullptr) {
-    return String();
-  }
-
-  String payload;
-  const int sizeHint = http.getSize();
-  if (sizeHint > 0) {
-    payload.reserve(sizeHint);
-  }
-
-  const uint32_t timeoutMs = 8000;
-  const uint32_t startMs = millis();
-  uint32_t lastByteMs = startMs;
-
-  while ((http.connected() || stream->available() > 0) && (millis() - startMs) < timeoutMs) {
-    const size_t availableBytes = stream->available();
-    if (availableBytes > 0) {
-      char buf[128];
-      const size_t toRead = availableBytes > sizeof(buf) ? sizeof(buf) : availableBytes;
-      const int readCount = stream->readBytes(buf, toRead);
-      if (readCount > 0) {
-        payload.concat(buf, readCount);
-        lastByteMs = millis();
-      }
-      continue;
-    }
-
-    if ((millis() - lastByteMs) > 600) {
-      break;
-    }
-    delay(5);
-  }
-
-  return payload;
-}
+constexpr uint32_t kMinLargestBlockForTls = 14000U;
+constexpr uint8_t kTransportFailureRecoveryThreshold = 6U;
+constexpr uint32_t kRecoveryAttemptCooldownMs = 15000U;
+constexpr uint32_t kTransportOutageCooldownMs = 12000U;
+constexpr uint8_t kTransportOutageThreshold = 6U;
 
 String heapDiag() {
   const uint32_t freeHeap = ESP.getFreeHeap();
@@ -251,91 +61,141 @@ String compactPreview(const String& payload, size_t maxLen = 120) {
   return out;
 }
 
-String extractHostForLog(const String& url) {
-  int start = url.indexOf("://");
-  start = (start >= 0) ? (start + 3) : 0;
-  int end = url.indexOf('/', start);
-  if (end < 0) {
-    end = url.length();
-  }
-  String hostPort = url.substring(start, end);
-  const int at = hostPort.lastIndexOf('@');
-  if (at >= 0) {
-    hostPort = hostPort.substring(at + 1);
-  }
-  if (hostPort.startsWith("[")) {
-    const int rb = hostPort.indexOf(']');
-    if (rb > 0) {
-      return hostPort.substring(1, rb);
-    }
-  }
-  const int colon = hostPort.indexOf(':');
-  if (colon > 0) {
-    return hostPort.substring(0, colon);
-  }
-  return hostPort;
-}
+struct HttpCapture {
+  String body;
+  String contentType;
+  String contentLength;
+  String transferEncoding;
+  String contentEncoding;
+  String location;
+  String retryAfter;
+};
 
-String buildUrlWithResolvedIp(const String& url, const String& host, const String& ip) {
-  if (host.isEmpty() || ip.isEmpty()) {
-    return url;
+esp_err_t httpEventHandler(esp_http_client_event_t* evt) {
+  if (evt == nullptr || evt->user_data == nullptr) {
+    return ESP_OK;
   }
-  int schemeEnd = url.indexOf("://");
-  int hostStart = (schemeEnd >= 0) ? (schemeEnd + 3) : 0;
-  int pathStart = url.indexOf('/', hostStart);
-  if (pathStart < 0) {
-    pathStart = url.length();
-  }
-  const String hostPort = url.substring(hostStart, pathStart);
-  String portPart;
-  const int colon = hostPort.lastIndexOf(':');
-  const bool isHttps = url.startsWith("https://");
-  if (colon > 0) {
-    const String maybePort = hostPort.substring(colon + 1);
-    bool numeric = !maybePort.isEmpty();
-    for (size_t i = 0; i < maybePort.length(); ++i) {
-      if (maybePort[i] < '0' || maybePort[i] > '9') {
-        numeric = false;
+  HttpCapture* cap = static_cast<HttpCapture*>(evt->user_data);
+  switch (evt->event_id) {
+    case HTTP_EVENT_ON_HEADER: {
+      if (evt->header_key == nullptr || evt->header_value == nullptr) {
         break;
       }
+      String key(evt->header_key);
+      key.toLowerCase();
+      const String value(evt->header_value);
+      if (key == "content-type") {
+        cap->contentType = value;
+      } else if (key == "content-length") {
+        cap->contentLength = value;
+      } else if (key == "transfer-encoding") {
+        cap->transferEncoding = value;
+      } else if (key == "content-encoding") {
+        cap->contentEncoding = value;
+      } else if (key == "location") {
+        cap->location = value;
+      } else if (key == "retry-after") {
+        cap->retryAfter = value;
+      }
+      break;
     }
-    if (numeric) {
-      portPart = ":" + maybePort;
+    case HTTP_EVENT_ON_DATA: {
+      if (evt->data != nullptr && evt->data_len > 0) {
+        cap->body.concat(static_cast<const char*>(evt->data), evt->data_len);
+      }
+      break;
     }
-  } else {
-    portPart = isHttps ? ":443" : ":80";
+    default:
+      break;
   }
-  String out = url.substring(0, hostStart);
-  out += ip;
-  out += portPart;
-  out += url.substring(pathStart);
-  return out;
+  return ESP_OK;
 }
 
-SemaphoreHandle_t sHttpMutex = nullptr;
+uint8_t sTransportFailureStreak = 0;
+uint32_t sLastRecoveryAttemptMs = 0;
+uint32_t sTransportOutageUntilMs = 0;
 
-class HttpMutexGuard {
- public:
-  explicit HttpMutexGuard(uint32_t timeoutMs) {
-    if (sHttpMutex == nullptr) {
-      sHttpMutex = xSemaphoreCreateMutex();
-    }
-    if (sHttpMutex != nullptr) {
-      locked_ = (xSemaphoreTake(sHttpMutex, pdMS_TO_TICKS(timeoutMs)) == pdTRUE);
+void resetTransportFailureStreak() { sTransportFailureStreak = 0; }
+
+void noteTransportFailureAndMaybeRecover() {
+  if (sTransportFailureStreak < 255) {
+    ++sTransportFailureStreak;
+  }
+  if (sTransportFailureStreak >= kTransportOutageThreshold) {
+    const uint32_t nowMs = millis();
+    const uint32_t nextUntil = nowMs + kTransportOutageCooldownMs;
+    if (static_cast<int32_t>(nextUntil - sTransportOutageUntilMs) > 0) {
+      sTransportOutageUntilMs = nextUntil;
     }
   }
-
-  ~HttpMutexGuard() {
-    if (locked_ && sHttpMutex != nullptr) {
-      xSemaphoreGive(sHttpMutex);
-    }
+  if (sTransportFailureStreak < kTransportFailureRecoveryThreshold) {
+    return;
   }
 
-  bool locked() const { return locked_; }
+  const uint32_t nowMs = millis();
+  if (static_cast<int32_t>(nowMs - sLastRecoveryAttemptMs) < static_cast<int32_t>(kRecoveryAttemptCooldownMs)) {
+    return;
+  }
 
- private:
-  bool locked_ = false;
-};
+  sLastRecoveryAttemptMs = nowMs;
+  Serial.printf("[http] transport failure streak=%u, forcing WiFi reconnect\n",
+                static_cast<unsigned>(sTransportFailureStreak));
+  WiFi.disconnect(false, false);
+  delay(60);
+  WiFi.reconnect();
+}
+
+bool inTransportOutageCooldown(String* errorMessage, HttpFetchMeta* meta, uint32_t startMs) {
+  if (sTransportOutageUntilMs == 0) {
+    return false;
+  }
+  const uint32_t nowMs = millis();
+  if (static_cast<int32_t>(nowMs - sTransportOutageUntilMs) >= 0) {
+    sTransportOutageUntilMs = 0;
+    return false;
+  }
+  const uint32_t remainingMs = sTransportOutageUntilMs - nowMs;
+  if (meta != nullptr) {
+    meta->statusCode = -3;
+    meta->transportReason = "transport-cooldown";
+    meta->elapsedMs = millis() - startMs;
+  }
+  if (errorMessage != nullptr) {
+    *errorMessage = "Transport cooldown active (" + String(remainingMs) + " ms remaining), " +
+                    heapDiag();
+  }
+  return true;
+}
+
+void clearTransportOutageCooldown() {
+  sTransportOutageUntilMs = 0;
+}
+
+void clearTransportFailureState() {
+  resetTransportFailureStreak();
+  clearTransportOutageCooldown();
+}
+
+void noteSuccessfulHttpResponse() {
+  clearTransportFailureState();
+}
+
+void noteTransportFailureAndReason(const String& transportReason) {
+  noteTransportFailureAndMaybeRecover();
+  if (transportReason.length() > 0) {
+    Serial.printf("[http] transport fail streak=%u reason='%s'\n",
+                  static_cast<unsigned>(sTransportFailureStreak), transportReason.c_str());
+  }
+}
+
+void noteBeginFailureAndReason(const char* reason) {
+  noteTransportFailureAndMaybeRecover();
+  if (reason != nullptr && reason[0] != '\0') {
+    Serial.printf("[http] begin fail streak=%u reason='%s'\n",
+                  static_cast<unsigned>(sTransportFailureStreak), reason);
+  }
+}
+
 }  // namespace
 
 bool HttpJsonClient::get(const String& url, JsonDocument& outDoc,
@@ -345,6 +205,9 @@ bool HttpJsonClient::get(const String& url, JsonDocument& outDoc,
     *meta = HttpFetchMeta();
   }
   const uint32_t startMs = millis();
+  if (inTransportOutageCooldown(errorMessage, meta, startMs)) {
+    return false;
+  }
 
   if (WiFi.status() != WL_CONNECTED) {
     if (errorMessage != nullptr) {
@@ -353,59 +216,56 @@ bool HttpJsonClient::get(const String& url, JsonDocument& outDoc,
     return false;
   }
 
-  HttpMutexGuard guard(12000);
+  if (url.startsWith("https://")) {
+    const uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    if (largest < kMinLargestBlockForTls) {
+      if (meta != nullptr) {
+        meta->statusCode = -2;
+        meta->transportReason = "tls-preflight-low-largest-block";
+        meta->elapsedMs = millis() - startMs;
+      }
+      if (errorMessage != nullptr) {
+        *errorMessage = "TLS preflight blocked: largest block too small (" + String(largest) +
+                        " < " + String(kMinLargestBlockForTls) + "), " + heapDiag();
+      }
+      return false;
+    }
+  }
+
+  httpgate::Guard guard(7000);
   if (!guard.locked()) {
     if (errorMessage != nullptr) {
-      *errorMessage = "HTTP busy (mutex timeout), " + heapDiag();
+      *errorMessage = "HTTP busy (transport gate timeout), " + heapDiag();
     }
     return false;
   }
 
-  HTTPClient http;
-  WiFiClientSecure secureClient;
-  int statusCode = 0;
-  const String host = extractHostForLog(url);
-  IPAddress resolved;
-  String connectUrl = url;
-  bool useHostHeader = false;
-  if (!host.isEmpty() && WiFi.hostByName(host.c_str(), resolved)) {
-    const String ipText = resolved.toString();
-    if (ipText.length() > 0) {
-      connectUrl = buildUrlWithResolvedIp(url, host, ipText);
-      useHostHeader = (connectUrl != url);
+  HttpCapture cap;
+  esp_http_client_config_t cfg = {};
+  cfg.url = url.c_str();
+  cfg.timeout_ms = 3500;
+  cfg.disable_auto_redirect = false;
+  cfg.max_redirection_count = 5;
+  cfg.event_handler = httpEventHandler;
+  cfg.user_data = &cap;
+  cfg.buffer_size = 1024;
+  cfg.buffer_size_tx = 512;
+  cfg.skip_cert_common_name_check = false;
+  cfg.crt_bundle_attach = arduino_esp_crt_bundle_attach;
+
+  esp_http_client_handle_t client = esp_http_client_init(&cfg);
+  if (client == nullptr) {
+    noteBeginFailureAndReason("esp_http_client_init failed");
+    if (errorMessage != nullptr) {
+      *errorMessage = "HTTP init failed";
     }
+    return false;
   }
-  if (connectUrl.startsWith("https://")) {
-    secureClient.setInsecure();
-    if (!http.begin(secureClient, connectUrl)) {
-      if (errorMessage != nullptr) {
-        *errorMessage = "HTTP begin failed";
-      }
-      return false;
-    }
-  } else {
-    if (!http.begin(connectUrl)) {
-      if (errorMessage != nullptr) {
-        *errorMessage = "HTTP begin failed";
-      }
-      return false;
-    }
-  }
-  http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
-  http.setRedirectLimit(5);
-  http.setConnectTimeout(4500);
-  http.setTimeout(6500);
-  http.useHTTP10(true);
-  http.setReuse(false);
-  const char* headerKeys[] = {"Content-Type", "Content-Length", "Transfer-Encoding",
-                              "Location", "Content-Encoding", "Retry-After"};
-  http.collectHeaders(headerKeys, 6);
-  http.addHeader("Accept", "application/json");
-  http.addHeader("User-Agent", "CoStar-ESP32/1.0");
-  http.addHeader("Accept-Encoding", "identity");
-  if (useHostHeader && !host.isEmpty()) {
-    http.addHeader("Host", host);
-  }
+
+  esp_http_client_set_method(client, HTTP_METHOD_GET);
+  esp_http_client_set_header(client, "Accept", "application/json");
+  esp_http_client_set_header(client, "User-Agent", "CoStar-ESP32/1.0");
+  esp_http_client_set_header(client, "Accept-Encoding", "identity");
   if (extraHeaders != nullptr) {
     for (const auto& kv : *extraHeaders) {
       String name = kv.first;
@@ -422,82 +282,60 @@ bool HttpJsonClient::get(const String& url, JsonDocument& outDoc,
       if (value.isEmpty()) {
         continue;
       }
-      http.addHeader(name, value);
+      esp_http_client_set_header(client, name.c_str(), value.c_str());
     }
   }
-  statusCode = http.GET();
+
+  const esp_err_t performErr = esp_http_client_perform(client);
+  const int statusCode = (performErr == ESP_OK) ? esp_http_client_get_status_code(client) : -1;
+  const int contentLengthBytes = esp_http_client_get_content_length(client);
 
   if (meta != nullptr) {
     meta->statusCode = statusCode;
     meta->elapsedMs = millis() - startMs;
   }
 
-  if (statusCode <= 0) {
-    const String transportReason = http.errorToString(statusCode);
+  if (performErr != ESP_OK || statusCode <= 0) {
+    String transportReason;
+    if (performErr == ESP_OK) {
+      transportReason = "no-http-status";
+    } else {
+      transportReason = String(esp_err_to_name(performErr));
+      if (transportReason == "UNKNOWN ERROR") {
+        transportReason += " (0x" + String(static_cast<unsigned long>(performErr), HEX) + ")";
+      }
+    }
+    noteTransportFailureAndReason(transportReason);
     if (meta != nullptr) {
       meta->transportReason = transportReason;
     }
     if (errorMessage != nullptr) {
-      *errorMessage = "HTTP transport failure (no HTTP response) code=" +
-                      String(statusCode) + " reason='" + transportReason + "', " + heapDiag();
+      *errorMessage = "HTTP transport failure (no HTTP status code) code=" +
+                      String(statusCode) + " reason='" + transportReason +
+                      "' (may fail before request reaches server), " + heapDiag();
     }
-    if (url.startsWith("https://")) {
-      String fallbackBody;
-      int fallbackStatus = 0;
-      String fallbackType;
-      int fallbackLength = -1;
-      if (manualHttpsGetJson(url, extraHeaders, fallbackBody, fallbackStatus, fallbackType,
-                             fallbackLength)) {
-        if (meta != nullptr) {
-          meta->statusCode = fallbackStatus;
-          meta->contentType = fallbackType;
-          meta->contentLengthBytes = fallbackLength;
-          meta->payloadBytes = fallbackBody.length();
-          meta->elapsedMs = millis() - startMs;
-        }
-        if (fallbackStatus >= 200 && fallbackStatus < 300 && !fallbackBody.isEmpty()) {
-          String jsonBody = extractLikelyJson(fallbackBody);
-          const DeserializationError derr = deserializeJson(outDoc, jsonBody);
-          if (!derr) {
-            if (errorMessage != nullptr) {
-              *errorMessage = "";
-            }
-            http.end();
-            return true;
-          }
-          if (errorMessage != nullptr) {
-            *errorMessage = "manual https fallback JSON parse failed (" + String(derr.c_str()) +
-                            "), bytes=" + String(fallbackBody.length());
-          }
-        } else if (errorMessage != nullptr) {
-          *errorMessage = "manual https fallback status=" + String(fallbackStatus) + " preview='" +
-                          compactPreview(fallbackBody) + "'";
-        }
-      }
-    }
-    http.end();
+    esp_http_client_cleanup(client);
     return false;
   }
 
-  const String contentType = http.header("Content-Type");
-  const String contentLengthHeader = http.header("Content-Length");
-  const String transferEncodingHeader = http.header("Transfer-Encoding");
-  const String contentEncodingHeader = http.header("Content-Encoding");
-  const String retryAfter = http.header("Retry-After");
-  int contentLengthBytes = -1;
-  if (!contentLengthHeader.isEmpty()) {
+  noteSuccessfulHttpResponse();
+
+  const String contentType = cap.contentType;
+  const String contentLengthHeader = cap.contentLength;
+  const String transferEncodingHeader = cap.transferEncoding;
+  const String contentEncodingHeader = cap.contentEncoding;
+  const String retryAfter = cap.retryAfter;
+  if (contentLengthBytes < 0 && !contentLengthHeader.isEmpty()) {
     char* endPtr = nullptr;
     const long parsed = strtol(contentLengthHeader.c_str(), &endPtr, 10);
     if (endPtr != nullptr && *endPtr == '\0' && parsed >= 0) {
-      contentLengthBytes = static_cast<int>(parsed);
+      // keep parsed header value only if IDF content-length unavailable
+      (void)parsed;
     }
   }
 
   if (statusCode < 200 || statusCode >= 300) {
-    String errorPayload = http.getString();
-    if (errorPayload.length() == 0) {
-      errorPayload = readPayloadFromStream(http);
-    }
+    String errorPayload = cap.body;
     if (meta != nullptr) {
       meta->contentType = contentType;
       meta->contentLengthBytes = contentLengthBytes;
@@ -507,19 +345,16 @@ bool HttpJsonClient::get(const String& url, JsonDocument& outDoc,
     }
     if (errorMessage != nullptr) {
       *errorMessage = "HTTP status " + String(statusCode) + ", location='" +
-                      http.header("Location") + "', retry-after='" + retryAfter +
+                      cap.location + "', retry-after='" + retryAfter +
                       "', preview='" + compactPreview(errorPayload, 120) + "', " +
                       heapDiag();
     }
-    http.end();
+    esp_http_client_cleanup(client);
     return false;
   }
 
-  String payload = http.getString();
-  if (payload.length() == 0) {
-    payload = readPayloadFromStream(http);
-  }
-  http.end();
+  String payload = cap.body;
+  esp_http_client_cleanup(client);
 
   if (meta != nullptr) {
     meta->contentType = contentType;

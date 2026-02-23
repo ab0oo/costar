@@ -23,6 +23,42 @@ struct FieldSpec {
   FormatSpec format;
 };
 
+struct TouchAction {
+  String action;
+  String url;
+  String method = "POST";
+  String body;
+  String contentType = "application/json";
+  String modalId;
+  uint32_t dismissMs = 0;
+  std::map<String, String> headers;
+};
+
+struct TouchRegion {
+  int16_t x = 0;
+  int16_t y = 0;
+  int16_t w = 0;
+  int16_t h = 0;
+  TouchAction onTouch;
+};
+
+struct ModalSpec {
+  String id;
+  String title;
+  String text;
+  int16_t x = -1;
+  int16_t y = -1;
+  int16_t w = -1;
+  int16_t h = -1;
+  uint8_t font = 2;
+  int16_t lineHeight = 0;
+  int16_t maxLines = 0;
+  uint16_t textColor565 = 0xFFFF;
+  uint16_t titleColor565 = 0xFFFF;
+  uint16_t bgColor565 = 0x0000;
+  uint16_t borderColor565 = 0x7BEF;
+};
+
 enum class NodeType : uint8_t {
   kLabel,
   kValueBox,
@@ -77,6 +113,9 @@ struct Document {
   String source = "http";
   String url;
   std::map<String, String> headers;
+  TouchAction onTouch;
+  std::vector<TouchRegion> touchRegions;
+  std::vector<ModalSpec> modals;
   bool debug = false;
   uint32_t pollMs = 30000;
   std::map<String, FieldSpec> fields;

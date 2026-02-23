@@ -24,13 +24,24 @@
   },
   "ui": {
     "title": "HA Control Card",
+    "on_touch": {
+      "action": "http",
+      "url": "{{setting.ha_base_url}}/api/services/light/toggle",
+      "method": "POST",
+      "content_type": "application/json",
+      "headers": {
+        "Authorization": "Bearer {{setting.ha_token}}"
+      },
+      "body": "{\"entity_id\":\"{{setting.entity_id}}\"}"
+    },
     "nodes": [
       {
         "type": "label",
         "x": 4,
         "y": 4,
         "w": 98,
-        "h": 10,
+        "h": 16,
+        "wrap": true,
         "max_lines": 2,
         "overflow": "ellipsis",
         "font": 1,
@@ -52,7 +63,7 @@
         "y": 36,
         "w": 24,
         "h": 24,
-        "path": "http://vps.gorkos.net:8085/mdi?icon={{ha_icon}}&size=24&color=7CE2FF"
+        "path": "http://vps.gorkos.net:8085/mdi?icon={{ha_icon}}&size=24&color={{if_eq(state,on,FFD54A,7CE2FF)}}"
       },
       {
         "type": "label",

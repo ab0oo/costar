@@ -400,49 +400,108 @@ bool GeoIpService::parseOffsetText(const String& raw, int& minutes) const {
 
 bool GeoIpService::fetchGeoForName(const String& name, float& lat, float& lon, String& tz,
                                    int& offsetMinutes, bool& hasOffset,
-                                   String& label) const {
+                                   String& label, String* errorOut) const {
   if (name.isEmpty()) {
+    if (errorOut != nullptr) {
+      *errorOut = "empty name";
+    }
     return false;
   }
 
-  const String url = "https://geocoding-api.open-meteo.com/v1/search?name=" +
-                     urlEncode(name) + "&count=1&language=en&format=json";
+  const String urlOpenMeteo = "https://geocoding-api.open-meteo.com/v1/search?name=" +
+                              urlEncode(name) + "&count=1&language=en&format=json";
   JsonDocument doc;
   String error;
-  if (!http_.get(url, doc, &error)) {
+  if (http_.get(urlOpenMeteo, doc, &error)) {
+    JsonArrayConst results = doc["results"].as<JsonArrayConst>();
+    if (!results.isNull() && results.size() > 0) {
+      JsonObjectConst first = results[0].as<JsonObjectConst>();
+      if (!first.isNull()) {
+        lat = first["latitude"] | NAN;
+        lon = first["longitude"] | NAN;
+        tz = first["timezone"].as<String>();
+        label = first["name"].as<String>();
+        const String admin1 = first["admin1"].as<String>();
+        const String country = first["country"].as<String>();
+        if (!admin1.isEmpty()) {
+          label += ", " + admin1;
+        }
+        if (!country.isEmpty()) {
+          label += ", " + country;
+        }
+
+        hasOffset = false;
+        offsetMinutes = 0;
+        if (!tz.isEmpty()) {
+          if (fetchOffsetForTimezone(tz, offsetMinutes)) {
+            hasOffset = true;
+          }
+        }
+        if (!isnan(lat) && !isnan(lon) && !tz.isEmpty()) {
+          return true;
+        }
+      }
+    } else {
+      error = "open-meteo: no results";
+    }
+  } else {
+    error = "open-meteo: " + error;
+  }
+
+  // Fallback geocoder for resilience.
+  const String urlNominatim = "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=" +
+                              urlEncode(name);
+  JsonDocument nomDoc;
+  String nomError;
+  if (!http_.get(urlNominatim, nomDoc, &nomError)) {
+    if (errorOut != nullptr) {
+      *errorOut = error + "; nominatim: " + nomError;
+    }
     return false;
   }
 
-  JsonArrayConst results = doc["results"].as<JsonArrayConst>();
-  if (results.isNull() || results.size() == 0) {
-    return false;
-  }
-  JsonObjectConst first = results[0].as<JsonObjectConst>();
-  if (first.isNull()) {
+  JsonArrayConst nomResults = nomDoc.as<JsonArrayConst>();
+  if (nomResults.isNull() || nomResults.size() == 0) {
+    if (errorOut != nullptr) {
+      *errorOut = error + "; nominatim: no results";
+    }
     return false;
   }
 
-  lat = first["latitude"] | NAN;
-  lon = first["longitude"] | NAN;
-  tz = first["timezone"].as<String>();
-  label = first["name"].as<String>();
-  const String admin1 = first["admin1"].as<String>();
-  const String country = first["country"].as<String>();
-  if (!admin1.isEmpty()) {
-    label += ", " + admin1;
-  }
-  if (!country.isEmpty()) {
-    label += ", " + country;
+  JsonObjectConst firstNom = nomResults[0].as<JsonObjectConst>();
+  if (firstNom.isNull()) {
+    if (errorOut != nullptr) {
+      *errorOut = error + "; nominatim: invalid result";
+    }
+    return false;
   }
 
+  const String latText = firstNom["lat"].as<String>();
+  const String lonText = firstNom["lon"].as<String>();
+  lat = latText.toFloat();
+  lon = lonText.toFloat();
+  label = firstNom["display_name"].as<String>();
+  tz = "";
   hasOffset = false;
   offsetMinutes = 0;
-  if (!tz.isEmpty()) {
-    if (fetchOffsetForTimezone(tz, offsetMinutes)) {
-      hasOffset = true;
+  if (isnan(lat) || isnan(lon) || (lat == 0.0f && lon == 0.0f && latText != "0" && lonText != "0")) {
+    if (errorOut != nullptr) {
+      *errorOut = error + "; nominatim: invalid coordinates";
     }
+    return false;
   }
-  return !isnan(lat) && !isnan(lon) && !tz.isEmpty();
+
+  if (!fetchTimezoneForLatLon(lat, lon, tz, offsetMinutes, hasOffset)) {
+    if (errorOut != nullptr) {
+      *errorOut = error + "; nominatim ok, timezone lookup failed";
+    }
+    return false;
+  }
+
+  if (errorOut != nullptr) {
+    *errorOut = "";
+  }
+  return !tz.isEmpty();
 }
 
 bool GeoIpService::fetchTimezoneForLatLon(float lat, float lon, String& tz,
@@ -481,8 +540,9 @@ bool GeoIpService::setManualCity(const String& name) {
   bool hasOffset = false;
   String label;
 
-  if (!fetchGeoForName(name, lat, lon, tz, offsetMin, hasOffset, label)) {
-    setError("geocode failed");
+  String geocodeError;
+  if (!fetchGeoForName(name, lat, lon, tz, offsetMin, hasOffset, label, &geocodeError)) {
+    setError("geocode failed: " + geocodeError);
     return false;
   }
 

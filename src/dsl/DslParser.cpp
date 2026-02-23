@@ -238,6 +238,47 @@ bool readBool(JsonVariantConst v, bool& out) {
   return false;
 }
 
+void parseTouchAction(JsonObjectConst obj, dsl::TouchAction& out) {
+  if (obj.isNull()) {
+    return;
+  }
+
+  String action = obj["action"] | String();
+  action.trim();
+  action.toLowerCase();
+  if (action == "http" || action == "refresh" || action == "modal" || action == "show_modal" ||
+      action == "dismiss_modal") {
+    if (action == "show_modal") {
+      action = "modal";
+    }
+    out.action = action;
+  }
+
+  out.url = obj["url"] | String();
+  out.method = obj["method"] | String(out.method);
+  out.body = obj["body"] | String();
+  out.contentType = obj["content_type"] | obj["contentType"] | String(out.contentType);
+  out.modalId = obj["modal_id"] | obj["modal"] | String();
+  out.dismissMs = obj["dismiss_ms"] | out.dismissMs;
+
+  const JsonObjectConst headers = obj["headers"];
+  if (!headers.isNull()) {
+    for (JsonPairConst p : headers) {
+      const String key = String(p.key().c_str());
+      String value;
+      if (p.value().is<const char*>()) {
+        value = p.value().as<String>();
+      } else if (p.value().is<float>() || p.value().is<double>() || p.value().is<long>() ||
+                 p.value().is<int>() || p.value().is<bool>()) {
+        value = p.value().as<String>();
+      }
+      if (!key.isEmpty() && !value.isEmpty()) {
+        out.headers[key] = value;
+      }
+    }
+  }
+}
+
 void applyNode(JsonObjectConst nodeJson, dsl::Document& out, const VarContext* ctx) {
   dsl::Node n;
 
@@ -466,6 +507,75 @@ bool Parser::parseFile(const String& path, Document& out, String* error) {
   if (!ui.isNull()) {
     out.title = ui["title"] | out.title;
     out.debug = ui["debug"] | out.debug;
+    JsonObjectConst onTouch = ui["on_touch"];
+    if (onTouch.isNull()) {
+      onTouch = ui["ontouch"];
+    }
+    if (!onTouch.isNull()) {
+      parseTouchAction(onTouch, out.onTouch);
+    }
+
+    const JsonArrayConst touchRegions = ui["touch_regions"];
+    if (!touchRegions.isNull()) {
+      for (JsonObjectConst regionObj : touchRegions) {
+        TouchRegion region;
+        region.x = regionObj["x"] | 0;
+        region.y = regionObj["y"] | 0;
+        region.w = regionObj["w"] | 0;
+        region.h = regionObj["h"] | 0;
+
+        JsonObjectConst regionTouch = regionObj["on_touch"];
+        if (regionTouch.isNull()) {
+          regionTouch = regionObj["ontouch"];
+        }
+        if (regionTouch.isNull()) {
+          regionTouch = regionObj;
+        }
+        parseTouchAction(regionTouch, region.onTouch);
+
+        if (region.w > 0 && region.h > 0 && !region.onTouch.action.isEmpty()) {
+          out.touchRegions.push_back(region);
+        }
+      }
+    }
+
+    const JsonArrayConst modals = ui["modals"];
+    if (!modals.isNull()) {
+      for (JsonObjectConst modalObj : modals) {
+        ModalSpec modal;
+        modal.id = modalObj["id"] | String();
+        modal.title = modalObj["title"] | String();
+        modal.text = modalObj["text"] | String();
+        modal.x = modalObj["x"] | modal.x;
+        modal.y = modalObj["y"] | modal.y;
+        modal.w = modalObj["w"] | modal.w;
+        modal.h = modalObj["h"] | modal.h;
+        modal.font = modalObj["font"] | modal.font;
+        modal.lineHeight = modalObj["line_height"] | modal.lineHeight;
+        modal.maxLines = modalObj["max_lines"] | modal.maxLines;
+
+        const String textHex = modalObj["text_color"] | modalObj["color"] | String("#FFFFFF");
+        const String titleHex = modalObj["title_color"] | textHex;
+        const String bgHex = modalObj["bg"] | modalObj["bg_color"] | String("#101010");
+        const String borderHex = modalObj["border"] | modalObj["border_color"] | String("#7B7D81");
+        if (!parseHexColor565(textHex, modal.textColor565)) {
+          modal.textColor565 = 0xFFFF;
+        }
+        if (!parseHexColor565(titleHex, modal.titleColor565)) {
+          modal.titleColor565 = modal.textColor565;
+        }
+        if (!parseHexColor565(bgHex, modal.bgColor565)) {
+          modal.bgColor565 = 0x0000;
+        }
+        if (!parseHexColor565(borderHex, modal.borderColor565)) {
+          modal.borderColor565 = 0x7BEF;
+        }
+
+        if (!modal.id.isEmpty()) {
+          out.modals.push_back(modal);
+        }
+      }
+    }
 
     const JsonArrayConst labels = ui["labels"];
     if (!labels.isNull()) {

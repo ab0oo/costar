@@ -47,10 +47,39 @@ String clipText(const String& text, size_t maxLen = 96) {
   const int tail = static_cast<int>(maxLen) - head - 3;
   return text.substring(0, head) + "..." + text.substring(text.length() - tail);
 }
+
+String describeTransportStage(const HttpFetchMeta& meta) {
+  if (meta.statusCode == -2 || meta.transportReason == "tls-preflight-low-largest-block") {
+    return "request-not-attempted (tls-preflight)";
+  }
+  if (meta.statusCode == -3 || meta.transportReason == "transport-cooldown") {
+    return "request-skipped (transport-cooldown)";
+  }
+  if (meta.transportReason.indexOf("begin failed") >= 0) {
+    return "request-not-attempted (http-begin)";
+  }
+  if (meta.transportReason.indexOf("transport gate timeout") >= 0) {
+    return "request-not-attempted (transport-gate-timeout)";
+  }
+  return "transport-failure (no-http-status)";
+}
 }  // namespace
 
-std::map<String, String> DslWidget::resolveTapHeaders() const {
+std::map<String, String> DslWidget::resolveTapHeaders(const dsl::TouchAction& action) const {
   std::map<String, String> headers;
+  for (const auto& kv : action.headers) {
+    String name = kv.first;
+    name.trim();
+    if (name.isEmpty()) {
+      continue;
+    }
+    String value = bindTemplate(kv.second);
+    value.trim();
+    if (!value.isEmpty()) {
+      headers[name] = value;
+    }
+  }
+
   for (const auto& kv : config_.settings) {
     if (!kv.first.startsWith("tap_header_")) {
       continue;
@@ -71,45 +100,49 @@ std::map<String, String> DslWidget::resolveTapHeaders() const {
 }
 
 bool DslWidget::executeTapAction(String& errorOut) {
-  const String action = parseTapActionType();
-  if (action != "http") {
+  dsl::TouchAction action;
+  if (hasPendingTouchAction_) {
+    action = pendingTouchAction_;
+  } else if (!dsl_.onTouch.action.isEmpty()) {
+    action = dsl_.onTouch;
+  } else {
+    action = buildLegacyTouchAction();
+  }
+
+  if (!actionIsHttp(action)) {
     return false;
   }
 
-  auto urlIt = config_.settings.find("tap_url");
-  if (urlIt == config_.settings.end()) {
+  String url = action.url;
+  if (url.isEmpty()) {
     errorOut = "tap_url missing";
     return false;
   }
-  const String url = bindTemplate(urlIt->second);
+  url = bindTemplate(url);
   if (url.isEmpty()) {
     errorOut = "tap_url empty";
     return false;
   }
 
-  String method = "POST";
-  auto methodIt = config_.settings.find("tap_method");
-  if (methodIt != config_.settings.end()) {
-    method = methodIt->second;
-    method.trim();
-    method.toUpperCase();
+  String method = action.method;
+  if (method.isEmpty()) {
+    method = "POST";
   }
+  method.trim();
+  method.toUpperCase();
   if (method.isEmpty()) {
     method = "POST";
   }
 
-  String body;
-  auto bodyIt = config_.settings.find("tap_body");
-  if (bodyIt != config_.settings.end()) {
-    body = bindTemplate(bodyIt->second);
-  }
+  String body = action.body;
+  body = bindTemplate(body);
 
-  String contentType = "application/json";
-  auto ctypeIt = config_.settings.find("tap_content_type");
-  if (ctypeIt != config_.settings.end()) {
-    contentType = bindTemplate(ctypeIt->second);
-    contentType.trim();
+  String contentType = action.contentType;
+  if (contentType.isEmpty()) {
+    contentType = "application/json";
   }
+  contentType = bindTemplate(contentType);
+  contentType.trim();
   if (contentType.isEmpty()) {
     contentType = "application/json";
   }
@@ -140,7 +173,7 @@ bool DslWidget::executeTapAction(String& errorOut) {
   http.useHTTP10(true);
   http.setReuse(false);
   http.addHeader("User-Agent", "CoStar-ESP32/1.0");
-  const std::map<String, String> headers = resolveTapHeaders();
+  const std::map<String, String> headers = resolveTapHeaders(action);
   for (const auto& kv : headers) {
     if (kv.first.isEmpty() || kv.second.isEmpty()) {
       continue;
@@ -381,6 +414,13 @@ bool DslWidget::update(uint32_t nowMs) {
   if (!dslLoaded_) {
     return false;
   }
+  if (modalVisible_ && modalDismissAtMs_ != 0 &&
+      static_cast<int32_t>(nowMs - modalDismissAtMs_) >= 0) {
+    modalVisible_ = false;
+    activeModalId_ = "";
+    modalDismissAtMs_ = 0;
+    return true;
+  }
   if (firstFetch_ && startDelayMs_ > 0 &&
       static_cast<int32_t>(nowMs - firstFetchNotBeforeMs_) < 0) {
     return false;
@@ -401,6 +441,7 @@ bool DslWidget::update(uint32_t nowMs) {
       }
     }
     tapActionPending_ = false;
+    hasPendingTouchAction_ = false;
     forceFetchNow_ = true;
   }
 
@@ -415,6 +456,9 @@ bool DslWidget::update(uint32_t nowMs) {
       if (!firstFetch_ && static_cast<int32_t>(nowMs - nextFetchMs_) < 0) {
         return false;
       }
+    } else if (dsl_.source == "http" && httpBackoffUntilMs_ != 0 &&
+               static_cast<int32_t>(nowMs - httpBackoffUntilMs_) < 0) {
+      return false;
     } else if (nowMs - lastFetchMs_ < dsl_.pollMs) {
       if (!firstFetch_) {
         return false;
@@ -538,11 +582,11 @@ bool DslWidget::update(uint32_t nowMs) {
       logHttpFetchResult(fetchMeta.statusCode, fetchMeta.contentLengthBytes);
       if (dsl_.debug) {
         if (fetchMeta.statusCode <= 0) {
-          Serial.printf(
-              "[%s] [%s] ADSB transport no-http-response code=%d reason='%s' elapsed=%lums\n",
-              widgetName().c_str(), logTimestamp().c_str(), fetchMeta.statusCode,
-              fetchMeta.transportReason.c_str(),
-              static_cast<unsigned long>(fetchMeta.elapsedMs));
+          Serial.printf("[%s] [%s] ADSB %s code=%d reason='%s' elapsed=%lums\n",
+                        widgetName().c_str(), logTimestamp().c_str(),
+                        describeTransportStage(fetchMeta).c_str(), fetchMeta.statusCode,
+                        fetchMeta.transportReason.c_str(),
+                        static_cast<unsigned long>(fetchMeta.elapsedMs));
         }
         Serial.printf(
             "[%s] [%s] ADSB err=%s status=%d bytes=%u ctype='%s'\n", widgetName().c_str(),
@@ -566,8 +610,16 @@ bool DslWidget::update(uint32_t nowMs) {
     if (resolvedUrl.isEmpty()) {
       error = "resolved URL empty";
     } else if (!http_.get(resolvedUrl, doc, &error, &fetchMeta, headersPtr)) {
-      if (fetchMeta.statusCode <= 0 || error.startsWith("Empty payload")) {
-        delay(40);
+      const bool retryForEmptyPayload = error.startsWith("Empty payload");
+      const bool retryForTransport = fetchMeta.statusCode <= 0 && fetchMeta.statusCode != -2 &&
+                                     fetchMeta.statusCode != -3;
+      if (retryForEmptyPayload || retryForTransport) {
+        if (dsl_.debug && retryForTransport) {
+          Serial.printf("[%s] [%s] DSL retry after transport failure code=%d reason='%s'\n",
+                        widgetName().c_str(), logTimestamp().c_str(), fetchMeta.statusCode,
+                        fetchMeta.transportReason.c_str());
+        }
+        delay(retryForTransport ? 140 : 40);
         JsonDocument retryDoc;
         String retryError;
         HttpFetchMeta retryMeta;
@@ -585,19 +637,19 @@ bool DslWidget::update(uint32_t nowMs) {
     if (!error.isEmpty()) {
       logHttpFetchResult(fetchMeta.statusCode, fetchMeta.contentLengthBytes);
       if (fetchMeta.statusCode <= 0) {
-        Serial.printf("[%s] [%s] DSL no-http-response url=%s code=%d reason='%s' elapsed=%lums\n",
+        Serial.printf("[%s] [%s] DSL %s url=%s code=%d reason='%s' elapsed=%lums\n",
                       widgetName().c_str(), logTimestamp().c_str(),
-                      clipText(resolvedUrl, 96).c_str(), fetchMeta.statusCode,
-                      fetchMeta.transportReason.c_str(),
+                      describeTransportStage(fetchMeta).c_str(), clipText(resolvedUrl, 96).c_str(),
+                      fetchMeta.statusCode, fetchMeta.transportReason.c_str(),
                       static_cast<unsigned long>(fetchMeta.elapsedMs));
       }
       if (dsl_.debug) {
         if (fetchMeta.statusCode <= 0) {
-          Serial.printf(
-              "[%s] [%s] DSL transport no-http-response code=%d reason='%s' elapsed=%lums\n",
-              widgetName().c_str(), logTimestamp().c_str(), fetchMeta.statusCode,
-              fetchMeta.transportReason.c_str(),
-              static_cast<unsigned long>(fetchMeta.elapsedMs));
+          Serial.printf("[%s] [%s] DSL %s code=%d reason='%s' elapsed=%lums\n",
+                        widgetName().c_str(), logTimestamp().c_str(),
+                        describeTransportStage(fetchMeta).c_str(), fetchMeta.statusCode,
+                        fetchMeta.transportReason.c_str(),
+                        static_cast<unsigned long>(fetchMeta.elapsedMs));
         } else if (fetchMeta.statusCode == 429 || fetchMeta.statusCode == 503) {
           Serial.printf("[%s] [%s] DSL server throttle status=%d retry-after='%s'\n",
                         widgetName().c_str(), logTimestamp().c_str(), fetchMeta.statusCode,
@@ -649,6 +701,36 @@ bool DslWidget::update(uint32_t nowMs) {
                       static_cast<unsigned>(adsbFailureStreak_), fetchMeta.statusCode);
       }
     }
+    if (dsl_.source == "http") {
+      httpFailureStreak_ = static_cast<uint8_t>(httpFailureStreak_ < 7 ? httpFailureStreak_ + 1 : 7);
+      uint32_t backoffMs = dsl_.pollMs;
+      if (fetchMeta.statusCode == -2) {
+        // TLS preflight low-largest-block should retry soon after memory churn settles.
+        backoffMs = 5000U;
+      } else if (fetchMeta.statusCode == -3) {
+        // Global transport cooldown already throttles requests; keep widget retry short.
+        backoffMs = 4000U;
+      } else if (fetchMeta.statusCode <= 0) {
+        // Transport errors should retry from a short base independent of poll interval.
+        const uint8_t shift = httpFailureStreak_ > 4 ? 4 : httpFailureStreak_;
+        backoffMs = 3000U << shift;  // 6s, 12s, 24s, 48s, 96s
+        if (backoffMs > 30000U) {
+          backoffMs = 30000U;
+        }
+      } else if (fetchMeta.statusCode == 429 || fetchMeta.statusCode == 503) {
+        backoffMs = dsl_.pollMs * 4U;
+        if (backoffMs > 120000U) {
+          backoffMs = 120000U;
+        }
+      }
+      httpBackoffUntilMs_ = nowMs + backoffMs;
+      if (dsl_.debug) {
+        Serial.printf("[%s] [%s] HTTP cooldown %lus streak=%u status=%d\n",
+                      widgetName().c_str(), logTimestamp().c_str(),
+                      static_cast<unsigned long>(backoffMs / 1000UL),
+                      static_cast<unsigned>(httpFailureStreak_), fetchMeta.statusCode);
+      }
+    }
 
     const String next = "net err";
     const bool changed = (status_ != next);
@@ -663,6 +745,14 @@ bool DslWidget::update(uint32_t nowMs) {
     }
     adsbFailureStreak_ = 0;
     adsbBackoffUntilMs_ = 0;
+  }
+  if (dsl_.source == "http") {
+    if (dsl_.debug && httpFailureStreak_ > 0) {
+      Serial.printf("[%s] [%s] HTTP recovered after %u failures\n", widgetName().c_str(),
+                    logTimestamp().c_str(), static_cast<unsigned>(httpFailureStreak_));
+    }
+    httpFailureStreak_ = 0;
+    httpBackoffUntilMs_ = 0;
   }
 
   bool changed = false;

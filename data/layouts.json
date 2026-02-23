@@ -1,0 +1,20 @@
+{
+  "default": "home",
+  "layouts": [
+    {
+      "id": "home",
+      "name": "Home Dashboard",
+      "path": "/screen_layout_a.json"
+    },
+    {
+      "id": "classic",
+      "name": "Classic Weather + Clock",
+      "path": "/screen_layout_b.json"
+    },
+    {
+      "id": "nyt",
+      "name": "NYT Headlines",
+      "path": "/screen_layout_nyt.json"
+    }
+  ]
+}

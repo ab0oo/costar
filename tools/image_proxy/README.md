@@ -73,18 +73,44 @@ curl -L "http://localhost:8085/mdi?icon=mdi:weather-partly-cloudy&size=28&color=
   --output mdi_weather_partly_cloudy_28.raw
 ```
 
+`GET /rssj`
+
+Required query params:
+
+- `url`: RSS or Atom feed URL
+
+Optional query params:
+
+- `limit`: max items returned (default `10`, max `50`)
+- `ua`: override upstream `User-Agent` header for this request
+- `referer`: override upstream `Referer` header for this request
+
+Example:
+
+```bash
+curl -L --get "http://localhost:8085/rssj" \
+  --data-urlencode "url=https://hnrss.org/frontpage" \
+  --data-urlencode "limit=5"
+```
+
 ### Response
 
-- Body: packed `rgb565le` bytes (`width * height * 2` bytes)
-- Headers:
-  - `X-Image-Format: rgb565le`
-  - `X-Width`
-  - `X-Height`
-  - `X-Source-Format`
-  - `X-Source-URL`
-  - `X-Cache: HIT|MISS`
-  - `X-Cache-Age-Seconds`
-  - `X-Fallback: oversize-request` (only when size exceeded)
+- `/cmh` and `/mdi`:
+  - Body: packed `rgb565le` bytes (`width * height * 2` bytes)
+  - Headers:
+    - `X-Image-Format: rgb565le`
+    - `X-Width`
+    - `X-Height`
+    - `X-Source-Format`
+    - `X-Source-URL`
+    - `X-Cache: HIT|MISS`
+    - `X-Cache-Age-Seconds`
+    - `X-Fallback: oversize-request` (only when size exceeded)
+- `/rssj`:
+  - Body: JSON document with feed metadata and `items[]`
+  - Headers:
+    - `Content-Type: application/json; charset=utf-8`
+    - `X-Source-URL`
 
 ### Notes
 
