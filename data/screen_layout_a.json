@@ -65,7 +65,7 @@
   "widget_defs": {
     "ha-card-1": {
       "type": "dsl",
-      "update_ms": 1000,
+      "update_ms": 1500,
       "settings": {
         "dsl_path": "/dsl/homeassistant_control_card.json",
         "ha_base_url": "https://homeassistant.edh.gorkos.net",
@@ -77,13 +77,13 @@
     },
     "ha-card-2": {
       "type": "dsl",
-      "update_ms": 1000,
+      "update_ms": 1500,
       "settings": {
         "dsl_path": "/dsl/homeassistant_control_card.json",
         "ha_base_url": "https://homeassistant.edh.gorkos.net",
         "entity_id": "light.torchier_socket_1",
         "ha_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkOTJlMjRkMmI4NzY0NjUwYWY5Yzc1ZDZhMDY3OTYxNSIsImlhdCI6MTc3MTcxMjIzNCwiZXhwIjoyMDg3MDcyMjM0fQ.A9fTF3UIZzjTg6yJjKwYY82EuT8NIxU1TK-a00ru7mc",
-        "start_delay_ms": "1500",
+        "start_delay_ms": "750",
         "use_sprite": "false"
       }
     },
@@ -95,43 +95,43 @@
         "ha_base_url": "https://homeassistant.edh.gorkos.net",
         "entity_id": "light.torchier_socket_1_2",
         "ha_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkOTJlMjRkMmI4NzY0NjUwYWY5Yzc1ZDZhMDY3OTYxNSIsImlhdCI6MTc3MTcxMjIzNCwiZXhwIjoyMDg3MDcyMjM0fQ.A9fTF3UIZzjTg6yJjKwYY82EuT8NIxU1TK-a00ru7mc",
-        "start_delay_ms": "3000",
+        "start_delay_ms": "1500",
         "use_sprite": "false"
       }
     },
     "ha-card-4": {
       "type": "dsl",
-      "update_ms": 1000,
+      "update_ms": 1500,
       "settings": {
         "dsl_path": "/dsl/homeassistant_control_card.json",
         "ha_base_url": "https://homeassistant.edh.gorkos.net",
         "entity_id": "light.outside_entry_lights",
         "ha_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkOTJlMjRkMmI4NzY0NjUwYWY5Yzc1ZDZhMDY3OTYxNSIsImlhdCI6MTc3MTcxMjIzNCwiZXhwIjoyMDg3MDcyMjM0fQ.A9fTF3UIZzjTg6yJjKwYY82EuT8NIxU1TK-a00ru7mc",
-        "start_delay_ms": "4500",
+        "start_delay_ms": "2250",
         "use_sprite": "false"
       }
     },
     "ha-card-5": {
       "type": "dsl",
-      "update_ms": 1000,
+      "update_ms": 1500,
       "settings": {
         "dsl_path": "/dsl/homeassistant_control_card.json",
         "ha_base_url": "https://homeassistant.edh.gorkos.net",
         "entity_id": "light.outside_garage_lights",
         "ha_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkOTJlMjRkMmI4NzY0NjUwYWY5Yzc1ZDZhMDY3OTYxNSIsImlhdCI6MTc3MTcxMjIzNCwiZXhwIjoyMDg3MDcyMjM0fQ.A9fTF3UIZzjTg6yJjKwYY82EuT8NIxU1TK-a00ru7mc",
-        "start_delay_ms": "6000",
+        "start_delay_ms": "3000",
         "use_sprite": "false"
       }
     },
     "ha-card-6": {
       "type": "dsl",
-      "update_ms": 1000,
+      "update_ms": 1500,
       "settings": {
         "dsl_path": "/dsl/homeassistant_control_card.json",
         "ha_base_url": "https://homeassistant.edh.gorkos.net",
         "entity_id": "light.john_s_lamp",
         "ha_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkOTJlMjRkMmI4NzY0NjUwYWY5Yzc1ZDZhMDY3OTYxNSIsImlhdCI6MTc3MTcxMjIzNCwiZXhwIjoyMDg3MDcyMjM0fQ.A9fTF3UIZzjTg6yJjKwYY82EuT8NIxU1TK-a00ru7mc",
-        "start_delay_ms": "7500",
+        "start_delay_ms": "3750",
         "use_sprite": "false"
       }
     }

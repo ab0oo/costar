@@ -1,0 +1,367 @@
+{
+  "version": 1,
+  "data": {
+    "source": "http",
+    "url": "{{setting.rss_proxy_base}}/rssj?url=https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml&limit={{setting.limit}}",
+    "poll_ms": 300000,
+    "fields": {
+      "feed_title": "title",
+      "h1_title": "items[0].title",
+      "h1_date": "items[0].published",
+      "h1_desc": "items[0].description",
+      "h2_title": "items[1].title",
+      "h2_date": "items[1].published",
+      "h2_desc": "items[1].description",
+      "h3_title": "items[2].title",
+      "h3_date": "items[2].published",
+      "h3_desc": "items[2].description",
+      "h4_title": "items[3].title",
+      "h4_date": "items[3].published",
+      "h4_desc": "items[3].description",
+      "h5_title": "items[4].title",
+      "h5_date": "items[4].published",
+      "h5_desc": "items[4].description"
+    }
+  },
+  "ui": {
+    "title": "NYT Headlines",
+    "modals": [
+      {
+        "id": "h1_modal",
+        "title": "{{h1_title}}",
+        "text": "{{h1_desc}}",
+        "x": 10,
+        "y": 18,
+        "w": 300,
+        "h": 204,
+        "font": 1,
+        "line_height": 10,
+        "max_lines": 16,
+        "bg": "#101820",
+        "border": "#4A90E2",
+        "title_color": "#FFFFFF",
+        "text_color": "#D8E6F5"
+      },
+      {
+        "id": "h2_modal",
+        "title": "{{h2_title}}",
+        "text": "{{h2_desc}}",
+        "x": 10,
+        "y": 18,
+        "w": 300,
+        "h": 204,
+        "font": 1,
+        "line_height": 10,
+        "max_lines": 16,
+        "bg": "#101820",
+        "border": "#4A90E2",
+        "title_color": "#FFFFFF",
+        "text_color": "#D8E6F5"
+      },
+      {
+        "id": "h3_modal",
+        "title": "{{h3_title}}",
+        "text": "{{h3_desc}}",
+        "x": 10,
+        "y": 18,
+        "w": 300,
+        "h": 204,
+        "font": 1,
+        "line_height": 10,
+        "max_lines": 16,
+        "bg": "#101820",
+        "border": "#4A90E2",
+        "title_color": "#FFFFFF",
+        "text_color": "#D8E6F5"
+      },
+      {
+        "id": "h4_modal",
+        "title": "{{h4_title}}",
+        "text": "{{h4_desc}}",
+        "x": 10,
+        "y": 18,
+        "w": 300,
+        "h": 204,
+        "font": 1,
+        "line_height": 10,
+        "max_lines": 16,
+        "bg": "#101820",
+        "border": "#4A90E2",
+        "title_color": "#FFFFFF",
+        "text_color": "#D8E6F5"
+      },
+      {
+        "id": "h5_modal",
+        "title": "{{h5_title}}",
+        "text": "{{h5_desc}}",
+        "x": 10,
+        "y": 18,
+        "w": 300,
+        "h": 204,
+        "font": 1,
+        "line_height": 10,
+        "max_lines": 16,
+        "bg": "#101820",
+        "border": "#4A90E2",
+        "title_color": "#FFFFFF",
+        "text_color": "#D8E6F5"
+      }
+    ],
+    "touch_regions": [
+      {
+        "x": 0,
+        "y": 34,
+        "w": 320,
+        "h": 36,
+        "on_touch": {
+          "action": "modal",
+          "modal_id": "h1_modal"
+        }
+      },
+      {
+        "x": 0,
+        "y": 70,
+        "w": 320,
+        "h": 36,
+        "on_touch": {
+          "action": "modal",
+          "modal_id": "h2_modal"
+        }
+      },
+      {
+        "x": 0,
+        "y": 106,
+        "w": 320,
+        "h": 36,
+        "on_touch": {
+          "action": "modal",
+          "modal_id": "h3_modal"
+        }
+      },
+      {
+        "x": 0,
+        "y": 142,
+        "w": 320,
+        "h": 36,
+        "on_touch": {
+          "action": "modal",
+          "modal_id": "h4_modal"
+        }
+      },
+      {
+        "x": 0,
+        "y": 178,
+        "w": 320,
+        "h": 36,
+        "on_touch": {
+          "action": "modal",
+          "modal_id": "h5_modal"
+        }
+      }
+    ],
+    "nodes": [
+      {
+        "type": "label",
+        "x": 6,
+        "y": 4,
+        "font": 2,
+        "color": "#8FB7D9",
+        "text": "NYT Home"
+      },
+      {
+        "type": "label",
+        "x": 136,
+        "y": 4,
+        "w": 178,
+        "wrap": true,
+        "max_lines": 1,
+        "overflow": "ellipsis",
+        "font": 1,
+        "color": "#5E7C99",
+        "text": "{{feed_title}}"
+      },
+      {
+        "type": "line",
+        "x": 0,
+        "y": 26,
+        "x2": 319,
+        "y2": 26,
+        "thickness": 1,
+        "color": "#29445D"
+      },
+      {
+        "type": "label",
+        "x": 6,
+        "y": 30,
+        "w": 244,
+        "h": 20,
+        "wrap": true,
+        "max_lines": 2,
+        "overflow": "ellipsis",
+        "font": 1,
+        "color": "#F3F7FB",
+        "text": "{{h1_title}}"
+      },
+      {
+        "type": "label",
+        "x": 204,
+        "y": 42,
+        "w": 60,
+        "max_lines": 1,
+        "overflow": "ellipsis",
+        "font": 1,
+        "color": "#7DA4C4",
+        "text": "{{h1_date}}"
+      },
+      {
+        "type": "line",
+        "x": 6,
+        "y": 68,
+        "x2": 314,
+        "y2": 68,
+        "thickness": 1,
+        "color": "#1F3245"
+      },
+      {
+        "type": "label",
+        "x": 6,
+        "y": 66,
+        "w": 244,
+        "h": 20,
+        "wrap": true,
+        "max_lines": 2,
+        "overflow": "ellipsis",
+        "font": 1,
+        "color": "#F3F7FB",
+        "text": "{{h2_title}}"
+      },
+      {
+        "type": "label",
+        "x": 204,
+        "y": 78,
+        "w": 60,
+        "max_lines": 1,
+        "overflow": "ellipsis",
+        "font": 1,
+        "color": "#7DA4C4",
+        "text": "{{h2_date}}"
+      },
+      {
+        "type": "line",
+        "x": 6,
+        "y": 100,
+        "x2": 314,
+        "y2": 104,
+        "thickness": 1,
+        "color": "#1F3245"
+      },
+      {
+        "type": "label",
+        "x": 6,
+        "y": 102,
+        "w": 244,
+        "h": 20,
+        "wrap": true,
+        "max_lines": 2,
+        "overflow": "ellipsis",
+        "font": 1,
+        "color": "#F3F7FB",
+        "text": "{{h3_title}}"
+      },
+      {
+        "type": "label",
+        "x": 204,
+        "y": 114,
+        "w": 60,
+        "max_lines": 1,
+        "overflow": "ellipsis",
+        "font": 1,
+        "color": "#7DA4C4",
+        "text": "{{h3_date}}"
+      },
+      {
+        "type": "line",
+        "x": 6,
+        "y": 136,
+        "x2": 314,
+        "y2": 140,
+        "thickness": 1,
+        "color": "#1F3245"
+      },
+      {
+        "type": "label",
+        "x": 6,
+        "y": 138,
+        "w": 244,
+        "h": 20,
+        "wrap": true,
+        "max_lines": 2,
+        "overflow": "ellipsis",
+        "font": 1,
+        "color": "#F3F7FB",
+        "text": "{{h4_title}}"
+      },
+      {
+        "type": "label",
+        "x": 204,
+        "y": 150,
+        "w": 60,
+        "max_lines": 1,
+        "overflow": "ellipsis",
+        "font": 1,
+        "color": "#7DA4C4",
+        "text": "{{h4_date}}"
+      },
+      {
+        "type": "line",
+        "x": 6,
+        "y": 172,
+        "x2": 314,
+        "y2": 176,
+        "thickness": 1,
+        "color": "#1F3245"
+      },
+      {
+        "type": "label",
+        "x": 6,
+        "y": 174,
+        "w": 244,
+        "h": 20,
+        "wrap": true,
+        "max_lines": 2,
+        "overflow": "ellipsis",
+        "font": 1,
+        "color": "#F3F7FB",
+        "text": "{{h5_title}}"
+      },
+      {
+        "type": "label",
+        "x": 204,
+        "y": 186,
+        "w": 60,
+        "max_lines": 1,
+        "overflow": "ellipsis",
+        "font": 1,
+        "color": "#7DA4C4",
+        "text": "{{h5_date}}"
+      },
+      {
+        "type": "line",
+        "x": 6,
+        "y": 208,
+        "x2": 314,
+        "y2": 212,
+        "thickness": 1,
+        "color": "#1F3245"
+      },
+      {
+        "type": "label",
+        "x": 6,
+        "y": 218,
+        "font": 1,
+        "color": "#53708A",
+        "text": "Tap a headline for details"
+      }
+    ]
+  }
+}

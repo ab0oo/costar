@@ -9,6 +9,24 @@
 #include <math.h>
 
 namespace {
+uint32_t stableHash(const String& text) {
+  uint32_t h = 2166136261UL;
+  for (int i = 0; i < text.length(); ++i) {
+    h ^= static_cast<uint8_t>(text[i]);
+    h *= 16777619UL;
+  }
+  return h;
+}
+
+uint32_t autoStartDelayMs(const String& widgetId, const String& dslPath, const String& source) {
+  if (source != "http" && source != "adsb_nearest") {
+    return 0;
+  }
+  const String key = widgetId + "|" + dslPath + "|" + source;
+  const uint32_t slot = stableHash(key) % 8U;
+  return slot * 750U;
+}
+
 void mapWeatherCode(int code, String& outText, String& outIcon) {
   outText = "Unknown";
   outIcon = "/icons/meteocons/cloudy.raw";
@@ -96,7 +114,16 @@ void DslWidget::begin() {
     const uint32_t nowMs = millis();
     lastFetchMs_ = (nowMs > dsl_.pollMs) ? (nowMs - dsl_.pollMs) : 0;
     nextFetchMs_ = nowMs;
-    firstFetchNotBeforeMs_ = nowMs + startDelayMs_;
+    const uint32_t autoDelay = autoStartDelayMs(widgetName(), dslPath_, dsl_.source);
+    const uint32_t totalDelay = startDelayMs_ + autoDelay;
+    firstFetchNotBeforeMs_ = nowMs + totalDelay;
+    if (dsl_.debug && totalDelay > 0) {
+      Serial.printf("[%s] [%s] first-fetch delay manual=%lums auto=%lums total=%lums\n",
+                    widgetName().c_str(), logTimestamp().c_str(),
+                    static_cast<unsigned long>(startDelayMs_),
+                    static_cast<unsigned long>(autoDelay),
+                    static_cast<unsigned long>(totalDelay));
+    }
     firstFetch_ = true;
   }
 }
@@ -119,11 +146,30 @@ bool DslWidget::loadDslModel() {
   if (debugOverride_) {
     dsl_.debug = true;
   }
+  hasTapHttpAction_ = (parseTapActionType() == "http");
+  if (!hasTapHttpAction_) {
+    for (const auto& region : dsl_.touchRegions) {
+      if (actionIsHttp(region.onTouch)) {
+        hasTapHttpAction_ = true;
+        break;
+      }
+    }
+  }
   status_ = "dsl ok";
   return true;
 }
 
 String DslWidget::parseTapActionType() const {
+  if (!dsl_.onTouch.action.isEmpty()) {
+    String action = dsl_.onTouch.action;
+    action.trim();
+    action.toLowerCase();
+    if (action == "refresh" || action == "http" || action == "modal" ||
+        action == "dismiss_modal") {
+      return action;
+    }
+  }
+
   auto it = config_.settings.find("tap_action");
   if (it == config_.settings.end()) {
     return String();
@@ -131,42 +177,304 @@ String DslWidget::parseTapActionType() const {
   String action = it->second;
   action.trim();
   action.toLowerCase();
-  if (action == "refresh" || action == "http") {
+  if (action == "refresh" || action == "http" || action == "modal" ||
+      action == "dismiss_modal") {
     return action;
   }
   return String();
 }
 
+bool DslWidget::actionIsHttp(const dsl::TouchAction& action) const {
+  String type = action.action;
+  type.trim();
+  type.toLowerCase();
+  return type == "http";
+}
+
+bool DslWidget::actionIsRefresh(const dsl::TouchAction& action) const {
+  String type = action.action;
+  type.trim();
+  type.toLowerCase();
+  return type == "refresh";
+}
+
+bool DslWidget::actionIsModal(const dsl::TouchAction& action) const {
+  String type = action.action;
+  type.trim();
+  type.toLowerCase();
+  return type == "modal";
+}
+
+bool DslWidget::actionIsDismissModal(const dsl::TouchAction& action) const {
+  String type = action.action;
+  type.trim();
+  type.toLowerCase();
+  return type == "dismiss_modal";
+}
+
+dsl::TouchAction DslWidget::buildLegacyTouchAction() const {
+  dsl::TouchAction action;
+  action.action = parseTapActionType();
+  auto urlIt = config_.settings.find("tap_url");
+  if (urlIt != config_.settings.end()) {
+    action.url = urlIt->second;
+  }
+  auto methodIt = config_.settings.find("tap_method");
+  if (methodIt != config_.settings.end()) {
+    action.method = methodIt->second;
+  }
+  auto bodyIt = config_.settings.find("tap_body");
+  if (bodyIt != config_.settings.end()) {
+    action.body = bodyIt->second;
+  }
+  auto ctypeIt = config_.settings.find("tap_content_type");
+  if (ctypeIt != config_.settings.end()) {
+    action.contentType = ctypeIt->second;
+  }
+  return action;
+}
+
+const dsl::ModalSpec* DslWidget::findModalById(const String& id) const {
+  if (id.isEmpty()) {
+    return nullptr;
+  }
+  for (const auto& modal : dsl_.modals) {
+    if (modal.id == id) {
+      return &modal;
+    }
+  }
+  return nullptr;
+}
+
+const dsl::ModalSpec* DslWidget::activeModal() const {
+  if (!modalVisible_) {
+    return nullptr;
+  }
+  return findModalById(activeModalId_);
+}
+
+bool DslWidget::triggerTouchAction(const dsl::TouchAction& action) {
+  if (actionIsRefresh(action)) {
+    forceFetchNow_ = true;
+    return true;
+  }
+  if (actionIsHttp(action)) {
+    if (action.url.isEmpty()) {
+      return false;
+    }
+    pendingTouchAction_ = action;
+    hasPendingTouchAction_ = true;
+    tapActionPending_ = true;
+    return true;
+  }
+  if (actionIsModal(action)) {
+    const dsl::ModalSpec* modal = nullptr;
+    if (!action.modalId.isEmpty()) {
+      modal = findModalById(action.modalId);
+    } else if (!dsl_.modals.empty()) {
+      modal = &dsl_.modals.front();
+    }
+    if (modal == nullptr) {
+      return false;
+    }
+    activeModalId_ = modal->id;
+    modalVisible_ = true;
+    if (action.dismissMs > 0) {
+      modalDismissAtMs_ = millis() + action.dismissMs;
+    } else {
+      modalDismissAtMs_ = 0;
+    }
+    return true;
+  }
+  if (actionIsDismissModal(action)) {
+    const bool wasVisible = modalVisible_;
+    modalVisible_ = false;
+    activeModalId_ = "";
+    modalDismissAtMs_ = 0;
+    return wasVisible;
+  }
+  return false;
+}
+
 bool DslWidget::onTouch(uint16_t localX, uint16_t localY, TouchType type) {
-  (void)localX;
-  (void)localY;
   if (type != TouchType::kTap || !dslLoaded_) {
     return false;
   }
 
-  const String action = parseTapActionType();
-  if (action.isEmpty()) {
-    return false;
-  }
-
-  if (action == "refresh") {
-    forceFetchNow_ = true;
+  if (modalVisible_) {
+    modalVisible_ = false;
+    activeModalId_ = "";
+    modalDismissAtMs_ = 0;
     return true;
   }
 
-  if (action == "http") {
-    auto urlIt = config_.settings.find("tap_url");
-    if (urlIt == config_.settings.end() || urlIt->second.isEmpty()) {
-      return false;
+  if (!dsl_.touchRegions.empty()) {
+    const int32_t lx = static_cast<int32_t>(localX);
+    const int32_t ly = static_cast<int32_t>(localY);
+    for (auto it = dsl_.touchRegions.rbegin(); it != dsl_.touchRegions.rend(); ++it) {
+      const dsl::TouchRegion& region = *it;
+      if (lx < region.x || ly < region.y) {
+        continue;
+      }
+      if (lx >= (region.x + region.w) || ly >= (region.y + region.h)) {
+        continue;
+      }
+      return triggerTouchAction(region.onTouch);
     }
-    tapActionPending_ = true;
-    return true;
   }
 
-  return false;
+  if (!dsl_.onTouch.action.isEmpty()) {
+    return triggerTouchAction(dsl_.onTouch);
+  }
+
+  return triggerTouchAction(buildLegacyTouchAction());
 }
 
 String DslWidget::bindRuntimeTemplate(const String& input) const {
+  auto trimCopy = [](String s) -> String {
+    s.trim();
+    return s;
+  };
+
+  auto unquote = [&](String s) -> String {
+    s = trimCopy(s);
+    if (s.length() >= 2) {
+      const char first = s[0];
+      const char last = s[s.length() - 1];
+      if ((first == '\'' && last == '\'') || (first == '"' && last == '"')) {
+        return s.substring(1, s.length() - 1);
+      }
+    }
+    return s;
+  };
+
+  auto splitArgs = [&](const String& raw, std::vector<String>& outArgs) {
+    outArgs.clear();
+    String cur;
+    int depth = 0;
+    char quote = '\0';
+    for (int i = 0; i < raw.length(); ++i) {
+      const char c = raw[i];
+      if (quote != '\0') {
+        cur += c;
+        if (c == quote) {
+          quote = '\0';
+        }
+        continue;
+      }
+      if (c == '\'' || c == '"') {
+        quote = c;
+        cur += c;
+        continue;
+      }
+      if (c == '(') {
+        ++depth;
+        cur += c;
+        continue;
+      }
+      if (c == ')') {
+        if (depth > 0) {
+          --depth;
+        }
+        cur += c;
+        continue;
+      }
+      if (c == ',' && depth == 0) {
+        outArgs.push_back(trimCopy(cur));
+        cur = "";
+        continue;
+      }
+      cur += c;
+    }
+    outArgs.push_back(trimCopy(cur));
+  };
+
+  auto resolveKnownKey = [&](const String& key, bool* found) -> String {
+    if (found != nullptr) {
+      *found = true;
+    }
+    if (key == "geo.lat") {
+      return String(RuntimeGeo::latitude, 4);
+    }
+    if (key == "geo.lon") {
+      return String(RuntimeGeo::longitude, 4);
+    }
+    if (key == "geo.tz") {
+      return RuntimeGeo::timezone;
+    }
+    if (key == "geo.label") {
+      return RuntimeGeo::label;
+    }
+    if (key == "geo.offset_min") {
+      return String(RuntimeGeo::utcOffsetMinutes);
+    }
+    if (key.startsWith("setting.")) {
+      const String settingKey = key.substring(8);
+      if (settingKey == "radius_nm" && RuntimeSettings::adsbRadiusNm > 0) {
+        return String(RuntimeSettings::adsbRadiusNm);
+      }
+      auto it = config_.settings.find(settingKey);
+      if (it != config_.settings.end()) {
+        return it->second;
+      }
+      if (found != nullptr) {
+        *found = false;
+      }
+      return "";
+    }
+    if (key == "pref.clock_24h") {
+      return RuntimeSettings::use24HourClock ? "true" : "false";
+    }
+    if (key == "pref.temp_unit") {
+      return RuntimeSettings::useFahrenheit ? "F" : "C";
+    }
+    if (key == "pref.distance_unit") {
+      return RuntimeSettings::useMiles ? "mi" : "km";
+    }
+    auto vit = values_.find(key);
+    if (vit != values_.end()) {
+      return vit->second;
+    }
+    auto pit = pathValues_.find(key);
+    if (pit != pathValues_.end()) {
+      return pit->second;
+    }
+    if (found != nullptr) {
+      *found = false;
+    }
+    return "";
+  };
+
+  auto resolveArgValue = [&](const String& arg) -> String {
+    String token = unquote(arg);
+    bool found = false;
+    const String known = resolveKnownKey(token, &found);
+    if (found) {
+      return known;
+    }
+    return token;
+  };
+
+  auto parseNumber = [&](const String& arg, float& outNum) -> bool {
+    const String raw = resolveArgValue(arg);
+    if (raw.isEmpty()) {
+      return false;
+    }
+    bool hasDigit = false;
+    for (int i = 0; i < raw.length(); ++i) {
+      const char c = raw[i];
+      if ((c >= '0' && c <= '9')) {
+        hasDigit = true;
+        break;
+      }
+    }
+    if (!hasDigit) {
+      return false;
+    }
+    outNum = raw.toFloat();
+    return true;
+  };
+
   String out = input;
   int start = out.indexOf("{{");
 
@@ -176,35 +484,71 @@ String DslWidget::bindRuntimeTemplate(const String& input) const {
       break;
     }
 
-    const String key = out.substring(start + 2, end);
+    const String expr = trimCopy(out.substring(start + 2, end));
     String value;
+    bool resolved = false;
 
-    if (key == "geo.lat") {
-      value = String(RuntimeGeo::latitude, 4);
-    } else if (key == "geo.lon") {
-      value = String(RuntimeGeo::longitude, 4);
-    } else if (key == "geo.tz") {
-      value = RuntimeGeo::timezone;
-    } else if (key == "geo.label") {
-      value = RuntimeGeo::label;
-    } else if (key == "geo.offset_min") {
-      value = String(RuntimeGeo::utcOffsetMinutes);
-    } else if (key.startsWith("setting.")) {
-      const String settingKey = key.substring(8);
-      if (settingKey == "radius_nm" && RuntimeSettings::adsbRadiusNm > 0) {
-        value = String(RuntimeSettings::adsbRadiusNm);
+    auto evalConditional = [&](const String& fn, const String& rawArgs) -> bool {
+      std::vector<String> args;
+      splitArgs(rawArgs, args);
+      if ((fn == "if_true" && args.size() != 3) ||
+          (fn != "if_true" && args.size() != 4)) {
+        return false;
+      }
+      if (fn == "if_true") {
+        const String cond = resolveArgValue(args[0]);
+        String condLower = cond;
+        condLower.toLowerCase();
+        const bool truthy = !cond.isEmpty() && condLower != "0" && condLower != "false" &&
+                            condLower != "no" && condLower != "off";
+        value = truthy ? resolveArgValue(args[1]) : resolveArgValue(args[2]);
+        return true;
+      }
+      if (fn == "if_eq" || fn == "if_ne") {
+        const String lhs = resolveArgValue(args[0]);
+        const String rhs = resolveArgValue(args[1]);
+        const bool eq = lhs == rhs;
+        value = ((fn == "if_eq") == eq) ? resolveArgValue(args[2]) : resolveArgValue(args[3]);
+        return true;
+      }
+
+      float lhsNum = 0.0f;
+      float rhsNum = 0.0f;
+      if (!parseNumber(args[0], lhsNum) || !parseNumber(args[1], rhsNum)) {
+        return false;
+      }
+      bool cond = false;
+      if (fn == "if_gt") {
+        cond = lhsNum > rhsNum;
+      } else if (fn == "if_gte") {
+        cond = lhsNum >= rhsNum;
+      } else if (fn == "if_lt") {
+        cond = lhsNum < rhsNum;
+      } else if (fn == "if_lte") {
+        cond = lhsNum <= rhsNum;
       } else {
-      auto it = config_.settings.find(settingKey);
-      if (it != config_.settings.end()) {
-        value = it->second;
+        return false;
       }
+      value = cond ? resolveArgValue(args[2]) : resolveArgValue(args[3]);
+      return true;
+    };
+
+    const int lparen = expr.indexOf('(');
+    if (lparen > 0 && expr.endsWith(")")) {
+      String fn = expr.substring(0, lparen);
+      fn.trim();
+      fn.toLowerCase();
+      const String rawArgs = expr.substring(lparen + 1, expr.length() - 1);
+      if (fn == "if_eq" || fn == "if_ne" || fn == "if_true" || fn == "if_gt" || fn == "if_gte" ||
+          fn == "if_lt" || fn == "if_lte") {
+        resolved = evalConditional(fn, rawArgs);
       }
-    } else if (key == "pref.clock_24h") {
-      value = RuntimeSettings::use24HourClock ? "true" : "false";
-    } else if (key == "pref.temp_unit") {
-      value = RuntimeSettings::useFahrenheit ? "F" : "C";
-    } else if (key == "pref.distance_unit") {
-      value = RuntimeSettings::useMiles ? "mi" : "km";
+    }
+
+    if (!resolved) {
+      bool found = false;
+      value = resolveKnownKey(expr, &found);
+      resolved = found;
     }
 
     out = out.substring(0, start) + value + out.substring(end + 2);

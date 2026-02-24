@@ -1,10 +1,16 @@
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include <SPI.h>
 #include <TFT_eSPI.h>
 #include <WiFi.h>
 #include <XPT2046_Touchscreen.h>
 #include <time.h>
 #include <string>
+#include <LittleFS.h>
+#include <Preferences.h>
+#include <algorithm>
+#include <vector>
+#include <esp_heap_caps.h>
 
 #include "AppConfig.h"
 #include "RuntimeGeo.h"
@@ -42,6 +48,7 @@ bool diagnosticLedState = false;
 uint32_t tftDiagLastMs = 0;
 int16_t tftDiagX = 0;
 int8_t tftDiagDir = 1;
+uint32_t lastHeapLogMs = 0;
 constexpr char kDisplayPrefsNs[] = "display";
 constexpr char kColorSetKey[] = "color_set";
 constexpr char kColorBgrKey[] = "color_bgr";
@@ -50,6 +57,20 @@ constexpr char kInvertOnKey[] = "inv_on";
 constexpr char kLayoutPrefsNs[] = "layout";
 constexpr char kLayoutProfileKey[] = "profile";
 constexpr uint16_t kAdsbRadiusOptions[] = {20, 40, 80, 120};
+constexpr uint32_t kHeapLogPeriodMs = 60000;
+constexpr int16_t kLayoutIconW = 14;
+constexpr int16_t kLayoutIconH = 14;
+constexpr int16_t kLayoutIconMargin = 3;
+void configureTimeFromGeo();
+bool ensureUtcTime(uint32_t timeoutMs = 6000);
+bool runLayoutPicker();
+void waitForTouchRelease();
+bool readTouchPoint(uint16_t& x, uint16_t& y);
+
+struct LayoutOption {
+  String name;
+  String path;
+};
 
 boot::BaselineState gBaselineState;
 
@@ -131,6 +152,285 @@ void toggleLayoutProfile() {
                 activeLayoutPath.c_str());
 }
 
+String normalizeLayoutPath(const String& raw) {
+  String path = raw;
+  path.trim();
+  if (path.isEmpty()) {
+    return path;
+  }
+  if (!path.startsWith("/")) {
+    path = "/" + path;
+  }
+  return path;
+}
+
+String layoutNameFromPath(const String& path) {
+  String name = path;
+  if (name.startsWith("/")) {
+    name.remove(0, 1);
+  }
+  if (name.endsWith(".json")) {
+    name.remove(name.length() - 5);
+  }
+  name.replace("screen_layout_", "");
+  name.replace("screen_layout", "layout");
+  name.replace("_", " ");
+  name.replace("-", " ");
+  if (name.length() > 0) {
+    name.setCharAt(0, static_cast<char>(toupper(name[0])));
+  }
+  return name;
+}
+
+bool hasLayoutPath(const std::vector<LayoutOption>& options, const String& path) {
+  for (const auto& option : options) {
+    if (option.path == path) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void addLayoutOption(std::vector<LayoutOption>& options, const String& path, const String& name) {
+  const String normPath = normalizeLayoutPath(path);
+  if (normPath.isEmpty() || hasLayoutPath(options, normPath)) {
+    return;
+  }
+  LayoutOption option;
+  option.path = normPath;
+  option.name = name.isEmpty() ? layoutNameFromPath(normPath) : name;
+  options.push_back(option);
+}
+
+bool loadLayoutOptionsFromManifest(std::vector<LayoutOption>& options) {
+  fs::File file = LittleFS.open("/layouts.json", FILE_READ);
+  if (!file || file.isDirectory()) {
+    return false;
+  }
+
+  JsonDocument doc;
+  const DeserializationError err = deserializeJson(doc, file);
+  file.close();
+  if (err) {
+    return false;
+  }
+
+  JsonArrayConst layouts = doc["layouts"].as<JsonArrayConst>();
+  if (layouts.isNull()) {
+    return false;
+  }
+
+  for (JsonObjectConst item : layouts) {
+    const String path = item["path"] | String();
+    String name = item["name"] | String();
+    if (name.isEmpty()) {
+      name = item["id"] | String();
+    }
+    addLayoutOption(options, path, name);
+  }
+  return !options.empty();
+}
+
+std::vector<LayoutOption> discoverLayoutOptions() {
+  std::vector<LayoutOption> options;
+  if (!loadLayoutOptionsFromManifest(options)) {
+    fs::File root = LittleFS.open("/");
+    if (root && root.isDirectory()) {
+      fs::File entry = root.openNextFile();
+      while (entry) {
+        if (!entry.isDirectory()) {
+          String path = normalizeLayoutPath(String(entry.name()));
+          if ((path.startsWith("/screen_layout") && path.endsWith(".json")) ||
+              path == "/screen_layout.json") {
+            addLayoutOption(options, path, "");
+          }
+        }
+        entry = root.openNextFile();
+      }
+    }
+  }
+
+  addLayoutOption(options, AppConfig::kLayoutPathA, "");
+  addLayoutOption(options, AppConfig::kLayoutPathB, "");
+  addLayoutOption(options, AppConfig::kDefaultLayoutPath, "");
+  addLayoutOption(options, activeLayoutPath, "");
+
+  std::sort(options.begin(), options.end(), [](const LayoutOption& a, const LayoutOption& b) {
+    return a.path < b.path;
+  });
+  return options;
+}
+
+void drawLayoutPickerModal(const std::vector<LayoutOption>& options, int page) {
+  constexpr int kRowsPerPage = 6;
+  const int totalPages = std::max(1, static_cast<int>((options.size() + kRowsPerPage - 1) / kRowsPerPage));
+  if (page < 0) page = 0;
+  if (page >= totalPages) page = totalPages - 1;
+  const int startIdx = page * kRowsPerPage;
+
+  const uint16_t bg = tft.color565(10, 16, 28);
+  const uint16_t panel = tft.color565(20, 30, 44);
+  const uint16_t border = tft.color565(80, 110, 140);
+  const uint16_t selectedBg = tft.color565(38, 68, 92);
+
+  tft.fillRect(0, 0, AppConfig::kScreenWidth, AppConfig::kScreenHeight, bg);
+  tft.fillRoundRect(8, 8, 304, 224, 8, panel);
+  tft.drawRoundRect(8, 8, 304, 224, 8, border);
+  tft.setTextColor(TFT_WHITE, panel);
+  tft.drawString("Select Layout", 16, 14, 2);
+  tft.setTextColor(TFT_LIGHTGREY, panel);
+  tft.drawRightString(String(page + 1) + "/" + String(totalPages), 304, 16, 1);
+
+  for (int i = 0; i < kRowsPerPage; ++i) {
+    const int idx = startIdx + i;
+    if (idx >= static_cast<int>(options.size())) {
+      break;
+    }
+    const int y = 38 + i * 28;
+    const bool selected = options[idx].path == activeLayoutPath;
+    tft.fillRoundRect(14, y, 292, 24, 4, selected ? selectedBg : bg);
+    tft.drawRoundRect(14, y, 292, 24, 4, border);
+    tft.setTextColor(selected ? TFT_CYAN : TFT_WHITE, selected ? selectedBg : bg);
+    tft.drawString(options[idx].name, 20, y + 5, 2);
+    tft.setTextColor(TFT_DARKGREY, selected ? selectedBg : bg);
+    tft.drawRightString(options[idx].path, 300, y + 7, 1);
+  }
+
+  const int btnY = 206;
+  tft.fillRoundRect(14, btnY, 84, 20, 4, tft.color565(65, 38, 38));
+  tft.setTextColor(TFT_WHITE, tft.color565(65, 38, 38));
+  tft.drawCentreString("Cancel", 56, btnY + 5, 2);
+
+  tft.fillRoundRect(108, btnY, 48, 20, 4, tft.color565(36, 54, 72));
+  tft.setTextColor(TFT_WHITE, tft.color565(36, 54, 72));
+  tft.drawCentreString("<", 132, btnY + 5, 2);
+
+  tft.fillRoundRect(164, btnY, 48, 20, 4, tft.color565(36, 54, 72));
+  tft.setTextColor(TFT_WHITE, tft.color565(36, 54, 72));
+  tft.drawCentreString(">", 188, btnY + 5, 2);
+}
+
+bool inRect(uint16_t x, uint16_t y, int rx, int ry, int rw, int rh) {
+  return x >= rx && y >= ry && x < (rx + rw) && y < (ry + rh);
+}
+
+int layoutIconX() { return AppConfig::kScreenWidth - kLayoutIconW - kLayoutIconMargin; }
+int layoutIconY() { return kLayoutIconMargin; }
+
+bool inLayoutHotCorner(uint16_t x, uint16_t y) {
+  return inRect(x, y, layoutIconX(), layoutIconY(), kLayoutIconW, kLayoutIconH);
+}
+
+void drawLayoutHotCornerIcon() {
+  const int x = layoutIconX();
+  const int y = layoutIconY();
+  const uint16_t bg = tft.color565(10, 18, 32);
+  const uint16_t border = tft.color565(90, 140, 200);
+  const uint16_t fg = tft.color565(140, 210, 255);
+
+  tft.fillRoundRect(x, y, kLayoutIconW, kLayoutIconH, 3, bg);
+  tft.drawRoundRect(x, y, kLayoutIconW, kLayoutIconH, 3, border);
+  tft.drawFastHLine(x + 3, y + 4, kLayoutIconW - 6, fg);
+  tft.drawFastHLine(x + 3, y + 7, kLayoutIconW - 6, fg);
+  tft.drawFastHLine(x + 3, y + 10, kLayoutIconW - 6, fg);
+}
+
+void maybeLogHeapTelemetry(uint32_t nowMs) {
+  if ((nowMs - lastHeapLogMs) < kHeapLogPeriodMs) {
+    return;
+  }
+  lastHeapLogMs = nowMs;
+
+  const uint32_t freeHeap = ESP.getFreeHeap();
+  const uint32_t minFree = ESP.getMinFreeHeap();
+  const uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  Serial.printf("[heap] free=%u min=%u largest=%u uptime_s=%lu\n",
+                static_cast<unsigned>(freeHeap), static_cast<unsigned>(minFree),
+                static_cast<unsigned>(largest), static_cast<unsigned long>(nowMs / 1000UL));
+}
+
+bool runLayoutPicker() {
+  const std::vector<LayoutOption> options = discoverLayoutOptions();
+  if (options.empty()) {
+    return false;
+  }
+  if (!AppConfig::kTouchEnabled) {
+    return false;
+  }
+
+  constexpr int kRowsPerPage = 6;
+  int page = 0;
+  const int totalPages = std::max(1, static_cast<int>((options.size() + kRowsPerPage - 1) / kRowsPerPage));
+
+  while (true) {
+    drawLayoutPickerModal(options, page);
+
+    uint16_t x = 0;
+    uint16_t y = 0;
+    while (!readTouchPoint(x, y)) {
+      delay(20);
+    }
+    waitForTouchRelease();
+
+    if (inRect(x, y, 14, 206, 84, 20)) {
+      displayManager.reloadLayout(activeLayoutPath);
+      return false;
+    }
+    if (inRect(x, y, 108, 206, 48, 20)) {
+      if (page > 0) {
+        page--;
+      }
+      continue;
+    }
+    if (inRect(x, y, 164, 206, 48, 20)) {
+      if (page < totalPages - 1) {
+        page++;
+      }
+      continue;
+    }
+
+    for (int i = 0; i < kRowsPerPage; ++i) {
+      const int idx = page * kRowsPerPage + i;
+      if (idx >= static_cast<int>(options.size())) {
+        break;
+      }
+      const int rowY = 38 + i * 28;
+      if (!inRect(x, y, 14, rowY, 292, 24)) {
+        continue;
+      }
+
+      tft.fillRect(0, 0, AppConfig::kScreenWidth, AppConfig::kScreenHeight, TFT_BLACK);
+      tft.setTextColor(TFT_CYAN, TFT_BLACK);
+      tft.drawString("Loading layout...", 12, 104, 2);
+      tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+      tft.drawString(options[idx].name, 12, 126, 2);
+
+      const String oldPath = activeLayoutPath;
+      if (displayManager.reloadLayout(options[idx].path)) {
+        activeLayoutPath = options[idx].path;
+        if (activeLayoutPath == AppConfig::kLayoutPathA) {
+          activeLayoutProfile = 0;
+        } else if (activeLayoutPath == AppConfig::kLayoutPathB) {
+          activeLayoutProfile = 1;
+        }
+        Serial.printf("[layout] selected path=%s name=%s\n",
+                      activeLayoutPath.c_str(), options[idx].name.c_str());
+        return true;
+      }
+
+      activeLayoutPath = oldPath;
+      displayManager.reloadLayout(oldPath);
+      tft.fillRect(0, 0, AppConfig::kScreenWidth, AppConfig::kScreenHeight, TFT_BLACK);
+      tft.setTextColor(TFT_RED, TFT_BLACK);
+      tft.drawString("Layout load failed", 12, 104, 2);
+      tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+      tft.drawString(options[idx].path, 12, 126, 1);
+      delay(900);
+      break;
+    }
+  }
+}
+
 void updateUserButton(uint32_t nowMs) {
   if (AppConfig::kUserButtonPin < 0) {
     return;
@@ -151,7 +451,11 @@ void updateUserButton(uint32_t nowMs) {
 
   userBtnStablePressed = pressedNow;
   if (userBtnStablePressed) {
-    toggleLayoutProfile();
+    if (AppConfig::kTouchEnabled) {
+      runLayoutPicker();
+    } else {
+      toggleLayoutProfile();
+    }
   }
 }
 
@@ -843,6 +1147,10 @@ void loop() {
   if (AppConfig::kTouchEnabled && touch.touched()) {
     TouchPoint point;
     if (TouchMapper::mapRaw(touch.getPoint(), point)) {
+      if (inLayoutHotCorner(point.x, point.y)) {
+        waitForTouchRelease();
+        runLayoutPicker();
+      } else {
       const bool inCorner = (point.x >= static_cast<int16_t>(AppConfig::kScreenWidth - 32) &&
                              point.y <= 24);
       if (inCorner) {
@@ -871,6 +1179,7 @@ void loop() {
       } else {
         displayManager.onTouch(point.x, point.y);
         waitForTouchRelease();
+      }
       }
     }
   }

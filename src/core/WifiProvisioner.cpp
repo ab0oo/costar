@@ -118,6 +118,9 @@ bool WifiProvisioner::tryConnect(const String& ssid, const String& password,
     return false;
   }
 
+  WiFi.setAutoReconnect(true);
+  WiFi.setSleep(false);
+
   if (persist) {
     persistCredentials(ssid, password);
   }

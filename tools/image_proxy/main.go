@@ -5,6 +5,7 @@ import (
 	"container/list"
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"flag"
 	"fmt"
@@ -74,6 +75,42 @@ type loggingResponseWriter struct {
 	http.ResponseWriter
 	status int
 	bytes  int
+}
+
+type rssDoc struct {
+	Channel rssChannel `xml:"channel"`
+}
+
+type rssChannel struct {
+	Title string    `xml:"title"`
+	Link  string    `xml:"link"`
+	Items []rssItem `xml:"item"`
+}
+
+type rssItem struct {
+	Title       string `xml:"title"`
+	Link        string `xml:"link"`
+	Description string `xml:"description"`
+	PubDate     string `xml:"pubDate"`
+}
+
+type atomFeed struct {
+	Title   string      `xml:"title"`
+	Links   []atomLink  `xml:"link"`
+	Entries []atomEntry `xml:"entry"`
+}
+
+type atomEntry struct {
+	Title   string     `xml:"title"`
+	Summary string     `xml:"summary"`
+	Updated string     `xml:"updated"`
+	Published string   `xml:"published"`
+	Links   []atomLink `xml:"link"`
+}
+
+type atomLink struct {
+	Href string `xml:"href,attr"`
+	Rel  string `xml:"rel,attr"`
 }
 
 func (w *loggingResponseWriter) WriteHeader(code int) {
@@ -187,6 +224,7 @@ func main() {
 	mux.HandleFunc("/healthz", healthHandler)
 	mux.HandleFunc("/cmh", cfg.convertHandler)
 	mux.HandleFunc("/mdi", cfg.mdiHandler)
+	mux.HandleFunc("/rssj", cfg.rssJSONHandler)
 
 	srv := &http.Server{
 		Addr:              *listenAddr,
@@ -223,6 +261,7 @@ func rootHandler(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte(
 		"GET /cmh?url=<image_url>&size=<n|WxH>\n" +
 			"GET /mdi?icon=<mdi_name>&size=<n|WxH>&color=<RRGGBB>\n" +
+			"GET /rssj?url=<rss_or_atom_url>&limit=<n>\n" +
 			"Returns raw rgb565 little-endian bytes.\n" +
 			"Response includes X-Cache: HIT or MISS.\n" +
 			"/cmh supports optional ua= and referer= query params.\n",
@@ -399,6 +438,57 @@ func (cfg serverConfig) mdiHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg.cache.set(cacheKey, resp)
 	writeRawResponse(w, resp, false)
+}
+
+func (cfg serverConfig) rssJSONHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	srcURL := strings.TrimSpace(r.URL.Query().Get("url"))
+	if srcURL == "" {
+		writeError(w, http.StatusBadRequest, "missing url query parameter")
+		return
+	}
+
+	limit := 10
+	if limitRaw := strings.TrimSpace(r.URL.Query().Get("limit")); limitRaw != "" {
+		n, err := strconv.Atoi(limitRaw)
+		if err != nil || n <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid limit parameter")
+			return
+		}
+		if n > 50 {
+			n = 50
+		}
+		limit = n
+	}
+
+	uaOverride := sanitizeHeaderValue(r.URL.Query().Get("ua"))
+	refererOverride := sanitizeHeaderValue(r.URL.Query().Get("referer"))
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+
+	body, fetchURL, err := cfg.fetchSourceBytes(ctx, srcURL, fetchOptions{
+		userAgent: firstNonEmpty(uaOverride, cfg.userAgent, defaultUserAgent),
+		referer:   refererOverride,
+	})
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	payload, err := parseFeedAsJSON(body, fetchURL, limit)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Source-URL", fetchURL)
+	_ = json.NewEncoder(w).Encode(payload)
 }
 
 func buildCMHCacheKey(srcURL string, width, height int, userAgent, referer string) string {
@@ -828,4 +918,82 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+func parseFeedAsJSON(body []byte, sourceURL string, limit int) (map[string]interface{}, error) {
+	var rss rssDoc
+	if err := xml.Unmarshal(body, &rss); err == nil && (rss.Channel.Title != "" || len(rss.Channel.Items) > 0) {
+		items := make([]map[string]string, 0, minInt(limit, len(rss.Channel.Items)))
+		for i, item := range rss.Channel.Items {
+			if i >= limit {
+				break
+			}
+			items = append(items, map[string]string{
+				"title":       strings.TrimSpace(item.Title),
+				"link":        strings.TrimSpace(item.Link),
+				"description": strings.TrimSpace(item.Description),
+				"published":   strings.TrimSpace(item.PubDate),
+			})
+		}
+		return map[string]interface{}{
+			"source": sourceURL,
+			"type":   "rss",
+			"title":  strings.TrimSpace(rss.Channel.Title),
+			"link":   strings.TrimSpace(rss.Channel.Link),
+			"items":  items,
+		}, nil
+	}
+
+	var atom atomFeed
+	if err := xml.Unmarshal(body, &atom); err == nil && (atom.Title != "" || len(atom.Entries) > 0) {
+		items := make([]map[string]string, 0, minInt(limit, len(atom.Entries)))
+		for i, entry := range atom.Entries {
+			if i >= limit {
+				break
+			}
+			published := strings.TrimSpace(entry.Published)
+			if published == "" {
+				published = strings.TrimSpace(entry.Updated)
+			}
+			items = append(items, map[string]string{
+				"title":       strings.TrimSpace(entry.Title),
+				"link":        firstEntryLink(entry.Links),
+				"description": strings.TrimSpace(entry.Summary),
+				"published":   published,
+			})
+		}
+		return map[string]interface{}{
+			"source": sourceURL,
+			"type":   "atom",
+			"title":  strings.TrimSpace(atom.Title),
+			"link":   firstEntryLink(atom.Links),
+			"items":  items,
+		}, nil
+	}
+
+	return nil, errors.New("feed parse failed (expected RSS or Atom XML)")
+}
+
+func firstEntryLink(links []atomLink) string {
+	for _, l := range links {
+		if strings.TrimSpace(l.Href) == "" {
+			continue
+		}
+		if strings.TrimSpace(l.Rel) == "" || strings.EqualFold(strings.TrimSpace(l.Rel), "alternate") {
+			return strings.TrimSpace(l.Href)
+		}
+	}
+	for _, l := range links {
+		if strings.TrimSpace(l.Href) != "" {
+			return strings.TrimSpace(l.Href)
+		}
+	}
+	return ""
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
