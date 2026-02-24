@@ -1,0 +1,2 @@
+source /home/johgor/src/costar/idf/build/gdbinit/symbols
+source /home/johgor/src/costar/idf/build/gdbinit/connect

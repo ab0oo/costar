@@ -1,0 +1,146 @@
+{
+  "version": 1,
+  "notes": {
+    "weather_code_ref": "Open-Meteo weather_code uses WMO weather interpretation codes (not consecutive integers). See https://open-meteo.com/en/docs#weather_variable_documentation"
+  },
+  "data": {
+    "source": "http",
+    "url": "https://api.open-meteo.com/v1/forecast?latitude={{geo.lat}}&longitude={{geo.lon}}&daily=weather_code,temperature_2m_min,temperature_2m_max&timezone=UTC&forecast_days=2&temperature_unit=fahrenheit",
+    "debug": true,
+    "poll_ms": 600000,
+    "fields": {
+      "day1_name": {
+        "path": "daily.time[0]",
+        "format": {
+          "tz": "local",
+          "time_format": "%A"
+        }
+      },
+      "day1_min": {
+        "path": "daily.temperature_2m_min[0]",
+        "format": {
+          "round": 0,
+          "locale": "en-US"
+        }
+      },
+      "day1_max": {
+        "path": "daily.temperature_2m_max[0]",
+        "format": {
+          "round": 0,
+          "locale": "en-US"
+        }
+      },
+      "day1_code": "daily.weather_code[0]",
+      "day2_name": {
+        "path": "daily.time[1]",
+        "format": {
+          "tz": "local",
+          "time_format": "%A"
+        }
+      },
+      "day2_min": {
+        "path": "daily.temperature_2m_min[1]",
+        "format": {
+          "round": 0,
+          "locale": "en-US"
+        }
+      },
+      "day2_max": {
+        "path": "daily.temperature_2m_max[1]",
+        "format": {
+          "round": 0,
+          "locale": "en-US"
+        }
+      },
+      "day2_code": "daily.weather_code[1]",
+      "moon_phase": {
+        "path": "computed.moon_phase"
+      }
+    }
+  },
+  "ui": {
+    "title": "Forecast",
+    "nodes": [
+      {
+        "type": "label",
+        "x": 6,
+        "y": 4,
+        "font": 2,
+        "color": "#B0BEC5",
+        "text": "Forecast:"
+      },
+      {
+        "type": "icon",
+        "x": 6,
+        "y": 24,
+        "w": 28,
+        "h": 28,
+        "path": "{{day1_icon}}"
+      },
+      {
+        "type": "label",
+        "x": 40,
+        "y": 20,
+        "font": 1,
+        "color": "#E0E0E0",
+        "text": "{{day1_name}}"
+      },
+      {
+        "type": "label",
+        "x": 40,
+        "y": 36,
+        "font": 1,
+        "color": "#E0E0E0",
+        "text": "{{day1_min}}/{{day1_max}} {{pref.temp_unit}}"
+      },
+      {
+        "type": "icon",
+        "x": 6,
+        "y": 56,
+        "w": 28,
+        "h": 28,
+        "path": "{{day2_icon}}"
+      },
+      {
+        "type": "label",
+        "x": 40,
+        "y": 52,
+        "font": 1,
+        "color": "#E0E0E0",
+        "text": "{{day2_name}}"
+      },
+      {
+        "type": "label",
+        "x": 40,
+        "y": 68,
+        "font": 1,
+        "color": "#E0E0E0",
+        "text": "{{day2_min}}/{{day2_max}} {{pref.temp_unit}}"
+      },
+      {
+        "type": "label",
+        "x": 6,
+        "y": 88,
+        "font": 1,
+        "color": "#B0BEC5",
+        "text": "Moon Phase:"
+      },
+      {
+        "type": "label",
+        "x": 6,
+        "y": 102,
+        "font": 1,
+        "color": "#E0E0E0",
+        "text": "{{moon_phase}}"
+      },
+      {
+        "type": "moon_phase",
+        "x": 132,
+        "y": 106,
+        "r": 11,
+        "color": "#E0E0E0",
+        "bg": "#202020"
+      }
+    ]
+  }
+}

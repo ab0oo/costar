@@ -1,13 +1,15 @@
 #include "services/HttpJsonClient.h"
 
 #include <HTTPClient.h>
-#include <WiFi.h>
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <cstdlib>
 #include <esp_heap_caps.h>
+#include <string>
+
+#include "platform/Net.h"
 
 namespace {
 struct ParsedUrl {
@@ -346,7 +348,7 @@ bool HttpJsonClient::get(const String& url, JsonDocument& outDoc,
   }
   const uint32_t startMs = millis();
 
-  if (WiFi.status() != WL_CONNECTED) {
+  if (!platform::net::isConnected()) {
     if (errorMessage != nullptr) {
       *errorMessage = "WiFi disconnected, " + heapDiag();
     }
@@ -365,13 +367,12 @@ bool HttpJsonClient::get(const String& url, JsonDocument& outDoc,
   WiFiClientSecure secureClient;
   int statusCode = 0;
   const String host = extractHostForLog(url);
-  IPAddress resolved;
   String connectUrl = url;
   bool useHostHeader = false;
-  if (!host.isEmpty() && WiFi.hostByName(host.c_str(), resolved)) {
-    const String ipText = resolved.toString();
-    if (ipText.length() > 0) {
-      connectUrl = buildUrlWithResolvedIp(url, host, ipText);
+  if (!host.isEmpty()) {
+    std::string ipText;
+    if (platform::net::resolveHostByName(host.c_str(), ipText)) {
+      connectUrl = buildUrlWithResolvedIp(url, host, String(ipText.c_str()));
       useHostHeader = (connectUrl != url);
     }
   }

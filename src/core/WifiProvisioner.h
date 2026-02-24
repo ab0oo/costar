@@ -1,6 +1,5 @@
 #pragma once
 
-#include <Preferences.h>
 #include <TFT_eSPI.h>
 #include <WiFi.h>
 #include <XPT2046_Touchscreen.h>
@@ -34,5 +33,4 @@ class WifiProvisioner {
 
   TFT_eSPI& tft_;
   XPT2046_Touchscreen& touch_;
-  Preferences prefs_;
 };

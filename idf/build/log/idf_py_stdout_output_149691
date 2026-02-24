@@ -1,0 +1,166 @@
+Command: make -j 14 flash
+[  1%] Built target memory_ld_in_preprocess
+[  1%] Built target sections_ld_in_preprocess
+[  1%] Built target partition_table_bin
+[  1%] Built target custom_bundle
+[  1%] Built target _project_elf_src
+[  1%] [34m[1mPerforming build step for 'bootloader'[0m
+[  1%] Built target __idf_esp_https_ota
+[  2%] Built target __idf_esp_http_server
+[  1%] Built target bootloader_ld_in_preprocess
+[  2%] Built target _project_elf_src
+[  2%] Built target __idf_esp_http_client
+[  9%] Built target __idf_log
+[ 16%] Built target __idf_esp_rom
+[  2%] Built target __idf_tcp_transport
+[ 17%] Built target __idf_esp_common
+[  3%] Built target __idf_esp_adc
+[  4%] Built target __idf_esp_driver_i2s
+[ 24%] Built target __idf_esp_hw_support
+[ 25%] Built target __idf_esp_system
+[  5%] Built target __idf_esp-tls
+[  6%] Built target __idf_http_parser
+[ 30%] Built target __idf_efuse
+[  6%] Built target __idf_esp_hal_i2c
+[ 47%] Built target __idf_bootloader_support
+[  6%] Built target __idf_esp_gdbstub
+[ 50%] Built target __idf_esp_security
+[ 52%] Built target __idf_esp_hal_security
+[  7%] Built target __idf_esp_wifi
+[ 56%] Built target __idf_esp_hal_ana_conv
+[  8%] Built target __idf_esp_coex
+[ 58%] Built target __idf_esp_hal_i2s
+[ 61%] Built target __idf_esp_hal_uart
+[ 16%] Built target __idf_wpa_supplicant
+[ 63%] Built target __idf_esp_hal_wdt
+[ 17%] Built target __idf_esp_netif
+[ 65%] Built target __idf_esp_hal_timg
+[ 67%] Built target __idf_esp_bootloader_format
+[ 26%] Built target __idf_lwip
+[ 69%] Built target __idf_spi_flash
+[ 27%] Built target __idf_vfs
+[ 71%] Built target __idf_esp_hal_mspi
+[ 27%] Built target __idf_esp_phy
+[ 73%] Built target __idf_esp_hal_clock
+[ 77%] Built target __idf_esp_hal_gpspi
+[ 29%] Built target __idf_nvs_flash
+[ 79%] Built target __idf_micro-ecc
+[ 29%] Built target __idf_nvs_sec_provider
+[ 80%] Built target __idf_esp_hal_pmu
+[ 30%] Built target __idf_esp_event
+[ 84%] Built target __idf_esp_hal_gpio
+[ 31%] Built target __idf_esp_driver_uart
+[ 89%] Built target __idf_hal
+[ 31%] Built target __idf_esp_psram
+[ 94%] Built target __idf_soc
+[ 31%] Built target __idf_esp_ringbuf
+[ 96%] Built target __idf_xtensa
+[ 32%] Built target __idf_esp_timer
+[ 97%] Built target __idf_main
+[ 32%] Built target __idf_cxx
+[ 98%] Built target bootloader.elf
+[ 33%] Built target __idf_pthread
+[100%] Built target gen_bootloader_binary
+[ 35%] Built target __idf_esp_libc
+[100%] Built target gen_project_binary
+[ 37%] Built target __idf_freertos
+Bootloader binary size 0x6610 bytes. 0x9f0 bytes (9%) free.
+[ 42%] Built target __idf_esp_hw_support
+[100%] Built target bootloader_check_size
+[ 42%] Built target __idf_esp_hal_touch_sens
+[100%] Built target app
+[ 42%] Built target __idf_esp_hal_pmu
+[ 42%] [34m[1mNo install step for 'bootloader'[0m
+[ 42%] [34m[1mCompleted 'bootloader'[0m
+[ 43%] Built target __idf_esp_hal_gpio
+[ 44%] Built target __idf_soc
+[ 45%] Built target bootloader
+[ 45%] Built target __idf_heap
+[ 47%] Built target __idf_log
+[ 48%] Built target __idf_hal
+[ 49%] Built target __idf_esp_rom
+[ 49%] Built target __idf_esp_common
+[ 52%] Built target __idf_esp_system
+[ 54%] Built target __idf_spi_flash
+[ 55%] Built target __idf_bootloader_support
+[ 56%] Built target __idf_esp_hal_ana_conv
+[ 56%] Built target __idf_esp_hal_i2s
+[ 56%] Built target __idf_esp_hal_wdt
+[ 57%] Built target __idf_esp_hal_timg
+[ 60%] Built target tfpsacrypto
+[ 63%] Built target mbedtls
+[ 64%] Built target mbedx509
+[ 70%] Built target builtin
+[ 70%] Built target p256m
+[ 71%] Built target everest
+[ 72%] Built target __idf_mbedtls
+[ 72%] Built target __idf_esp_driver_dma
+[ 72%] Built target __idf_esp_mm
+[ 73%] Built target __idf_esp_pm
+[ 73%] Built target __idf_esp_hal_uart
+[ 73%] Built target __idf_esp_driver_gpio
+[ 73%] Built target __idf_esp_security
+[ 73%] Built target __idf_efuse
+[ 74%] Built target __idf_esp_partition
+[ 74%] Built target __idf_app_update
+[ 74%] Built target __idf_esp_bootloader_format
+[ 74%] Built target __idf_esp_app_format
+[ 74%] Built target __idf_esp_hal_security
+[ 75%] Built target __idf_esp_hal_mspi
+[ 75%] Built target __idf_esp_hal_clock
+[ 76%] Built target __idf_esp_hal_gpspi
+[ 77%] Built target __idf_esp_stdio
+[ 78%] Built target __idf_xtensa
+[ 78%] Built target __idf_esp_hal_ledc
+[ 79%] Built target __idf_esp_hal_sd
+[ 79%] Built target __idf_esp_hal_mcpwm
+[ 80%] Built target __idf_esp_hal_twai
+[ 80%] Built target __idf_esp_driver_i2c
+[ 81%] Built target __idf_esp_driver_dac
+[ 81%] Built target __idf_esp_driver_cam
+[ 81%] Built target __idf_esp_hal_rmt
+[ 83%] Built target __idf_console
+[ 83%] Built target __idf_esp_hal_pcnt
+[ 84%] Built target __idf_esp_driver_spi
+[ 84%] Built target __idf_esp_driver_sdm
+[ 85%] Built target __idf_esp_driver_gptimer
+[ 86%] Built target __idf_unity
+[ 86%] Built target __idf_esp_driver_touch_sens
+[ 87%] Built target __idf_esp_hid
+[ 87%] Built target __idf_esp_https_server
+[ 87%] Built target __idf_protobuf-c
+[ 87%] Built target __idf_rt
+[ 87%] Built target __idf_esp_hal_emac
+[ 87%] Built target __idf_perfmon
+[ 88%] Built target __idf_esp_hal_lcd
+[ 90%] Built target __idf_driver
+[ 90%] Built target __idf_wear_levelling
+[ 91%] Built target __idf_spiffs
+[ 91%] Built target __idf_esp_driver_ledc
+[ 92%] Built target __idf_sdmmc
+[ 93%] Built target __idf_esp_driver_mcpwm
+[ 93%] Built target __idf_esp_driver_twai
+[ 94%] Built target __idf_cmock
+[ 94%] Built target __idf_esp_driver_pcnt
+[ 95%] Built target __idf_esp_eth
+[ 95%] Built target __idf_esp_lcd
+[ 95%] Built target __idf_esp_driver_sdio
+[ 96%] Built target __idf_protocomm
+[ 96%] Built target __idf_joltwallet__littlefs
+[ 96%] Built target __idf_esp_driver_sdspi
+[ 97%] Built target __idf_esp_driver_rmt
+[ 97%] Built target __idf_esp_driver_sd_intf
+[ 98%] Built target __idf_esp_local_ctrl
+[ 98%] Built target __idf_main
+[ 99%] Built target __idf_esp_driver_sdmmc
+[100%] Built target __idf_fatfs
+[100%] Built target __ldgen_output_sections.ld
+[100%] Built target costar_idf.elf
+[100%] Built target gen_costar_idf_binary
+[100%] Built target gen_project_binary
+costar_idf.bin binary size 0xbf1d0 bytes. Smallest app partition is 0x200000 bytes. 0x140e30 bytes (63%) free.
+[100%] Built target app_check_size
+[100%] Built target app
+esptool --chip esp32 -p /dev/ttyUSB0 -b 460800 --before=default-reset --after=hard-reset write-flash --flash-mode dio --flash-freq 40m --flash-size 4MB 0x1000 bootloader/bootloader.bin 0x8000 partition_table/partition-table.bin 0x10000 costar_idf.bin
+esptool v5.2.0
+Serial port /dev/ttyUSB0:

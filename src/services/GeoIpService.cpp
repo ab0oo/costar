@@ -1,11 +1,12 @@
 #include "services/GeoIpService.h"
 
 #include <ArduinoJson.h>
-#include <FS.h>
-#include <LittleFS.h>
-#include <WiFi.h>
 
 #include "RuntimeGeo.h"
+#include "platform/Fs.h"
+#include "platform/Net.h"
+#include "platform/Prefs.h"
+#include "platform/Platform.h"
 
 namespace {
 constexpr char kPrefsNs[] = "geo";
@@ -82,14 +83,12 @@ bool GeoIpService::loadOverride() {
     return true;
   }
 
-  prefs_.begin(kPrefsNs, true);
-  const int mode = prefs_.getInt(kModeKey, kModeAuto);
-  lat = prefs_.getFloat(kManualLatKey, NAN);
-  lon = prefs_.getFloat(kManualLonKey, NAN);
-  tz = prefs_.getString(kManualTzKey, "");
-  label = prefs_.getString(kManualLabelKey, "");
-  offMin = prefs_.getInt(kManualOffsetKey, kOffsetUnknown);
-  prefs_.end();
+  const int mode = platform::prefs::getInt(kPrefsNs, kModeKey, kModeAuto);
+  lat = platform::prefs::getFloat(kPrefsNs, kManualLatKey, NAN);
+  lon = platform::prefs::getFloat(kPrefsNs, kManualLonKey, NAN);
+  tz = String(platform::prefs::getString(kPrefsNs, kManualTzKey, "").c_str());
+  label = String(platform::prefs::getString(kPrefsNs, kManualLabelKey, "").c_str());
+  offMin = platform::prefs::getInt(kPrefsNs, kManualOffsetKey, kOffsetUnknown);
 
   if (mode != kModeManual || isnan(lat) || isnan(lon) || tz.isEmpty()) {
     setError("manual override missing");
@@ -104,13 +103,11 @@ bool GeoIpService::loadOverride() {
 }
 
 bool GeoIpService::loadCached() {
-  prefs_.begin(kPrefsNs, true);
-  const float lat = prefs_.getFloat(kLatKey, NAN);
-  const float lon = prefs_.getFloat(kLonKey, NAN);
-  const String tz = prefs_.getString(kTzKey, "");
-  const String label = prefs_.getString(kLabelKey, "");
-  const int offMin = prefs_.getInt(kOffsetKey, kOffsetUnknown);
-  prefs_.end();
+  const float lat = platform::prefs::getFloat(kPrefsNs, kLatKey, NAN);
+  const float lon = platform::prefs::getFloat(kPrefsNs, kLonKey, NAN);
+  const String tz = String(platform::prefs::getString(kPrefsNs, kTzKey, "").c_str());
+  const String label = String(platform::prefs::getString(kPrefsNs, kLabelKey, "").c_str());
+  const int offMin = platform::prefs::getInt(kPrefsNs, kOffsetKey, kOffsetUnknown);
 
   if (isnan(lat) || isnan(lon) || tz.isEmpty()) {
     setError("cache missing lat/lon/tz");
@@ -125,17 +122,15 @@ bool GeoIpService::loadCached() {
 }
 
 bool GeoIpService::saveCached(float lat, float lon, const String& tz, const String& label) {
-  prefs_.begin(kPrefsNs, false);
-  prefs_.putFloat(kLatKey, lat);
-  prefs_.putFloat(kLonKey, lon);
-  prefs_.putString(kTzKey, tz);
+  platform::prefs::putFloat(kPrefsNs, kLatKey, lat);
+  platform::prefs::putFloat(kPrefsNs, kLonKey, lon);
+  platform::prefs::putString(kPrefsNs, kTzKey, tz.c_str());
   if (!label.isEmpty()) {
-    prefs_.putString(kLabelKey, label);
+    platform::prefs::putString(kPrefsNs, kLabelKey, label.c_str());
   }
   if (RuntimeGeo::hasUtcOffset) {
-    prefs_.putInt(kOffsetKey, RuntimeGeo::utcOffsetMinutes);
+    platform::prefs::putInt(kPrefsNs, kOffsetKey, RuntimeGeo::utcOffsetMinutes);
   }
-  prefs_.end();
   return true;
 }
 
@@ -144,23 +139,21 @@ bool GeoIpService::saveManual(float lat, float lon, const String& tz, int offset
   const String ssid = currentWifiSsid();
   const bool hasSsid = !ssid.isEmpty();
 
-  prefs_.begin(kPrefsNs, false);
-  prefs_.putInt(kModeKey, hasSsid ? kModeAuto : kModeManual);
-  prefs_.putFloat(kManualLatKey, lat);
-  prefs_.putFloat(kManualLonKey, lon);
-  prefs_.putString(kManualTzKey, tz);
+  platform::prefs::putInt(kPrefsNs, kModeKey, hasSsid ? kModeAuto : kModeManual);
+  platform::prefs::putFloat(kPrefsNs, kManualLatKey, lat);
+  platform::prefs::putFloat(kPrefsNs, kManualLonKey, lon);
+  platform::prefs::putString(kPrefsNs, kManualTzKey, tz.c_str());
   if (hasOffset) {
-    prefs_.putInt(kManualOffsetKey, offsetMinutes);
+    platform::prefs::putInt(kPrefsNs, kManualOffsetKey, offsetMinutes);
   } else {
-    prefs_.putInt(kManualOffsetKey, kOffsetUnknown);
+    platform::prefs::putInt(kPrefsNs, kManualOffsetKey, kOffsetUnknown);
   }
   if (!label.isEmpty()) {
-    prefs_.putString(kManualLabelKey, label);
+    platform::prefs::putString(kPrefsNs, kManualLabelKey, label.c_str());
   }
   if (!city.isEmpty()) {
-    prefs_.putString(kManualCityKey, city);
+    platform::prefs::putString(kPrefsNs, kManualCityKey, city.c_str());
   }
-  prefs_.end();
 
   if (hasSsid) {
     saveManualForSsid(ssid, lat, lon, tz, offsetMinutes, hasOffset, label, city);
@@ -169,9 +162,7 @@ bool GeoIpService::saveManual(float lat, float lon, const String& tz, int offset
 }
 
 bool GeoIpService::clearOverride() {
-  prefs_.begin(kPrefsNs, false);
-  prefs_.putInt(kModeKey, kModeAuto);
-  prefs_.end();
+  platform::prefs::putInt(kPrefsNs, kModeKey, kModeAuto);
 
   const String ssid = currentWifiSsid();
   if (!ssid.isEmpty()) {
@@ -184,7 +175,11 @@ bool GeoIpService::clearOverride() {
 }
 
 String GeoIpService::currentWifiSsid() const {
-  String ssid = WiFi.SSID();
+  std::string ssidRaw;
+  if (!platform::net::getSsid(ssidRaw)) {
+    return String();
+  }
+  String ssid = String(ssidRaw.c_str());
   ssid.trim();
   return ssid;
 }
@@ -195,8 +190,11 @@ bool GeoIpService::loadManualForSsid(const String& ssid, float& lat, float& lon,
   if (ssid.isEmpty()) {
     return false;
   }
+  if (!platform::fs::exists(kManualSsidPath)) {
+    return false;
+  }
 
-  fs::File f = LittleFS.open(kManualSsidPath, FILE_READ);
+  platform::fs::File f = platform::fs::open(kManualSsidPath, FILE_READ);
   if (!f || f.isDirectory()) {
     return false;
   }
@@ -255,12 +253,14 @@ bool GeoIpService::saveManualForSsid(const String& ssid, float lat, float lon, c
   }
 
   JsonDocument doc;
-  fs::File in = LittleFS.open(kManualSsidPath, FILE_READ);
-  if (in && !in.isDirectory()) {
-    deserializeJson(doc, in);
-    in.close();
-  } else if (in) {
-    in.close();
+  if (platform::fs::exists(kManualSsidPath)) {
+    platform::fs::File in = platform::fs::open(kManualSsidPath, FILE_READ);
+    if (in && !in.isDirectory()) {
+      deserializeJson(doc, in);
+      in.close();
+    } else if (in) {
+      in.close();
+    }
   }
 
   JsonArray entries = doc[kEntriesKey].as<JsonArray>();
@@ -301,7 +301,7 @@ bool GeoIpService::saveManualForSsid(const String& ssid, float lat, float lon, c
     target.remove(kCityKey);
   }
 
-  fs::File out = LittleFS.open(kManualSsidPath, FILE_WRITE);
+  platform::fs::File out = platform::fs::open(kManualSsidPath, FILE_WRITE);
   if (!out || out.isDirectory()) {
     return false;
   }
@@ -314,8 +314,11 @@ bool GeoIpService::clearManualForSsid(const String& ssid) const {
   if (ssid.isEmpty()) {
     return false;
   }
+  if (!platform::fs::exists(kManualSsidPath)) {
+    return false;
+  }
 
-  fs::File in = LittleFS.open(kManualSsidPath, FILE_READ);
+  platform::fs::File in = platform::fs::open(kManualSsidPath, FILE_READ);
   if (!in || in.isDirectory()) {
     if (in) {
       in.close();
@@ -350,10 +353,10 @@ bool GeoIpService::clearManualForSsid(const String& ssid) const {
   }
 
   if (entries.size() == 0) {
-    return LittleFS.remove(kManualSsidPath);
+    return platform::fs::remove(kManualSsidPath);
   }
 
-  fs::File out = LittleFS.open(kManualSsidPath, FILE_WRITE);
+  platform::fs::File out = platform::fs::open(kManualSsidPath, FILE_WRITE);
   if (!out || out.isDirectory()) {
     return false;
   }
@@ -652,10 +655,10 @@ bool GeoIpService::refreshFromInternet() {
     if (fetchOffsetForTimezone(tz, resolvedOffset)) {
       offsetMin = resolvedOffset;
       hasOffset = true;
-      Serial.printf("[geo] timezone offset resolved from worldtimeapi tz=%s off_min=%d\n",
+      platform::logi("geo", "timezone offset resolved from worldtimeapi tz=%s off_min=%d",
                     tz.c_str(), offsetMin);
     } else {
-      Serial.printf("[geo] timezone offset unresolved tz=%s\n", tz.c_str());
+      platform::logw("geo", "timezone offset unresolved tz=%s", tz.c_str());
     }
   }
 

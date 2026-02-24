@@ -1,0 +1,12 @@
+file(REMOVE_RECURSE
+  "littlefs_py_venv"
+  "costar_idf.map"
+  "project_elf_src_esp32.c"
+  "ldgen_libraries.in"
+  "ldgen_libraries"
+  "costar_idf.bin"
+  "flash_app_args"
+  "flash_project_args"
+  "flasher_args.json.in"
+  "flasher_args.json"
+)

@@ -5,6 +5,8 @@
 #include "AppConfig.h"
 #include "core/TextEntry.h"
 #include "core/TouchMapper.h"
+#include "platform/Prefs.h"
+#include "platform/Platform.h"
 
 namespace {
 constexpr char kPrefsNamespace[] = "wifi";
@@ -20,21 +22,21 @@ WifiProvisioner::WifiProvisioner(TFT_eSPI& tft, XPT2046_Touchscreen& touch)
 
 bool WifiProvisioner::connectOrProvision() {
   WiFi.mode(WIFI_STA);
-  Serial.println("[wifi] station mode enabled");
+  platform::logi("wifi", "station mode enabled");
 
   if (tryStoredCredentials()) {
-    Serial.println("[wifi] connected with stored credentials");
+    platform::logi("wifi", "connected with stored credentials");
     return true;
   }
 
   if (!AppConfig::kTouchEnabled) {
-    Serial.println("[wifi] touch disabled; skipping interactive provisioning");
+    platform::logi("wifi", "touch disabled; skipping interactive provisioning");
     drawStatus("WiFi unavailable", "Touch disabled");
     delay(600);
     return false;
   }
 
-  Serial.println("[wifi] no valid stored credentials; entering provisioning UI");
+  platform::logi("wifi", "no valid stored credentials; entering provisioning UI");
 
   while (true) {
     std::vector<NetworkInfo> networks;
@@ -60,7 +62,7 @@ bool WifiProvisioner::connectOrProvision() {
     }
 
     const NetworkInfo& net = networks[selected];
-    Serial.printf("[wifi] selected SSID: %s (secure=%d)\n", net.ssid.c_str(),
+    platform::logi("wifi", "selected SSID: %s (secure=%d)", net.ssid.c_str(),
                   net.secure ? 1 : 0);
 
     const String password = net.secure ? promptPassword(net.ssid) : String();
@@ -86,13 +88,13 @@ bool WifiProvisioner::connectOrProvision() {
 }
 
 bool WifiProvisioner::tryStoredCredentials() {
-  prefs_.begin(kPrefsNamespace, true);
-  const String savedSsid = prefs_.getString(kPrefsSsidKey, "");
-  const String savedPass = prefs_.getString(kPrefsPassKey, "");
-  prefs_.end();
+  const String savedSsid =
+      String(platform::prefs::getString(kPrefsNamespace, kPrefsSsidKey, "").c_str());
+  const String savedPass =
+      String(platform::prefs::getString(kPrefsNamespace, kPrefsPassKey, "").c_str());
 
   if (savedSsid.isEmpty()) {
-    Serial.println("[wifi] stored SSID empty");
+    platform::logi("wifi", "stored SSID empty");
     return false;
   }
 
@@ -318,8 +320,6 @@ void WifiProvisioner::waitForTouchRelease() {
 }
 
 void WifiProvisioner::persistCredentials(const String& ssid, const String& password) {
-  prefs_.begin(kPrefsNamespace, false);
-  prefs_.putString(kPrefsSsidKey, ssid);
-  prefs_.putString(kPrefsPassKey, password);
-  prefs_.end();
+  platform::prefs::putString(kPrefsNamespace, kPrefsSsidKey, ssid.c_str());
+  platform::prefs::putString(kPrefsNamespace, kPrefsPassKey, password.c_str());
 }

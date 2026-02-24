@@ -288,7 +288,7 @@ bool DslWidget::applyFieldsFromDoc(const JsonDocument& doc, bool& changed) {
     if (!resolveVariant(doc, path, v)) {
       ++missingCount;
       if (dsl_.debug) {
-        Serial.printf("[%s] - [%s] - DSL field miss key=%s path=%s\n", widgetName().c_str(),
+        platform::logf("[%s] - [%s] - DSL field miss key=%s path=%s\n", widgetName().c_str(),
                       logTimestamp().c_str(), key.c_str(), path.c_str());
       }
       if (values_[key] != "") {
@@ -346,7 +346,7 @@ bool DslWidget::applyFieldsFromDoc(const JsonDocument& doc, bool& changed) {
   }
 
   if (dsl_.debug) {
-    Serial.printf("[%s] - [%s] - DSL parse summary resolved=%d missing=%d series=%d total=%u\n",
+    platform::logf("[%s] - [%s] - DSL parse summary resolved=%d missing=%d series=%d total=%u\n",
                   widgetName().c_str(), logTimestamp().c_str(), resolvedCount, missingCount,
                   seriesCount, static_cast<unsigned>(dsl_.fields.size()));
   }

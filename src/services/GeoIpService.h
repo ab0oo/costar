@@ -1,7 +1,6 @@
 #pragma once
 
 #include <Arduino.h>
-#include <Preferences.h>
 
 #include "services/HttpJsonClient.h"
 
@@ -39,7 +38,6 @@ class GeoIpService {
   void setError(const String& msg);
 
   HttpJsonClient http_;
-  Preferences prefs_;
   String lastError_;
   String lastSource_;
 };

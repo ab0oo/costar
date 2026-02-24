@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Arduino.h>
+#include <cstdint>
 
 namespace RuntimeSettings {
 extern bool use24HourClock;

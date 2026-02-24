@@ -1,0 +1,201 @@
+Command: make -j 14 all
+Configuration Report                                                            
+ ────────────────────────────────────────────────────────────────────────────── 
+   Parser Version: 1                                                            
+   Verbosity: default                                                           
+   Defaults policy: sdkconfig                                                   
+   Status: Finished with notifications                                          
+                                                                                
+  Disabled Symbols/Choices With User-Set Value                                  
+   ──────────────────────────────────────────────────────────────────────────   
+    * ESP_CONSOLE_UART_BAUDRATE (defined at                                     
+    /home/johgor/esp-idf/components/esp_stdio/Kconfig:150) with user-set        
+    value 115200 from /tmp/kconfgen_tmpzt2jff8i                                 
+   ──────────────────────────────────────────────────────────────────────────   
+ ────────────────────────────────────────────────────────────────────────────── 
+CMake Warning at /home/johgor/esp-idf/tools/cmake/component_validation.cmake:106 (message):
+  Private include directory
+  '/home/johgor/esp-idf/components/esp_wifi/wifi_apps/roaming_app/include'
+  belongs to component esp_wifi but is being used by component
+  wpa_supplicant.  It is recommended to define the component dependency for
+  wpa_supplicant on the component esp_wifi, i.e.  'idf_component_register(...
+  PRIV_REQUIRES esp_wifi)' in the CMakeLists.txt of wpa_supplicant, and
+  specify the included directory as idf_component_register(...
+  PRIV_INCLUDE_DIRS <dir relative to component>) in the CMakeLists.txt of
+  component esp_wifi.
+Call Stack (most recent call first):
+  /home/johgor/esp-idf/tools/cmake/component_validation.cmake:130 (__component_validation_check_include_dirs)
+  /home/johgor/esp-idf/CMakeLists.txt:353 (__component_validation_run_checks)
+
+
+CMake Warning at /home/johgor/esp-idf/tools/cmake/component_validation.cmake:106 (message):
+  Private include directory
+  '/home/johgor/esp-idf/components/esp_wifi/wifi_apps/roaming_app/src'
+  belongs to component esp_wifi but is being used by component
+  wpa_supplicant.  It is recommended to define the component dependency for
+  wpa_supplicant on the component esp_wifi, i.e.  'idf_component_register(...
+  PRIV_REQUIRES esp_wifi)' in the CMakeLists.txt of wpa_supplicant, and
+  specify the included directory as idf_component_register(...
+  PRIV_INCLUDE_DIRS <dir relative to component>) in the CMakeLists.txt of
+  component esp_wifi.
+Call Stack (most recent call first):
+  /home/johgor/esp-idf/tools/cmake/component_validation.cmake:130 (__component_validation_check_include_dirs)
+  /home/johgor/esp-idf/CMakeLists.txt:353 (__component_validation_run_checks)
+
+
+CMake Warning at /home/johgor/esp-idf/tools/cmake/component_validation.cmake:106 (message):
+  Private include directory
+  '/home/johgor/esp-idf/components/wpa_supplicant/src' belongs to component
+  wpa_supplicant but is being used by component esp_wifi.  It is recommended
+  to define the component dependency for esp_wifi on the component
+  wpa_supplicant, i.e.  'idf_component_register(...  PRIV_REQUIRES
+  wpa_supplicant)' in the CMakeLists.txt of esp_wifi, and specify the
+  included directory as idf_component_register(...  PRIV_INCLUDE_DIRS <dir
+  relative to component>) in the CMakeLists.txt of component wpa_supplicant.
+Call Stack (most recent call first):
+  /home/johgor/esp-idf/tools/cmake/component_validation.cmake:130 (__component_validation_check_include_dirs)
+  /home/johgor/esp-idf/CMakeLists.txt:353 (__component_validation_run_checks)
+
+
+CMake Warning at /home/johgor/esp-idf/tools/cmake/component_validation.cmake:106 (message):
+  Private include directory
+  '/home/johgor/esp-idf/components/wpa_supplicant/esp_supplicant/src' belongs
+  to component wpa_supplicant but is being used by component esp_wifi.  It is
+  recommended to define the component dependency for esp_wifi on the
+  component wpa_supplicant, i.e.  'idf_component_register(...  PRIV_REQUIRES
+  wpa_supplicant)' in the CMakeLists.txt of esp_wifi, and specify the
+  included directory as idf_component_register(...  PRIV_INCLUDE_DIRS <dir
+  relative to component>) in the CMakeLists.txt of component wpa_supplicant.
+Call Stack (most recent call first):
+  /home/johgor/esp-idf/tools/cmake/component_validation.cmake:130 (__component_validation_check_include_dirs)
+  /home/johgor/esp-idf/CMakeLists.txt:353 (__component_validation_run_checks)
+
+
+In file included from /home/johgor/src/costar/idf/main/ConfigScreenEspIdf.cpp:3:
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:8:15: error: 'uint16_t' was not declared in this scope
+    8 | bool fillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color565);
+      |               ^~~~~~~~
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:1:1: note: 'uint16_t' is defined in header '<cstdint>'; this is probably fixable by adding '#include <cstdint>'
+  +++ |+#include <cstdint>
+    1 | #pragma once
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:8:27: error: 'uint16_t' was not declared in this scope
+    8 | bool fillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color565);
+      |                           ^~~~~~~~
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:8:27: note: 'uint16_t' is defined in header '<cstdint>'; this is probably fixable by adding '#include <cstdint>'
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:8:39: error: 'uint16_t' was not declared in this scope
+    8 | bool fillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color565);
+      |                                       ^~~~~~~~
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:8:39: note: 'uint16_t' is defined in header '<cstdint>'; this is probably fixable by adding '#include <cstdint>'
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:8:51: error: 'uint16_t' was not declared in this scope
+    8 | bool fillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color565);
+      |                                                   ^~~~~~~~
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:8:51: note: 'uint16_t' is defined in header '<cstdint>'; this is probably fixable by adding '#include <cstdint>'
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:8:63: error: 'uint16_t' was not declared in this scope
+    8 | bool fillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color565);
+      |                                                               ^~~~~~~~
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:8:63: note: 'uint16_t' is defined in header '<cstdint>'; this is probably fixable by adding '#include <cstdint>'
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:8:80: error: expression list treated as compound expression in initializer [-fpermissive]
+    8 | bool fillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color565);
+      |                                                                                ^
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:9:12: error: 'uint16_t' was not declared in this scope
+    9 | bool clear(uint16_t color565 = 0x0000);
+      |            ^~~~~~~~
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:9:12: note: 'uint16_t' is defined in header '<cstdint>'; this is probably fixable by adding '#include <cstdint>'
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:10:1: error: 'uint16_t' does not name a type
+   10 | uint16_t width();
+      | ^~~~~~~~
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:10:1: note: 'uint16_t' is defined in header '<cstdint>'; this is probably fixable by adding '#include <cstdint>'
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:11:1: error: 'uint16_t' does not name a type
+   11 | uint16_t height();
+      | ^~~~~~~~
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:11:1: note: 'uint16_t' is defined in header '<cstdint>'; this is probably fixable by adding '#include <cstdint>'
+/home/johgor/src/costar/idf/main/ConfigScreenEspIdf.cpp: In function 'void {anonymous}::drawGlyph(int, int, char, uint16_t, uint16_t, int)':
+/home/johgor/src/costar/idf/main/ConfigScreenEspIdf.cpp:57:34: error: 'display_spi::fillRect' cannot be used as a function
+   57 |       (void)display_spi::fillRect(static_cast<uint16_t>(x + col * scale),
+      |             ~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   58 |                                   static_cast<uint16_t>(y + row * scale),
+      |                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   59 |                                   static_cast<uint16_t>(scale), static_cast<uint16_t>(scale),
+      |                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   60 |                                   on ? fg : bg);
+      |                                   ~~~~~~~~~~~~~
+/home/johgor/src/costar/idf/main/ConfigScreenEspIdf.cpp: In function 'void config_screen::show(bool, bool)':
+/home/johgor/src/costar/idf/main/ConfigScreenEspIdf.cpp:86:35: error: 'width' is not a member of 'display_spi'
+   86 |   const uint16_t w = display_spi::width();
+      |                                   ^~~~~
+/home/johgor/src/costar/idf/main/ConfigScreenEspIdf.cpp:87:35: error: 'height' is not a member of 'display_spi'
+   87 |   const uint16_t h = display_spi::height();
+      |                                   ^~~~~~
+/home/johgor/src/costar/idf/main/ConfigScreenEspIdf.cpp:100:27: error: 'display_spi::clear' cannot be used as a function
+  100 |   (void)display_spi::clear(cBg);
+      |         ~~~~~~~~~~~~~~~~~~^~~~~
+/home/johgor/src/costar/idf/main/ConfigScreenEspIdf.cpp:101:30: error: 'display_spi::fillRect' cannot be used as a function
+  101 |   (void)display_spi::fillRect(0, 0, w, 34, cHeader);
+      |         ~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~
+/home/johgor/src/costar/idf/main/ConfigScreenEspIdf.cpp:102:30: error: 'display_spi::fillRect' cannot be used as a function
+  102 |   (void)display_spi::fillRect(8, 46, w - 16, (h - 62) / 2, cCard);
+      |         ~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/johgor/src/costar/idf/main/ConfigScreenEspIdf.cpp:103:30: error: 'display_spi::fillRect' cannot be used as a function
+  103 |   (void)display_spi::fillRect(8, static_cast<uint16_t>(54 + (h - 62) / 2), w - 16, (h - 62) / 2,
+      |         ~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  104 |                               cCard);
+      |                               ~~~~~~
+make[2]: *** [esp-idf/main/CMakeFiles/__idf_main.dir/build.make:149: esp-idf/main/CMakeFiles/__idf_main.dir/ConfigScreenEspIdf.cpp.obj] Error 1
+make[2]: *** Waiting for unfinished jobs....
+In file included from /home/johgor/src/costar/idf/main/DisplaySpiEspIdf.cpp:1:
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:8:15: error: 'uint16_t' was not declared in this scope
+    8 | bool fillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color565);
+      |               ^~~~~~~~
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:1:1: note: 'uint16_t' is defined in header '<cstdint>'; this is probably fixable by adding '#include <cstdint>'
+  +++ |+#include <cstdint>
+    1 | #pragma once
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:8:27: error: 'uint16_t' was not declared in this scope
+    8 | bool fillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color565);
+      |                           ^~~~~~~~
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:8:27: note: 'uint16_t' is defined in header '<cstdint>'; this is probably fixable by adding '#include <cstdint>'
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:8:39: error: 'uint16_t' was not declared in this scope
+    8 | bool fillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color565);
+      |                                       ^~~~~~~~
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:8:39: note: 'uint16_t' is defined in header '<cstdint>'; this is probably fixable by adding '#include <cstdint>'
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:8:51: error: 'uint16_t' was not declared in this scope
+    8 | bool fillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color565);
+      |                                                   ^~~~~~~~
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:8:51: note: 'uint16_t' is defined in header '<cstdint>'; this is probably fixable by adding '#include <cstdint>'
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:8:63: error: 'uint16_t' was not declared in this scope
+    8 | bool fillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color565);
+      |                                                               ^~~~~~~~
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:8:63: note: 'uint16_t' is defined in header '<cstdint>'; this is probably fixable by adding '#include <cstdint>'
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:8:80: error: expression list treated as compound expression in initializer [-fpermissive]
+    8 | bool fillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color565);
+      |                                                                                ^
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:9:12: error: 'uint16_t' was not declared in this scope
+    9 | bool clear(uint16_t color565 = 0x0000);
+      |            ^~~~~~~~
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:9:12: note: 'uint16_t' is defined in header '<cstdint>'; this is probably fixable by adding '#include <cstdint>'
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:10:1: error: 'uint16_t' does not name a type
+   10 | uint16_t width();
+      | ^~~~~~~~
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:10:1: note: 'uint16_t' is defined in header '<cstdint>'; this is probably fixable by adding '#include <cstdint>'
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:11:1: error: 'uint16_t' does not name a type
+   11 | uint16_t height();
+      | ^~~~~~~~
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:11:1: note: 'uint16_t' is defined in header '<cstdint>'; this is probably fixable by adding '#include <cstdint>'
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.cpp:305:80: error: 'bool display_spi::fillRect(uint16_t, uint16_t, uint16_t, uint16_t, uint16_t)' redeclared as different kind of entity
+  305 | bool fillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color565) {
+      |                                                                                ^
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:8:6: note: previous declaration 'bool display_spi::fillRect'
+    8 | bool fillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color565);
+      |      ^~~~~~~~
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.cpp:338:29: error: 'bool display_spi::clear(uint16_t)' redeclared as different kind of entity
+  338 | bool clear(uint16_t color565) {
+      |                             ^
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.h:9:6: note: previous declaration 'bool display_spi::clear'
+    9 | bool clear(uint16_t color565 = 0x0000);
+      |      ^~~~~
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.cpp: In function 'bool display_spi::clear(uint16_t)':
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.cpp:339:18: error: 'display_spi::fillRect' cannot be used as a function
+  339 |   return fillRect(0, 0, AppConfig::kPanelWidth, AppConfig::kPanelHeight, color565);
+      |          ~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+make[2]: *** [esp-idf/main/CMakeFiles/__idf_main.dir/build.make:135: esp-idf/main/CMakeFiles/__idf_main.dir/DisplaySpiEspIdf.cpp.obj] Error 1
+make[1]: *** [CMakeFiles/Makefile2:8965: esp-idf/main/CMakeFiles/__idf_main.dir/all] Error 2
+make: *** [Makefile:136: all] Error 2

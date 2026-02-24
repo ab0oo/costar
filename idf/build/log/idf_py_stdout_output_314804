@@ -1,0 +1,309 @@
+Command: /home/johgor/.espressif/python_env/idf6.1_py3.13_env/bin/python /home/johgor/esp-idf/tools/idf_monitor.py -p /dev/ttyUSB0 -b 115200 --toolchain-prefix xtensa-esp32-elf- --target esp32 --revision 0 /home/johgor/src/costar/idf/build/costar_idf.elf /home/johgor/src/costar/idf/build/bootloader/bootloader.elf -m '/home/johgor/.espressif/python_env/idf6.1_py3.13_env/bin/python' '/home/johgor/esp-idf/tools/idf.py' '-p' '/dev/ttyUSB0'
+ets Jul 29 2019 12:21:46
+
+rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+configsip: 0, SPIWP:0xee
+clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+mode:DIO, clock div:2
+load:0x3fff0040,len:6272
+load:0x40078000,len:15848
+load:0x40080400,len:3920
+entry 0x40080644
+[0;32mI (27) boot: ESP-IDF v6.1-dev-2636-g97d9585357 2nd stage bootloader[0m
+[0;32mI (27) boot: compile time Feb 23 2026 10:56:27[0m
+[0;32mI (28) boot: Multicore bootloader[0m
+[0;32mI (30) boot: chip revision: v3.1[0m
+[0;32mI (33) boot.esp32: SPI Speed      : 40MHz[0m
+[0;32mI (37) boot.esp32: SPI Mode       : DIO[0m
+[0;32mI (40) boot.esp32: SPI Flash Size : 4MB[0m
+[0;32mI (44) boot: Enabling RNG early entropy source...[0m
+[0;32mI (49) boot: Partition Table:[0m
+[0;32mI (51) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (57) boot:  0 nvs              WiFi data        01 02 00009000 00006000[0m
+[0;32mI (64) boot:  1 phy_init         RF data          01 01 0000f000 00001000[0m
+[0;32mI (71) boot:  2 factory          factory app      00 00 00010000 00200000[0m
+[0;32mI (77) boot:  3 storage          Unknown data     01 83 00210000 001f0000[0m
+[0;32mI (84) boot: End of partition table[0m
+[0;32mI (87) esp_image: segment 0: paddr=00010020 vaddr=3f400020 size=1b928h (112936) map[0m
+[0;32mI (135) esp_image: segment 1: paddr=0002b950 vaddr=3ffb0000 size=045a8h ( 17832) load[0m
+[0;32mI (142) esp_image: segment 2: paddr=0002ff00 vaddr=40080000 size=00118h (   280) load[0m
+[0;32mI (142) esp_image: segment 3: paddr=00030020 vaddr=400d0020 size=8e118h (581912) map[0m
+[0;32mI (353) esp_image: segment 4: paddr=000be140 vaddr=40080118 size=15490h ( 87184) load[0m
+[0;32mI (389) esp_image: segment 5: paddr=000d35d8 vaddr=50000000 size=00028h (    40) load[0m
+[0;32mI (400) boot: Loaded app from partition at offset 0x10000[0m
+[0;32mI (400) boot: Disabling RNG early entropy source...[0m
+[0;32mI (411) cpu_start: Multicore app[0m
+[0;32mI (419) cpu_start: GPIO 3 and 1 are used as console UART I/O pins[0m
+[0;32mI (419) cpu_start: Pro cpu start user code[0m
+[0;32mI (419) cpu_start: cpu freq: 160000000 Hz[0m
+[0;32mI (421) app_init: Application information:[0m
+[0;32mI (425) app_init: Project name:     costar_idf[0m
+[0;32mI (429) app_init: App version:      21b480e-dirty[0m
+[0;32mI (433) app_init: Compile time:     Feb 23 2026 10:56:40[0m
+[0;32mI (438) app_init: ELF file SHA256:  b759aa23b...[0m
+[0;32mI (443) app_init: ESP-IDF:          v6.1-dev-2636-g97d9585357[0m
+[0;32mI (448) efuse_init: Min chip rev:     v0.0[0m
+[0;32mI (452) efuse_init: Max chip rev:     v3.99 [0m
+[0;32mI (456) efuse_init: Chip rev:         v3.1[0m
+[0;32mI (460) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (466) heap_init: At 3FFAE6E0 len 00001920 (6 KiB): DRAM[0m
+[0;32mI (471) heap_init: At 3FFB8FE0 len 00027020 (156 KiB): DRAM[0m
+[0;32mI (476) heap_init: At 3FFE0440 len 00003AE0 (14 KiB): D/IRAM[0m
+[0;32mI (482) heap_init: At 3FFE4350 len 0001BCB0 (111 KiB): D/IRAM[0m
+[0;32mI (487) heap_init: At 400955A8 len 0000AA58 (42 KiB): IRAM[0m
+[0;32mI (494) spi_flash: detected chip: generic[0m
+[0;32mI (496) spi_flash: flash io: dio[0m
+[0;32mI (501) main_task: Started on CPU0[0m
+[0;32mI (511) main_task: Calling app_main()[0m
+[0;32mI (551) costar-idf: WidgetOS boot (ESP-IDF scaffold)[0m
+[0;32mI (551) boot: setup start[0m
+[0;32mI (551) baseline: stage=setup_start t_ms=43 heap_free=269244 heap_min=269244[0m
+[0;32mI (551) settings: clock=12h temp=F dist=mi adsb=40nm[0m
+[0;32mI (561) boot: littlefs=1[0m
+[0;32mI (571) fs: asset=layout_b path=/littlefs/screen_layout_b.json bytes=1192[0m
+[0;32mI (571) fs: asset=dsl_weather_now path=/littlefs/dsl_active/weather_now.json bytes=3350[0m
+[0;32mI (581) fs: asset=dsl_forecast path=/littlefs/dsl_active/forecast.json bytes=3239[0m
+[0;32mI (581) fs: asset=dsl_clock_analog_full path=/littlefs/dsl_active/clock_analog_full.json bytes=3525[0m
+[0;32mI (591) fs: required assets OK[0m
+[0;32mI (591) baseline: stage=littlefs_ready t_ms=85 heap_free=267408 heap_min=266532[0m
+[0;32mI (601) boot: start wifi provisioning[0m
+[0;32mI (611) wifi:wifi driver task: 3ffc1360, prio:23, stack:6656, core=0[0m
+[0;32mI (621) wifi:wifi firmware version: 0f5722b[0m
+[0;32mI (621) wifi:wifi certification version: v7.0[0m
+[0;32mI (621) wifi:config NVS flash: enabled[0m
+[0;32mI (621) wifi:config nano formatting: disabled[0m
+[0;32mI (631) wifi:Init data frame dynamic rx buffer num: 32[0m
+[0;32mI (631) wifi:Init static rx mgmt buffer num: 5[0m
+[0;32mI (641) wifi:Init management short buffer num: 32[0m
+[0;32mI (641) wifi:Init dynamic tx buffer num: 32[0m
+[0;32mI (641) wifi:Init static rx buffer size: 1600[0m
+[0;32mI (651) wifi:Init static rx buffer num: 10[0m
+[0;32mI (651) wifi:Init dynamic rx buffer num: 32[0m
+[0;32mI (661) wifi_init: rx ba win: 6[0m
+[0;32mI (661) wifi_init: accept mbox: 6[0m
+[0;32mI (661) wifi_init: tcpip mbox: 32[0m
+[0;32mI (671) wifi_init: udp mbox: 6[0m
+[0;32mI (671) wifi_init: tcp mbox: 6[0m
+[0;32mI (671) wifi_init: tcp tx win: 5760[0m
+[0;32mI (671) wifi_init: tcp rx win: 5760[0m
+[0;32mI (681) wifi_init: tcp mss: 1440[0m
+[0;32mI (681) wifi_init: WiFi IRAM OP enabled[0m
+[0;32mI (681) wifi_init: WiFi RX IRAM OP enabled[0m
+[0;33mW (691) wifi:Password length matches WPA2 standards, authmode threshold changes from OPEN to WPA2[0m
+[0;32mI (701) wifi: loaded credentials from prefs ns=wifi[0m
+[0;32mI (701) phy_init: phy_version 4863,a3a4459,Oct 28 2025,14:30:06[0m
+[0;32mI (791) phy_init: Saving new calibration data due to checksum failure or outdated calibration data, mode(0)[0m
+[0;32mI (811) wifi:mode : sta (f4:2d:c9:5a:01:e0)[0m
+[0;32mI (811) wifi:enable tsf[0m
+[0;32mI (811) wifi: station mode enabled[0m
+[0;32mI (831) wifi:new:<9,0>, old:<1,0>, ap:<255,255>, sta:<9,0>, prof:1, snd_ch_cfg:0x0[0m
+[0;32mI (831) wifi:state: init -> auth (0xb0)[0m
+[0;32mI (841) wifi:state: auth -> assoc (0x0)[0m
+[0;32mI (851) wifi:state: assoc -> run (0x10)[0m
+[0;32mI (871) wifi:connected with ezesys, aid = 13, channel 9, BW20, bssid = a8:29:48:40:58:d8[0m
+[0;32mI (871) wifi:security: WPA2-PSK, phy: bgn, rssi: -36[0m
+[0;32mI (871) wifi:pm start, type: 1[0m
+
+[0;32mI (881) wifi:dp: 1, bi: 102400, li: 3, scale listen interval from 307200 us to 307200 us[0m
+[0;32mI (901) wifi:AP's beacon interval = 102400 us, DTIM period = 1[0m
+[0;32mI (1211) wifi:<ba-add>idx:0 (ifx:0, a8:29:48:40:58:d8), tid:1, ssn:0, winSize:64[0m
+[0;32mI (1411) wifi:<ba-add>idx:1 (ifx:0, a8:29:48:40:58:d8), tid:0, ssn:0, winSize:64[0m
+[0;32mI (2221) esp_netif_handlers: sta ip: 192.168.88.186, mask: 255.255.255.0, gw: 192.168.88.1[0m
+[0;32mI (2221) wifi: connected with stored credentials[0m
+[0;32mI (2221) baseline: stage=wifi_ready t_ms=1711 heap_free=223908 heap_min=221992[0m
+[0;32mI (2221) wifi: connected ip=192.168.88.186[0m
+[0;32mI (6561) time: NTP UTC sync; timezone unavailable[0m
+[0;32mI (6561) baseline: stage=geo_time_ready t_ms=6050 heap_free=223556 heap_min=221556[0m
+[0;32mI (6561) boot: idf scaffold ready[0m
+[0;32mI (6561) baseline: stage=display_ready t_ms=6053 heap_free=223556 heap_min=221556[0m
+[0;32mI (6571) boot: setup complete[0m
+[0;32mI (6571) baseline: stage=setup_complete t_ms=6063 heap_free=223556 heap_min=221556[0m
+[0;32mI (6581) costar-idf: ESP-IDF shell running. Full app port in progress.[0m
+[0;32mI (66581) baseline: uptime_s=66 heap_free=223584 heap_min=221556 wifi=1 rssi=-37[0m
+[0;32mI (96581) baseline: uptime_s=96 heap_free=223584 heap_min=221556 wifi=1 rssi=-38[0m
+[0;32mI (126581) baseline: uptime_s=126 heap_free=223608 heap_min=221556 wifi=1 rssi=-37[0m
+[0;32mI (156581) baseline: uptime_s=156 heap_free=223608 heap_min=221556 wifi=1 rssi=-41[0m
+[0;32mI (186581) baseline: uptime_s=186 heap_free=223600 heap_min=221556 wifi=1 rssi=-35[0m
+[0;32mI (216581) baseline: uptime_s=216 heap_free=223600 heap_min=221556 wifi=1 rssi=-37[0m
+[0;32mI (246581) baseline: uptime_s=246 heap_free=223608 heap_min=221556 wifi=1 rssi=-39[0m
+[0;32mI (276581) baseline: uptime_s=276 heap_free=223608 heap_min=221556 wifi=1 rssi=-36[0m
+[0;32mI (306581) baseline: uptime_s=306 heap_free=223608 heap_min=221556 wifi=1 rssi=-40[0m
+[0;32mI (336581) baseline: uptime_s=336 heap_free=223608 heap_min=221556 wifi=1 rssi=-36[0m
+[0;32mI (366581) baseline: uptime_s=366 heap_free=223608 heap_min=221556 wifi=1 rssi=-37[0m
+[0;32mI (396581) baseline: uptime_s=396 heap_free=223608 heap_min=221556 wifi=1 rssi=-39[0m
+[0;32mI (426581) baseline: uptime_s=426 heap_free=223608 heap_min=221556 wifi=1 rssi=-36[0m
+[0;32mI (456581) baseline: uptime_s=456 heap_free=223608 heap_min=221556 wifi=1 rssi=-36[0m
+[0;32mI (486581) baseline: uptime_s=486 heap_free=223608 heap_min=221556 wifi=1 rssi=-37[0m
+[0;32mI (516581) baseline: uptime_s=516 heap_free=223608 heap_min=221556 wifi=1 rssi=-36[0m
+[0;32mI (546581) baseline: uptime_s=546 heap_free=223608 heap_min=221556 wifi=1 rssi=-34[0m
+[0;32mI (576581) baseline: uptime_s=576 heap_free=223608 heap_min=221556 wifi=1 rssi=-35[0m
+[0;32mI (606581) baseline: uptime_s=606 heap_free=223608 heap_min=221556 wifi=1 rssi=-36[0m
+[0;32mI (636581) baseline: uptime_s=636 heap_free=223608 heap_min=221556 wifi=1 rssi=-37[0m
+[0;32mI (666581) baseline: uptime_s=666 heap_free=223608 heap_min=221556 wifi=1 rssi=-35[0m
+[0;32mI (696581) baseline: uptime_s=696 heap_free=223608 heap_min=221556 wifi=1 rssi=-37[0m
+[0;32mI (726581) baseline: uptime_s=726 heap_free=223608 heap_min=221556 wifi=1 rssi=-36[0m
+[0;32mI (756581) baseline: uptime_s=756 heap_free=223608 heap_min=221556 wifi=1 rssi=-36[0m
+6 heap_free=223608 heap_min=221556 wifi=1 rssi=-37
+[0;32mI (816581) baseline: uptime_s=816 heap_free=223608 heap_min=221556 wifi=1 rssi=-35[0m
+[0;32mI (846581) baseline: uptime_s=846 heap_free=223608 heap_min=221556 wifi=1 rssi=-38[0m
+[0;32mI (876581) baseline: uptime_s=876 heap_free=223608 heap_min=221556 wifi=1 rssi=-34[0m
+[0;32mI (906581) baseline: uptime_s=906 heap_free=223608 heap_min=221556 wifi=1 rssi=-43[0m
+[0;32mI (936581) baseline: uptime_s=936 heap_free=223608 heap_min=221556 wifi=1 rssi=-36[0m
+[0;32mI (966581) baseline: uptime_s=966 heap_free=223608 heap_min=221556 wifi=1 rssi=-40[0m
+[0;32mI (996581) baseline: uptime_s=996 heap_free=223608 heap_min=221556 wifi=1 rssi=-40[0m
+[0;32mI (1026581) baseline: uptime_s=1026 heap_free=223608 heap_min=221556 wifi=1 rssi=-39[0m
+[0;32mI (1056581) baseline: uptime_s=1056 heap_free=223608 heap_min=221556 wifi=1 rssi=-37[0m
+[0;32mI (1086581) baseline: uptime_s=1086 heap_free=223608 heap_min=221556 wifi=1 rssi=-41[0m
+[0;32mI (1116581) baseline: uptime_s=1116 heap_free=223608 heap_min=221556 wifi=1 rssi=-37[0m
+[0;32mI (1146581) baseline: uptime_s=1146 heap_free=223608 heap_min=221556 wifi=1 rssi=-43[0m
+[0;32mI (1176581) baseline: uptime_s=1176 heap_free=223608 heap_min=221556 wifi=1 rssi=-35[0m
+[0;32mI (1206581) baseline: uptime_s=1206 heap_free=223608 heap_min=221556 wifi=1 rssi=-35[0m
+[0;32mI (1236581) baseline: uptime_s=1236 heap_free=223608 heap_min=221556 wifi=1 rssi=-39[0m
+[0;32mI (1266581) baseline: uptime_s=1266 heap_free=223608 heap_min=221556 wifi=1 rssi=-38[0m
+[0;32mI (1296581) baseline: uptime_s=1296 heap_free=223608 heap_min=221556 wifi=1 rssi=-40[0m
+[0;32mI (1326581) baseline: uptime_s=1326 heap_free=223608 heap_min=221556 wifi=1 rssi=-39[0m
+[0;32mI (1356581) baseline: uptime_s=1356 heap_free=223608 heap_min=221556 wifi=1 rssi=-41[0m
+[0;32mI (1386581) baseline: uptime_s=1386 heap_free=223608 heap_min=221556 wifi=1 rssi=-44[0m
+[0;32mI (1416581) baseline: uptime_s=1416 heap_free=223608 heap_min=221556 wifi=1 rssi=-39[0m
+[0;32mI (1446581) baseline: uptime_s=1446 heap_free=223608 heap_min=221556 wifi=1 rssi=-40[0m
+[0;32mI (1476581) baseline: uptime_s=1476 heap_free=223608 heap_min=221556 wifi=1 rssi=-41[0m
+[0;32mI (1506581) baseline: uptime_s=1506 heap_free=223608 heap_min=221556 wifi=1 rssi=-36[0m
+[0;32mI (1536581) baseline: uptime_s=1536 heap_free=223608 heap_min=221556 wifi=1 rssi=-41[0m
+[0;32mI (1566581) baseline: uptime_s=1566 heap_free=223608 heap_min=221556 wifi=1 rssi=-40[0m
+[0;32mI (1596581) baseline: uptime_s=1596 heap_free=223608 heap_min=221556 wifi=1 rssi=-40[0m
+[0;32mI (1626581) baseline: uptime_s=1626 heap_free=223608 heap_min=221556 wifi=1 rssi=-40[0m
+[0;32mI (1656581) baseline: uptime_s=1656 heap_free=223608 heap_min=221556 wifi=1 rssi=-41[0m
+[0;32mI (1686581) baseline: uptime_s=1686 heap_free=223608 heap_min=221556 wifi=1 rssi=-47[0m
+[0;32mI (1716581) baseline: uptime_s=1716 heap_free=223608 heap_min=221556 wifi=1 rssi=-40[0m
+[0;32mI (1746581) baseline: uptime_s=1746 heap_free=223608 heap_min=221556 wifi=1 rssi=-40[0m
+[0;32mI (1776581) baseline: uptime_s=1776 heap_free=223608 heap_min=221556 wifi=1 rssi=-37[0m
+[0;32mI (1806581) baseline: uptime_s=1806 heap_free=223608 heap_min=221556 wifi=1 rssi=-41[0m
+[0;32mI (1836581) baseline: uptime_s=1836 heap_free=223608 heap_min=221556 wifi=1 rssi=-45[0m
+[0;32mI (1866581) baseline: uptime_s=1866 heap_free=223608 heap_min=221556 wifi=1 rssi=-46[0m
+[0;32mI (1896581) baseline: uptime_s=1896 heap_free=223608 heap_min=221556 wifi=1 rssi=-46[0m
+[0;32mI (1926581) baseline: uptime_s=1926 heap_free=223608 heap_min=221556 wifi=1 rssi=-47[0m
+[0;32mI (1956581) baseline: uptime_s=1956 heap_free=223608 heap_min=221556 wifi=1 rssi=-40[0m
+[0;32mI (1986581) baseline: uptime_s=1986 heap_free=223608 heap_min=221556 wifi=1 rssi=-47[0m
+[0;32mI (2016581) baseline: uptime_s=2016 heap_free=223608 heap_min=221556 wifi=1 rssi=-44[0m
+[0;32mI (2046581) baseline: uptime_s=2046 heap_free=223608 heap_min=221556 wifi=1 rssi=-47[0m
+[0;32mI (2076581) baseline: uptime_s=2076 heap_free=223608 heap_min=221556 wifi=1 rssi=-46[0m
+[0;32mI (2106581) baseline: uptime_s=2106 heap_free=223608 heap_min=221556 wifi=1 rssi=-43[0m
+[0;32mI (2136581) baseline: uptime_s=2136 heap_free=223608 heap_min=221556 wifi=1 rssi=-39[0m
+[0;32mI (2166581) baseline: uptime_s=2166 heap_free=223608 heap_min=221556 wifi=1 rssi=-42[0m
+[0;32mI (2196581) baseline: uptime_s=2196 heap_free=223608 heap_min=221556 wifi=1 rssi=-55[0m
+[0;32mI (2226581) baseline: uptime_s=2226 heap_free=223608 heap_min=221556 wifi=1 rssi=-48[0m
+[0;32mI (2256581) baseline: uptime_s=2256 heap_free=223608 heap_min=221556 wifi=1 rssi=-46[0m
+[0;32mI (2286581) baseline: uptime_s=2286 heap_free=223608 heap_min=221556 wifi=1 rssi=-46[0m
+[0;32mI (2316581) baseline: uptime_s=2316 heap_free=223608 heap_min=221556 wifi=1 rssi=-42[0m
+[0;32mI (2346581) baseline: uptime_s=2346 heap_free=223608 heap_min=221556 wifi=1 rssi=-41[0m
+[0;32mI (2376581) baseline: uptime_s=2376 heap_free=223608 heap_min=221556 wifi=1 rssi=-45[0m
+[0;32mI (2406581) baseline: uptime_s=2406 heap_free=223608 heap_min=221556 wifi=1 rssi=-47[0m
+[0;32mI (2436581) baseline: uptime_s=2436 heap_free=223608 heap_min=221556 wifi=1 rssi=-44[0m
+[0;32mI (2466581) baseline: uptime_s=2466 heap_free=223608 heap_min=221556 wifi=1 rssi=-47[0m
+[0;32mI (2496581) baseline: uptime_s=2496 heap_free=223608 heap_min=221556 wifi=1 rssi=-42[0m
+[0;32mI (2526581) baseline: uptime_s=2526 heap_free=223608 heap_min=221556 wifi=1 rssi=-41[0m
+[0;32mI (2556581) baseline: uptime_s=2556 heap_free=223608 heap_min=221556 wifi=1 rssi=-45[0m
+[0;32mI (2586581) baseline: uptime_s=2586 heap_free=223608 heap_min=221556 wifi=1 rssi=-49[0m
+[0;32mI (2616581) baseline: uptime_s=2616 heap_free=223608 heap_min=221556 wifi=1 rssi=-45[0m
+[0;32mI (2646581) baseline: uptime_s=2646 heap_free=223608 heap_min=221556 wifi=1 rssi=-47[0m
+[0;32mI (2676581) baseline: uptime_s=2676 heap_free=223608 heap_min=221556 wifi=1 rssi=-47[0m
+[0;32mI (2706581) baseline: uptime_s=2706 heap_free=223608 heap_min=221556 wifi=1 rssi=-47[0m
+[0;32mI (2736581) baseline: uptime_s=2736 heap_free=223608 heap_min=221556 wifi=1 rssi=-43[0m
+[0;32mI (2766581) baseline: uptime_s=2766 heap_free=223608 heap_min=221556 wifi=1 rssi=-48[0m
+[0;32mI (2796581) baseline: uptime_s=2796 heap_free=223608 heap_min=221556 wifi=1 rssi=-47[0m
+[0;32mI (2826581) baseline: uptime_s=2826 heap_free=223608 heap_min=221556 wifi=1 rssi=-50[0m
+[0;32mI (2856581) baseline: uptime_s=2856 heap_free=223608 heap_min=221556 wifi=1 rssi=-50[0m
+[0;32mI (2886581) baseline: uptime_s=2886 heap_free=223608 heap_min=221556 wifi=1 rssi=-43[0m
+[0;32mI (2916581) baseline: uptime_s=2916 heap_free=223608 heap_min=221556 wifi=1 rssi=-50[0m
+[0;32mI (2946581) baseline: uptime_s=2946 heap_free=223608 heap_min=221556 wifi=1 rssi=-42[0m
+[0;32mI (2976581) baseline: uptime_s=2976 heap_free=223608 heap_min=221556 wifi=1 rssi=-49[0m
+[0;32mI (3006581) baseline: uptime_s=3006 heap_free=223608 heap_min=221528 wifi=1 rssi=-48[0m
+[0;32mI (3036581) baseline: uptime_s=3036 heap_free=223608 heap_min=221528 wifi=1 rssi=-50[0m
+[0;32mI (3066581) baseline: uptime_s=3066 heap_free=223608 heap_min=221528 wifi=1 rssi=-50[0m
+[0;32mI (3096581) baseline: uptime_s=3096 heap_free=223608 heap_min=221528 wifi=1 rssi=-46[0m
+[0;32mI (3126581) baseline: uptime_s=3126 heap_free=223608 heap_min=221528 wifi=1 rssi=-44[0m
+[0;32mI (3156581) baseline: uptime_s=3156 heap_free=223608 heap_min=221528 wifi=1 rssi=-51[0m
+[0;32mI (3186581) baseline: uptime_s=3186 heap_free=223608 heap_min=221528 wifi=1 rssi=-50[0m
+[0;32mI (3216581) baseline: uptime_s=3216 heap_free=223608 heap_min=221528 wifi=1 rssi=-47[0m
+[0;32mI (3246581) baseline: uptime_s=3246 heap_free=223608 heap_min=221528 wifi=1 rssi=-47[0m
+[0;32mI (3276581) baseline: uptime_s=3276 heap_free=223608 heap_min=221528 wifi=1 rssi=-50[0m
+[0;32mI (3306581) baseline: uptime_s=3306 heap_free=223608 heap_min=221528 wifi=1 rssi=-50[0m
+[0;32mI (3336581) baseline: uptime_s=3336 heap_free=223608 heap_min=221528 wifi=1 rssi=-47[0m
+[0;32mI (3366581) baseline: uptime_s=3366 heap_free=223608 heap_min=221528 wifi=1 rssi=-45[0m
+[0;32mI (3396581) baseline: uptime_s=3396 heap_free=223608 heap_min=221528 wifi=1 rssi=-42[0m
+[0;32mI (3426581) baseline: uptime_s=3426 heap_free=223608 heap_min=221528 wifi=1 rssi=-44[0m
+[0;32mI (3456581) baseline: uptime_s=3456 heap_free=223608 heap_min=221528 wifi=1 rssi=-47[0m
+[0;32mI (3486581) baseline: uptime_s=3486 heap_free=223608 heap_min=221528 wifi=1 rssi=-48[0m
+[0;32mI (3516581) baseline: uptime_s=3516 heap_free=223608 heap_min=221528 wifi=1 rssi=-46[0m
+[0;32mI (3546581) baseline: uptime_s=3546 heap_free=223608 heap_min=221528 wifi=1 rssi=-48[0m
+[0;32mI (3576581) baseline: uptime_s=3576 heap_free=223608 heap_min=221528 wifi=1 rssi=-37[0m
+[0;32mI (3606581) baseline: uptime_s=3606 heap_free=223516 heap_min=221528 wifi=1 rssi=-46[0m
+[0;32mI (3636581) baseline: uptime_s=3636 heap_free=223580 heap_min=221380 wifi=1 rssi=-48[0m
+[0;32mI (3666581) baseline: uptime_s=3666 heap_free=223608 heap_min=221380 wifi=1 rssi=-41[0m
+[0;32mI (3696581) baseline: uptime_s=3696 heap_free=223608 heap_min=221380 wifi=1 rssi=-41[0m
+[0;32mI (3726581) baseline: uptime_s=3726 heap_free=223608 heap_min=221380 wifi=1 rssi=-39[0m
+[0;32mI (3756581) baseline: uptime_s=3756 heap_free=223608 heap_min=221380 wifi=1 rssi=-48[0m
+[0;32mI (3786581) baseline: uptime_s=3786 heap_free=223608 heap_min=221380 wifi=1 rssi=-44[0m
+[0;32mI (3816581) baseline: uptime_s=3816 heap_free=223608 heap_min=221380 wifi=1 rssi=-39[0m
+846 heap_free=223608 heap_min=221380 wifi=1 rssi=-38
+[0;32mI (3876581) baseline: uptime_s=3876 heap_free=223608 heap_min=221380 wifi=1 rssi=-37[0m
+[0;32mI (3906581) baseline: uptime_s=3906 heap_free=223608 heap_min=221380 wifi=1 rssi=-46[0m
+[0;32mI (3936581) baseline: uptime_s=3936 heap_free=223608 heap_min=221380 wifi=1 rssi=-35[0m
+[0;32mI (3966581) baseline: uptime_s=3966 heap_free=223608 heap_min=221380 wifi=1 rssi=-41[0m
+[0;32mI (3996581) baseline: uptime_s=3996 heap_free=223608 heap_min=221380 wifi=1 rssi=-45[0m
+[0;32mI (4026581) baseline: uptime_s=4026 heap_free=223608 heap_min=221380 wifi=1 rssi=-41[0m
+[0;32mI (4056581) baseline: uptime_s=4056 heap_free=223608 heap_min=221380 wifi=1 rssi=-42[0m
+[0;32mI (4086581) baseline: uptime_s=4086 heap_free=223608 heap_min=221380 wifi=1 rssi=-40[0m
+[0;32mI (4116581) baseline: uptime_s=4116 heap_free=223608 heap_min=221380 wifi=1 rssi=-39[0m
+[0;32mI (4146581) baseline: uptime_s=4146 heap_free=223608 heap_min=221380 wifi=1 rssi=-38[0m
+[0;32mI (4176581) baseline: uptime_s=4176 heap_free=223608 heap_min=221380 wifi=1 rssi=-42[0m
+[0;32mI (4206581) baseline: uptime_s=4206 heap_free=223608 heap_min=221380 wifi=1 rssi=-38[0m
+[0;32mI (4236581) baseline: uptime_s=4236 heap_free=223608 heap_min=221380 wifi=1 rssi=-35[0m
+[0;32mI (4266581) baseline: uptime_s=4266 heap_free=223608 heap_min=221380 wifi=1 rssi=-39[0m
+[0;32mI (4296581) baseline: uptime_s=4296 heap_free=223608 heap_min=221380 wifi=1 rssi=-37[0m
+[0;32mI (4326581) baseline: uptime_s=4326 heap_free=223608 heap_min=221380 wifi=1 rssi=-39[0m
+[0;32mI (4356581) baseline: uptime_s=4356 heap_free=223608 heap_min=221380 wifi=1 rssi=-38[0m
+[0;32mI (4386581) baseline: uptime_s=4386 heap_free=223608 heap_min=221380 wifi=1 rssi=-39[0m
+[0;32mI (4416581) baseline: uptime_s=4416 heap_free=223608 heap_min=221380 wifi=1 rssi=-43[0m
+[0;32mI (4446581) baseline: uptime_s=4446 heap_free=223608 heap_min=221380 wifi=1 rssi=-36[0m
+[0;32mI (4476581) baseline: uptime_s=4476 heap_free=223608 heap_min=221380 wifi=1 rssi=-38[0m
+[0;32mI (4506581) baseline: uptime_s=4506 heap_free=223608 heap_min=221380 wifi=1 rssi=-39[0m
+[0;32mI (4536581) baseline: uptime_s=4536 heap_free=223608 heap_min=221380 wifi=1 rssi=-39[0m
+[0;32mI (4566581) baseline: uptime_s=4566 heap_free=223608 heap_min=221380 wifi=1 rssi=-37[0m
+[0;32mI (4596581) baseline: uptime_s=4596 heap_free=223608 heap_min=221380 wifi=1 rssi=-37[0m
+[0;32mI (4626581) baseline: uptime_s=4626 heap_free=223608 heap_min=221380 wifi=1 rssi=-39[0m
+[0;32mI (4656581) baseline: uptime_s=4656 heap_free=223608 heap_min=221380 wifi=1 rssi=-42[0m
+[0;32mI (4686581) baseline: uptime_s=4686 heap_free=223608 heap_min=221380 wifi=1 rssi=-43[0m
+[0;32mI (4716581) baseline: uptime_s=4716 heap_free=223608 heap_min=221380 wifi=1 rssi=-41[0m
+[0;32mI (4746581) baseline: uptime_s=4746 heap_free=223608 heap_min=221380 wifi=1 rssi=-41[0m
+[0;32mI (4776581) baseline: uptime_s=4776 heap_free=223608 heap_min=221380 wifi=1 rssi=-39[0m
+[0;32mI (4806581) baseline: uptime_s=4806 heap_free=223608 heap_min=221380 wifi=1 rssi=-36[0m
+[0;32mI (4836581) baseline: uptime_s=4836 heap_free=223592 heap_min=221380 wifi=1 rssi=-38[0m
+[0;32mI (4866581) baseline: uptime_s=4866 heap_free=223592 heap_min=221380 wifi=1 rssi=-38[0m
+[0;32mI (4896581) baseline: uptime_s=4896 heap_free=223592 heap_min=221380 wifi=1 rssi=-38[0m
+[0;32mI (4926581) baseline: uptime_s=4926 heap_free=223592 heap_min=221380 wifi=1 rssi=-39[0m
+[0;32mI (4956581) baseline: uptime_s=4956 heap_free=223592 heap_min=221380 wifi=1 rssi=-41[0m
+[0;32mI (4986581) baseline: uptime_s=4986 heap_free=223592 heap_min=221380 wifi=1 rssi=-36[0m
+[0;32mI (5016581) baseline: uptime_s=5016 heap_free=223592 heap_min=221380 wifi=1 rssi=-38[0m
+[0;32mI (5046581) baseline: uptime_s=5046 heap_free=223592 heap_min=221380 wifi=1 rssi=-36[0m
+[0;32mI (5076581) baseline: uptime_s=5076 heap_free=223592 heap_min=221380 wifi=1 rssi=-38[0m
+[0;32mI (5106581) baseline: uptime_s=5106 heap_free=223592 heap_min=221380 wifi=1 rssi=-38[0m
+[0;32mI (5136581) baseline: uptime_s=5136 heap_free=223592 heap_min=221380 wifi=1 rssi=-42[0m
+[0;32mI (5166581) baseline: uptime_s=5166 heap_free=223592 heap_min=221380 wifi=1 rssi=-36[0m
+[0;32mI (5196581) baseline: uptime_s=5196 heap_free=223592 heap_min=221380 wifi=1 rssi=-39[0m
+[0;32mI (5226581) baseline: uptime_s=5226 heap_free=223592 heap_min=221380 wifi=1 rssi=-38[0m
+[0;32mI (5256581) baseline: uptime_s=5256 heap_free=223592 heap_min=221380 wifi=1 rssi=-37[0m
+[0;32mI (5286581) baseline: uptime_s=5286 heap_free=223592 heap_min=221380 wifi=1 rssi=-38[0m
+[0;32mI (5316581) baseline: uptime_s=5316 heap_free=223592 heap_min=221380 wifi=1 rssi=-38[0m
+[0;32mI (5346581) baseline: uptime_s=5346 heap_free=223592 heap_min=221380 wifi=1 rssi=-37[0m
+[0;32mI (5376581) baseline: uptime_s=5376 heap_free=223592 heap_min=221380 wifi=1 rssi=-36[0m
+[0;32mI (5406581) baseline: uptime_s=5406 heap_free=223592 heap_min=221380 wifi=1 rssi=-36[0m
+[0;32mI (5436581) baseline: uptime_s=5436 heap_free=223592 heap_min=221380 wifi=1 rssi=-37[0m
+[0;32mI (5466581) baseline: uptime_s=5466 heap_free=223592 heap_min=221380 wifi=1 rssi=-36[0m
+[0;32mI (5496581) baseline: uptime_s=5496 heap_free=223592 heap_min=221380 wifi=1 rssi=-40[0m
+[0;32mI (5526581) baseline: uptime_s=5526 heap_free=223592 heap_min=221380 wifi=1 rssi=-37[0m
+[0;32mI (5556581) baseline: uptime_s=5556 heap_free=223592 heap_min=221380 wifi=1 rssi=-39[0m
+[0;32mI (5586581) baseline: uptime_s=5586 heap_free=223592 heap_min=221380 wifi=1 rssi=-45[0m
+[0;32mI (5616581) baseline: uptime_s=5616 heap_free=223592 heap_min=221380 wifi=1 rssi=-37[0m
+[0;32mI (5646581) baseline: uptime_s=5646 heap_free=223592 heap_min=221380 wifi=1 rssi=-43[0m
+[0;32mI (5676581) baseline: uptime_s=5676 heap_free=223592 heap_min=221380 wifi=1 rssi=-41[0m

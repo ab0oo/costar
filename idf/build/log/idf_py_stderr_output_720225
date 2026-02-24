@@ -1,0 +1,4 @@
+Command: make -j 14 all
+/home/johgor/src/costar/idf/main/DisplaySpiEspIdf.cpp:40:6: warning: 'void {anonymous}::mapLogicalToPanel(uint16_t, uint16_t, uint16_t&, uint16_t&)' defined but not used [-Wunused-function]
+   40 | void mapLogicalToPanel(uint16_t x, uint16_t y, uint16_t& outX, uint16_t& outY) {
+      |      ^~~~~~~~~~~~~~~~~

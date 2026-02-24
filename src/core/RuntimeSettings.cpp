@@ -1,6 +1,6 @@
 #include "RuntimeSettings.h"
 
-#include <Preferences.h>
+#include "platform/Prefs.h"
 
 namespace {
 constexpr char kPrefsNs[] = "settings";
@@ -17,22 +17,17 @@ bool useMiles = true;
 uint16_t adsbRadiusNm = 40;
 
 void load() {
-  Preferences prefs;
-  prefs.begin(kPrefsNs, true);
-  use24HourClock = prefs.getBool(kClock24Key, use24HourClock);
-  useFahrenheit = prefs.getBool(kTempFKey, useFahrenheit);
-  useMiles = prefs.getBool(kMilesKey, useMiles);
-  adsbRadiusNm = static_cast<uint16_t>(prefs.getUInt(kAdsbRadiusKey, adsbRadiusNm));
-  prefs.end();
+  use24HourClock = platform::prefs::getBool(kPrefsNs, kClock24Key, use24HourClock);
+  useFahrenheit = platform::prefs::getBool(kPrefsNs, kTempFKey, useFahrenheit);
+  useMiles = platform::prefs::getBool(kPrefsNs, kMilesKey, useMiles);
+  adsbRadiusNm =
+      static_cast<uint16_t>(platform::prefs::getUInt(kPrefsNs, kAdsbRadiusKey, adsbRadiusNm));
 }
 
 void save() {
-  Preferences prefs;
-  prefs.begin(kPrefsNs, false);
-  prefs.putBool(kClock24Key, use24HourClock);
-  prefs.putBool(kTempFKey, useFahrenheit);
-  prefs.putBool(kMilesKey, useMiles);
-  prefs.putUInt(kAdsbRadiusKey, adsbRadiusNm);
-  prefs.end();
+  (void)platform::prefs::putBool(kPrefsNs, kClock24Key, use24HourClock);
+  (void)platform::prefs::putBool(kPrefsNs, kTempFKey, useFahrenheit);
+  (void)platform::prefs::putBool(kPrefsNs, kMilesKey, useMiles);
+  (void)platform::prefs::putUInt(kPrefsNs, kAdsbRadiusKey, adsbRadiusNm);
 }
 }  // namespace RuntimeSettings

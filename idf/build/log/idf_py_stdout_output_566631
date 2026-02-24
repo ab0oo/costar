@@ -1,0 +1,280 @@
+Command: /home/johgor/.espressif/python_env/idf6.1_py3.13_env/bin/python /home/johgor/esp-idf/tools/idf_monitor.py -p /dev/ttyUSB0 -b 115200 --toolchain-prefix xtensa-esp32-elf- --target esp32 --revision 0 /home/johgor/src/costar/idf/build/costar_idf.elf /home/johgor/src/costar/idf/build/bootloader/bootloader.elf -m '/home/johgor/.espressif/python_env/idf6.1_py3.13_env/bin/python' '/home/johgor/esp-idf/tools/idf.py' '-p' '/dev/ttyUSB0'
+ets Jul 29 2019 12:21:46
+
+rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+configsip: 0, SPIWP:0xee
+clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+mode:DIO, clock div:2
+load:0x3fff0040,len:6272
+load:0x40078000,len:15848
+load:0x40080400,len:3920
+entry 0x40080644
+[0;32mI (27) boot: ESP-IDF v6.1-dev-2636-g97d9585357 2nd stage bootloader[0m
+[0;32mI (27) boot: compile time Feb 23 2026 10:56:27[0m
+[0;32mI (28) boot: Multicore bootloader[0m
+[0;32mI (30) boot: chip revision: v3.1[0m
+[0;32mI (33) boot.esp32: SPI Speed      : 40MHz[0m
+[0;32mI (37) boot.esp32: SPI Mode       : DIO[0m
+[0;32mI (40) boot.esp32: SPI Flash Size : 4MB[0m
+[0;32mI (44) boot: Enabling RNG early entropy source...[0m
+[0;32mI (49) boot: Partition Table:[0m
+[0;32mI (51) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (57) boot:  0 nvs              WiFi data        01 02 00009000 00006000[0m
+[0;32mI (64) boot:  1 phy_init         RF data          01 01 0000f000 00001000[0m
+[0;32mI (71) boot:  2 factory          factory app      00 00 00010000 00200000[0m
+[0;32mI (77) boot:  3 storage          Unknown data     01 83 00210000 001f0000[0m
+[0;32mI (84) boot: End of partition table[0m
+[0;32mI (87) esp_image: segment 0: paddr=00010020 vaddr=3f400020 size=1e1f8h (123384) map[0m
+[0;32mI (138) esp_image: segment 1: paddr=0002e220 vaddr=3ffb0000 size=01df8h (  7672) load[0m
+[0;32mI (142) esp_image: segment 2: paddr=00030020 vaddr=400d0020 size=93d3ch (605500) map[0m
+[0;32mI (358) esp_image: segment 3: paddr=000c3d64 vaddr=3ffb1df8 size=029a4h ( 10660) load[0m
+[0;32mI (362) esp_image: segment 4: paddr=000c6710 vaddr=40080000 size=179bch ( 96700) load[0m
+[0;32mI (402) esp_image: segment 5: paddr=000de0d4 vaddr=50000000 size=00028h (    40) load[0m
+[0;32mI (414) boot: Loaded app from partition at offset 0x10000[0m
+[0;32mI (414) boot: Disabling RNG early entropy source...[0m
+[0;32mI (425) cpu_start: Multicore app[0m
+[0;32mI (433) cpu_start: GPIO 3 and 1 are used as console UART I/O pins[0m
+[0;32mI (433) cpu_start: Pro cpu start user code[0m
+[0;32mI (433) cpu_start: cpu freq: 160000000 Hz[0m
+[0;32mI (435) app_init: Application information:[0m
+[0;32mI (439) app_init: Project name:     costar_idf[0m
+[0;32mI (443) app_init: App version:      21b480e-dirty[0m
+[0;32mI (447) app_init: Compile time:     Feb 23 2026 10:56:40[0m
+[0;32mI (452) app_init: ELF file SHA256:  4e1480ecf...[0m
+[0;32mI (457) app_init: ESP-IDF:          v6.1-dev-2636-g97d9585357[0m
+[0;32mI (462) efuse_init: Min chip rev:     v0.0[0m
+[0;32mI (466) efuse_init: Max chip rev:     v3.99 [0m
+[0;32mI (470) efuse_init: Chip rev:         v3.1[0m
+[0;32mI (474) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (480) heap_init: At 3FFAE6E0 len 00001920 (6 KiB): DRAM[0m
+[0;32mI (485) heap_init: At 3FFB9260 len 00026DA0 (155 KiB): DRAM[0m
+[0;32mI (490) heap_init: At 3FFE0440 len 00003AE0 (14 KiB): D/IRAM[0m
+[0;32mI (496) heap_init: At 3FFE4350 len 0001BCB0 (111 KiB): D/IRAM[0m
+[0;32mI (501) heap_init: At 400979BC len 00008644 (33 KiB): IRAM[0m
+[0;32mI (508) spi_flash: detected chip: generic[0m
+[0;32mI (510) spi_flash: flash io: dio[0m
+[0;32mI (515) main_task: Started on CPU0[0m
+[0;32mI (525) main_task: Calling app_main()[0m
+[0;32mI (565) costar-idf: WidgetOS boot (ESP-IDF scaffold)[0m
+[0;32mI (565) boot: setup start[0m
+[0;32mI (565) baseline: stage=setup_start t_ms=43 heap_free=268604 heap_min=268604[0m
+[0;32mI (565) settings: clock=12h temp=F dist=mi adsb=40nm[0m
+[0;32mI (575) boot: littlefs=1[0m
+[0;32mI (585) fs: asset=layout_b path=/littlefs/screen_layout_b.json bytes=1192[0m
+[0;32mI (585) fs: asset=dsl_weather_now path=/littlefs/dsl_active/weather_now.json bytes=3350[0m
+[0;32mI (595) fs: asset=dsl_forecast path=/littlefs/dsl_active/forecast.json bytes=3239[0m
+[0;32mI (595) fs: asset=dsl_clock_analog_full path=/littlefs/dsl_active/clock_analog_full.json bytes=3525[0m
+[0;32mI (605) fs: required assets OK[0m
+[0;32mI (605) baseline: stage=littlefs_ready t_ms=85 heap_free=266768 heap_min=265892[0m
+[0;32mI (615) boot: init backlight + TFT[0m
+[0;32mI (615) boot: board LED pin 17 set LOW[0m
+[0;32mI (625) boot: touch CS pin 33 set HIGH[0m
+[0;32mI (625) boot: SD CS pin 5 set HIGH[0m
+[0;32mI (625) boot: backlight pin 21 set HIGH[0m
+[0;32mI (635) tft: spi bus ready host=2 sclk=14 mosi=13 miso=12[0m
+[0;32mI (635) tft: panel spi device ready cs=15 dc=2 rst=12 hz=40000000[0m
+[0;33mW (645) tft: skip reset toggle: rst pin shares TFT MISO (12)[0m
+[0;32mI (905) tft: panel init complete (ili9341-style sequence)[0m
+[0;32mI (965) tft: sanity pattern drawn[0m
+[0;32mI (965) baseline: stage=tft_ready t_ms=447 heap_free=265720 heap_min=265700[0m
+[0;32mI (1255) config: wifi/locale config screen drawn[0m
+[0;32mI (1255) touch: spi bus ready host=1 sclk=25 mosi=32 miso=39[0m
+[0;32mI (1255) touch: device ready cs=33 irq=36 hz=2500000[0m
+[0;32mI (1255) touch: interaction start duration_ms=10000 wifi_buttons=1[0m
+[0;32mI (11275) touch: interaction end[0m
+[0;32mI (11275) boot: start wifi provisioning[0m
+[0;32mI (11285) wifi:wifi driver task: 3ffc1cf0, prio:23, stack:6656, core=0[0m
+[0;32mI (11295) wifi:wifi firmware version: 0f5722b[0m
+[0;32mI (11295) wifi:wifi certification version: v7.0[0m
+[0;32mI (11295) wifi:config NVS flash: enabled[0m
+[0;32mI (11295) wifi:config nano formatting: disabled[0m
+[0;32mI (11305) wifi:Init data frame dynamic rx buffer num: 32[0m
+[0;32mI (11305) wifi:Init static rx mgmt buffer num: 5[0m
+[0;32mI (11305) wifi:Init management short buffer num: 32[0m
+[0;32mI (11315) wifi:Init dynamic tx buffer num: 32[0m
+[0;32mI (11315) wifi:Init static rx buffer size: 1600[0m
+[0;32mI (11325) wifi:Init static rx buffer num: 10[0m
+[0;32mI (11325) wifi:Init dynamic rx buffer num: 32[0m
+[0;32mI (11335) wifi_init: rx ba win: 6[0m
+[0;32mI (11335) wifi_init: accept mbox: 6[0m
+[0;32mI (11335) wifi_init: tcpip mbox: 32[0m
+[0;32mI (11345) wifi_init: udp mbox: 6[0m
+[0;32mI (11345) wifi_init: tcp mbox: 6[0m
+[0;32mI (11345) wifi_init: tcp tx win: 5760[0m
+[0;32mI (11345) wifi_init: tcp rx win: 5760[0m
+[0;32mI (11355) wifi_init: tcp mss: 1440[0m
+[0;32mI (11355) wifi_init: WiFi IRAM OP enabled[0m
+[0;32mI (11355) wifi_init: WiFi RX IRAM OP enabled[0m
+[0;33mW (11365) wifi:Password length matches WPA2 standards, authmode threshold changes from OPEN to WPA2[0m
+[0;32mI (11375) wifi: loaded credentials from prefs ns=wifi[0m
+[0;32mI (11375) phy_init: phy_version 4863,a3a4459,Oct 28 2025,14:30:06[0m
+[0;32mI (11465) phy_init: Saving new calibration data due to checksum failure or outdated calibration data, mode(0)[0m
+[0;32mI (11495) wifi:mode : sta (f4:2d:c9:5a:01:e0)[0m
+[0;32mI (11495) wifi:enable tsf[0m
+[0;32mI (11495) wifi: station mode enabled[0m
+[0;32mI (11515) wifi:new:<9,0>, old:<1,0>, ap:<255,255>, sta:<9,0>, prof:1, snd_ch_cfg:0x0[0m
+[0;32mI (11515) wifi:state: init -> auth (0xb0)[0m
+[0;32mI (11525) wifi:state: auth -> assoc (0x0)[0m
+[0;32mI (11535) wifi:state: assoc -> run (0x10)[0m
+[0;32mI (11565) wifi:connected with ezesys, aid = 5, channel 9, BW20, bssid = a8:29:48:40:58:d8[0m
+[0;32mI (11565) wifi:security: WPA2-PSK, phy: bgn, rssi: -37[0m
+[0;32mI (11575) wifi:pm start, type: 1[0m
+
+[0;32mI (11575) wifi:dp: 1, bi: 102400, li: 3, scale listen interval from 307200 us to 307200 us[0m
+[0;32mI (11605) wifi:AP's beacon interval = 102400 us, DTIM period = 1[0m
+[0;32mI (11815) wifi:<ba-add>idx:0 (ifx:0, a8:29:48:40:58:d8), tid:1, ssn:0, winSize:64[0m
+[0;32mI (12425) wifi:<ba-add>idx:1 (ifx:0, a8:29:48:40:58:d8), tid:0, ssn:0, winSize:64[0m
+[0;32mI (12825) esp_netif_handlers: sta ip: 192.168.88.186, mask: 255.255.255.0, gw: 192.168.88.1[0m
+[0;32mI (12825) wifi: connected with stored credentials[0m
+[0;32mI (12825) baseline: stage=wifi_ready t_ms=12302 heap_free=221348 heap_min=219432[0m
+[0;33mW (12835) geo: cache/override missing; timezone context unavailable[0m
+[0;32mI (12835) wifi: connected ip=192.168.88.186[0m
+[0;32mI (13565) time: NTP UTC sync; timezone unavailable[0m
+[0;32mI (13565) baseline: stage=geo_time_ready t_ms=13041 heap_free=220992 heap_min=218912[0m
+[0;32mI (13565) boot: idf scaffold ready[0m
+[0;32mI (13565) baseline: stage=display_ready t_ms=13045 heap_free=220992 heap_min=218912[0m
+[0;32mI (13575) boot: setup complete[0m
+[0;32mI (13575) baseline: stage=setup_complete t_ms=13055 heap_free=220992 heap_min=218912[0m
+[0;32mI (13585) costar-idf: ESP-IDF shell running. Full app port in progress.[0m
+ets Jul 29 2019 12:21:46
+
+rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+configsip: 0, SPIWP:0xee
+clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+mode:DIO, clock div:2
+load:0x3fff0040,len:6272
+load:0x40078000,len:15848
+load:0x40080400,len:3920
+entry 0x40080644
+[0;32mI (27) boot: ESP-IDF v6.1-dev-2636-g97d9585357 2nd stage bootloader[0m
+[0;32mI (27) boot: compile time Feb 23 2026 10:56:27[0m
+[0;32mI (28) boot: Multicore bootloader[0m
+[0;32mI (30) boot: chip revision: v3.1[0m
+[0;32mI (33) boot.esp32: SPI Speed      : 40MHz[0m
+[0;32mI (37) boot.esp32: SPI Mode       : DIO[0m
+[0;32mI (40) boot.esp32: SPI Flash Size : 4MB[0m
+[0;32mI (44) boot: Enabling RNG early entropy source...[0m
+[0;32mI (49) boot: Partition Table:[0m
+[0;32mI (51) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (57) boot:  0 nvs              WiFi data        01 02 00009000 00006000[0m
+[0;32mI (64) boot:  1 phy_init         RF data          01 01 0000f000 00001000[0m
+[0;32mI (71) boot:  2 factory          factory app      00 00 00010000 00200000[0m
+[0;32mI (77) boot:  3 storage          Unknown data     01 83 00210000 001f0000[0m
+[0;32mI (84) boot: End of partition table[0m
+[0;32mI (87) esp_image: segment 0: paddr=00010020 vaddr=3f400020 size=1e1f8h (123384) map[0m
+[0;32mI (138) esp_image: segment 1: paddr=0002e220 vaddr=3ffb0000 size=01df8h (  7672) load[0m
+[0;32mI (142) esp_image: segment 2: paddr=00030020 vaddr=400d0020 size=93d3ch (605500) map[0m
+[0;32mI (358) esp_image: segment 3: paddr=000c3d64 vaddr=3ffb1df8 size=029a4h ( 10660) load[0m
+[0;32mI (362) esp_image: segment 4: paddr=000c6710 vaddr=40080000 size=179bch ( 96700) load[0m
+[0;32mI (402) esp_image: segment 5: paddr=000de0d4 vaddr=50000000 size=00028h (    40) load[0m
+[0;32mI (414) boot: Loaded app from partition at offset 0x10000[0m
+[0;32mI (414) boot: Disabling RNG early entropy source...[0m
+[0;32mI (425) cpu_start: Multicore app[0m
+[0;32mI (433) cpu_start: GPIO 3 and 1 are used as console UART I/O pins[0m
+[0;32mI (433) cpu_start: Pro cpu start user code[0m
+[0;32mI (433) cpu_start: cpu freq: 160000000 Hz[0m
+[0;32mI (435) app_init: Application information:[0m
+[0;32mI (439) app_init: Project name:     costar_idf[0m
+[0;32mI (443) app_init: App version:      21b480e-dirty[0m
+[0;32mI (447) app_init: Compile time:     Feb 23 2026 10:56:40[0m
+[0;32mI (452) app_init: ELF file SHA256:  4e1480ecf...[0m
+[0;32mI (457) app_init: ESP-IDF:          v6.1-dev-2636-g97d9585357[0m
+[0;32mI (462) efuse_init: Min chip rev:     v0.0[0m
+[0;32mI (466) efuse_init: Max chip rev:     v3.99 [0m
+[0;32mI (470) efuse_init: Chip rev:         v3.1[0m
+[0;32mI (474) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (480) heap_init: At 3FFAE6E0 len 00001920 (6 KiB): DRAM[0m
+[0;32mI (485) heap_init: At 3FFB9260 len 00026DA0 (155 KiB): DRAM[0m
+[0;32mI (490) heap_init: At 3FFE0440 len 00003AE0 (14 KiB): D/IRAM[0m
+[0;32mI (496) heap_init: At 3FFE4350 len 0001BCB0 (111 KiB): D/IRAM[0m
+[0;32mI (501) heap_init: At 400979BC len 00008644 (33 KiB): IRAM[0m
+[0;32mI (508) spi_flash: detected chip: generic[0m
+[0;32mI (510) spi_flash: flash io: dio[0m
+[0;32mI (515) main_task: Started on CPU0[0m
+[0;32mI (525) main_task: Calling app_main()[0m
+[0;32mI (565) costar-idf: WidgetOS boot (ESP-IDF scaffold)[0m
+[0;32mI (565) boot: setup start[0m
+[0;32mI (565) baseline: stage=setup_start t_ms=43 heap_free=268604 heap_min=268604[0m
+[0;32mI (565) settings: clock=12h temp=F dist=mi adsb=40nm[0m
+[0;32mI (575) boot: littlefs=1[0m
+[0;32mI (585) fs: asset=layout_b path=/littlefs/screen_layout_b.json bytes=1192[0m
+[0;32mI (585) fs: asset=dsl_weather_now path=/littlefs/dsl_active/weather_now.json bytes=3350[0m
+[0;32mI (595) fs: asset=dsl_forecast path=/littlefs/dsl_active/forecast.json bytes=3239[0m
+[0;32mI (595) fs: asset=dsl_clock_analog_full path=/littlefs/dsl_active/clock_analog_full.json bytes=3525[0m
+[0;32mI (605) fs: required assets OK[0m
+[0;32mI (605) baseline: stage=littlefs_ready t_ms=85 heap_free=266768 heap_min=265892[0m
+[0;32mI (615) boot: init backlight + TFT[0m
+[0;32mI (615) boot: board LED pin 17 set LOW[0m
+[0;32mI (615) boot: touch CS pin 33 set HIGH[0m
+[0;32mI (625) boot: SD CS pin 5 set HIGH[0m
+[0;32mI (625) boot: backlight pin 21 set HIGH[0m
+[0;32mI (635) tft: spi bus ready host=2 sclk=14 mosi=13 miso=12[0m
+[0;32mI (635) tft: panel spi device ready cs=15 dc=2 rst=12 hz=40000000[0m
+[0;33mW (645) tft: skip reset toggle: rst pin shares TFT MISO (12)[0m
+[0;32mI (905) tft: panel init complete (ili9341-style sequence)[0m
+[0;32mI (965) tft: sanity pattern drawn[0m
+[0;32mI (965) baseline: stage=tft_ready t_ms=447 heap_free=265720 heap_min=265700[0m
+[0;32mI (1255) config: wifi/locale config screen drawn[0m
+[0;32mI (1255) touch: spi bus ready host=1 sclk=25 mosi=32 miso=39[0m
+[0;32mI (1255) touch: device ready cs=33 irq=36 hz=2500000[0m
+[0;32mI (1255) touch: interaction start duration_ms=10000 wifi_buttons=1[0m
+[0;32mI (3215) touch: tap raw=(1107,3616) map=(78,7) action=none[0m
+[0;32mI (4635) touch: tap raw=(3771,3806) map=(318,0) action=none[0m
+[0;32mI (5955) touch: tap raw=(1058,348) map=(73,232) action=none[0m
+[0;32mI (7075) touch: tap raw=(3717,403) map=(313,229) action=none[0m
+[0;32mI (11275) touch: interaction end[0m
+[0;32mI (11275) boot: start wifi provisioning[0m
+[0;32mI (11285) wifi:wifi driver task: 3ffc1cf0, prio:23, stack:6656, core=0[0m
+[0;32mI (11295) wifi:wifi firmware version: 0f5722b[0m
+[0;32mI (11295) wifi:wifi certification version: v7.0[0m
+[0;32mI (11295) wifi:config NVS flash: enabled[0m
+[0;32mI (11295) wifi:config nano formatting: disabled[0m
+[0;32mI (11305) wifi:Init data frame dynamic rx buffer num: 32[0m
+[0;32mI (11305) wifi:Init static rx mgmt buffer num: 5[0m
+[0;32mI (11315) wifi:Init management short buffer num: 32[0m
+[0;32mI (11315) wifi:Init dynamic tx buffer num: 32[0m
+[0;32mI (11315) wifi:Init static rx buffer size: 1600[0m
+[0;32mI (11325) wifi:Init static rx buffer num: 10[0m
+[0;32mI (11325) wifi:Init dynamic rx buffer num: 32[0m
+[0;32mI (11335) wifi_init: rx ba win: 6[0m
+[0;32mI (11335) wifi_init: accept mbox: 6[0m
+[0;32mI (11335) wifi_init: tcpip mbox: 32[0m
+[0;32mI (11345) wifi_init: udp mbox: 6[0m
+[0;32mI (11345) wifi_init: tcp mbox: 6[0m
+[0;32mI (11345) wifi_init: tcp tx win: 5760[0m
+[0;32mI (11345) wifi_init: tcp rx win: 5760[0m
+[0;32mI (11355) wifi_init: tcp mss: 1440[0m
+[0;32mI (11355) wifi_init: WiFi IRAM OP enabled[0m
+[0;32mI (11365) wifi_init: WiFi RX IRAM OP enabled[0m
+[0;33mW (11365) wifi:Password length matches WPA2 standards, authmode threshold changes from OPEN to WPA2[0m
+[0;32mI (11375) wifi: loaded credentials from prefs ns=wifi[0m
+[0;32mI (11375) phy_init: phy_version 4863,a3a4459,Oct 28 2025,14:30:06[0m
+[0;32mI (11465) phy_init: Saving new calibration data due to checksum failure or outdated calibration data, mode(0)[0m
+[0;32mI (11525) wifi:mode : sta (f4:2d:c9:5a:01:e0)[0m
+[0;32mI (11525) wifi:enable tsf[0m
+[0;32mI (11535) wifi: station mode enabled[0m
+[0;32mI (11545) wifi:new:<9,0>, old:<1,0>, ap:<255,255>, sta:<9,0>, prof:1, snd_ch_cfg:0x0[0m
+[0;32mI (11545) wifi:state: init -> auth (0xb0)[0m
+[0;32mI (11565) wifi:state: auth -> assoc (0x0)[0m
+[0;32mI (11575) wifi:state: assoc -> run (0x10)[0m
+[0;32mI (11605) wifi:connected with ezesys, aid = 5, channel 9, BW20, bssid = a8:29:48:40:58:d8[0m
+[0;32mI (11605) wifi:security: WPA2-PSK, phy: bgn, rssi: -38[0m
+[0;32mI (11605) wifi:pm start, type: 1[0m
+
+[0;32mI (11605) wifi:dp: 1, bi: 102400, li: 3, scale listen interval from 307200 us to 307200 us[0m
+[0;32mI (11625) wifi:<ba-add>idx:0 (ifx:0, a8:29:48:40:58:d8), tid:1, ssn:0, winSize:64[0m
+[0;32mI (11665) wifi:AP's beacon interval = 102400 us, DTIM period = 1[0m
+[0;32mI (11775) wifi:<ba-add>idx:1 (ifx:0, a8:29:48:40:58:d8), tid:0, ssn:0, winSize:64[0m
+[0;32mI (12635) esp_netif_handlers: sta ip: 192.168.88.186, mask: 255.255.255.0, gw: 192.168.88.1[0m
+[0;32mI (12635) wifi: connected with stored credentials[0m
+[0;32mI (12635) baseline: stage=wifi_ready t_ms=12112 heap_free=221356 heap_min=219316[0m
+[0;33mW (12645) geo: cache/override missing; timezone context unavailable[0m
+[0;32mI (12645) wifi: connected ip=192.168.88.186[0m
+[0;32mI (16015) time: NTP UTC sync; timezone unavailable[0m
+[0;32mI (16015) baseline: stage=geo_time_ready t_ms=15490 heap_free=221000 heap_min=219108[0m
+[0;32mI (16015) boot: idf scaffold ready[0m
+[0;32mI (16015) baseline: stage=display_ready t_ms=15494 heap_free=221000 heap_min=219108[0m
+[0;32mI (16025) boot: setup complete[0m
+[0;32mI (16025) baseline: stage=setup_complete t_ms=15504 heap_free=221000 heap_min=219108[0m
+[0;32mI (16035) costar-idf: ESP-IDF shell running. Full app port in progress.[0m
+[0;32mI (76035) baseline: uptime_s=75 heap_free=221028 heap_min=218980 wifi=1 rssi=-37[0m

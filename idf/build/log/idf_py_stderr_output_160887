@@ -1,0 +1,94 @@
+Command: make -j 14 all
+Configuration Report                                                            
+ ────────────────────────────────────────────────────────────────────────────── 
+   Parser Version: 1                                                            
+   Verbosity: default                                                           
+   Defaults policy: sdkconfig                                                   
+   Status: Finished with notifications                                          
+                                                                                
+  Disabled Symbols/Choices With User-Set Value                                  
+   ──────────────────────────────────────────────────────────────────────────   
+    * ESP_CONSOLE_UART_BAUDRATE (defined at                                     
+    /home/johgor/esp-idf/components/esp_stdio/Kconfig:150) with user-set        
+    value 115200 from /tmp/kconfgen_tmpq0ww1856                                 
+   ──────────────────────────────────────────────────────────────────────────   
+ ────────────────────────────────────────────────────────────────────────────── 
+CMake Warning at /home/johgor/esp-idf/tools/cmake/component_validation.cmake:106 (message):
+  Private include directory
+  '/home/johgor/esp-idf/components/esp_wifi/wifi_apps/roaming_app/include'
+  belongs to component esp_wifi but is being used by component
+  wpa_supplicant.  It is recommended to define the component dependency for
+  wpa_supplicant on the component esp_wifi, i.e.  'idf_component_register(...
+  PRIV_REQUIRES esp_wifi)' in the CMakeLists.txt of wpa_supplicant, and
+  specify the included directory as idf_component_register(...
+  PRIV_INCLUDE_DIRS <dir relative to component>) in the CMakeLists.txt of
+  component esp_wifi.
+Call Stack (most recent call first):
+  /home/johgor/esp-idf/tools/cmake/component_validation.cmake:130 (__component_validation_check_include_dirs)
+  /home/johgor/esp-idf/CMakeLists.txt:353 (__component_validation_run_checks)
+
+
+CMake Warning at /home/johgor/esp-idf/tools/cmake/component_validation.cmake:106 (message):
+  Private include directory
+  '/home/johgor/esp-idf/components/esp_wifi/wifi_apps/roaming_app/src'
+  belongs to component esp_wifi but is being used by component
+  wpa_supplicant.  It is recommended to define the component dependency for
+  wpa_supplicant on the component esp_wifi, i.e.  'idf_component_register(...
+  PRIV_REQUIRES esp_wifi)' in the CMakeLists.txt of wpa_supplicant, and
+  specify the included directory as idf_component_register(...
+  PRIV_INCLUDE_DIRS <dir relative to component>) in the CMakeLists.txt of
+  component esp_wifi.
+Call Stack (most recent call first):
+  /home/johgor/esp-idf/tools/cmake/component_validation.cmake:130 (__component_validation_check_include_dirs)
+  /home/johgor/esp-idf/CMakeLists.txt:353 (__component_validation_run_checks)
+
+
+CMake Warning at /home/johgor/esp-idf/tools/cmake/component_validation.cmake:106 (message):
+  Private include directory
+  '/home/johgor/esp-idf/components/wpa_supplicant/src' belongs to component
+  wpa_supplicant but is being used by component esp_wifi.  It is recommended
+  to define the component dependency for esp_wifi on the component
+  wpa_supplicant, i.e.  'idf_component_register(...  PRIV_REQUIRES
+  wpa_supplicant)' in the CMakeLists.txt of esp_wifi, and specify the
+  included directory as idf_component_register(...  PRIV_INCLUDE_DIRS <dir
+  relative to component>) in the CMakeLists.txt of component wpa_supplicant.
+Call Stack (most recent call first):
+  /home/johgor/esp-idf/tools/cmake/component_validation.cmake:130 (__component_validation_check_include_dirs)
+  /home/johgor/esp-idf/CMakeLists.txt:353 (__component_validation_run_checks)
+
+
+CMake Warning at /home/johgor/esp-idf/tools/cmake/component_validation.cmake:106 (message):
+  Private include directory
+  '/home/johgor/esp-idf/components/wpa_supplicant/esp_supplicant/src' belongs
+  to component wpa_supplicant but is being used by component esp_wifi.  It is
+  recommended to define the component dependency for esp_wifi on the
+  component wpa_supplicant, i.e.  'idf_component_register(...  PRIV_REQUIRES
+  wpa_supplicant)' in the CMakeLists.txt of esp_wifi, and specify the
+  included directory as idf_component_register(...  PRIV_INCLUDE_DIRS <dir
+  relative to component>) in the CMakeLists.txt of component wpa_supplicant.
+Call Stack (most recent call first):
+  /home/johgor/esp-idf/tools/cmake/component_validation.cmake:130 (__component_validation_check_include_dirs)
+  /home/johgor/esp-idf/CMakeLists.txt:353 (__component_validation_run_checks)
+
+
+Traceback (most recent call last):
+  File "/home/johgor/src/costar/idf/build/esp-idf/main/../../littlefs_py_venv/bin/littlefs-python", line 8, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/home/johgor/src/costar/idf/build/littlefs_py_venv/lib/python3.13/site-packages/littlefs/__main__.py", line 309, in main
+    return args.func(parser, args)
+           ~~~~~~~~~^^^^^^^^^^^^^^
+  File "/home/johgor/src/costar/idf/build/littlefs_py_venv/lib/python3.13/site-packages/littlefs/__main__.py", line 90, in create
+    dest.write(path.read_bytes())
+               ~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.13/pathlib/_abc.py", line 625, in read_bytes
+    with self.open(mode='rb') as f:
+         ~~~~~~~~~^^^^^^^^^^^
+  File "/usr/lib/python3.13/pathlib/_local.py", line 539, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/johgor/src/costar/idf/data'
+make[2]: *** [esp-idf/main/CMakeFiles/littlefs_storage_bin.dir/build.make:70: esp-idf/main/CMakeFiles/littlefs_storage_bin] Error 1
+make[1]: *** [CMakeFiles/Makefile2:8996: esp-idf/main/CMakeFiles/littlefs_storage_bin.dir/all] Error 2
+make[1]: *** Waiting for unfinished jobs....
+make: *** [Makefile:136: all] Error 2

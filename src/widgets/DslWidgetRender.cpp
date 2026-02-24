@@ -8,10 +8,10 @@
 #include <vector>
 
 #include <HTTPClient.h>
-#include <FS.h>
-#include <LittleFS.h>
-#include <WiFi.h>
 #include <WiFiClientSecure.h>
+
+#include "platform/Fs.h"
+#include "platform/Net.h"
 
 namespace {
 struct IconCacheEntry {
@@ -73,10 +73,10 @@ String remoteIconCachePath(const String& url, int16_t w, int16_t h) {
 }
 
 bool ensureIconCacheDir() {
-  if (LittleFS.exists(kIconCacheDir)) {
+  if (platform::fs::exists(kIconCacheDir)) {
     return true;
   }
-  return LittleFS.mkdir(kIconCacheDir);
+  return platform::fs::mkdir(kIconCacheDir);
 }
 
 const IconCacheEntry* findIcon(const String& key) {
@@ -90,7 +90,7 @@ const IconCacheEntry* findIcon(const String& key) {
 
 bool loadIconPixelsFromFile(const String& filePath, const String& cacheKey,
                             int16_t w, int16_t h) {
-  fs::File f = LittleFS.open(filePath, FILE_READ);
+  platform::fs::File f = platform::fs::open(filePath, FILE_READ);
   if (!f || f.isDirectory()) {
     return false;
   }
@@ -153,7 +153,7 @@ uint32_t parseRetryAfterMs(const String& retryAfter) {
 }
 
 bool fetchRemoteIconToFile(const String& url, const String& outPath, int16_t w, int16_t h) {
-  if (WiFi.status() != WL_CONNECTED) {
+  if (!platform::net::isConnected()) {
     return false;
   }
 
@@ -211,8 +211,8 @@ bool fetchRemoteIconToFile(const String& url, const String& outPath, int16_t w, 
   }
 
   const String tempPath = outPath + ".tmp";
-  LittleFS.remove(tempPath);
-  fs::File out = LittleFS.open(tempPath, FILE_WRITE);
+  platform::fs::remove(tempPath);
+  platform::fs::File out = platform::fs::open(tempPath, FILE_WRITE);
   if (!out || out.isDirectory()) {
     sRemoteIconRetryAfterMs[url] = nowMs + kRemoteIconRetryMs;
     http.end();
@@ -241,7 +241,7 @@ bool fetchRemoteIconToFile(const String& url, const String& outPath, int16_t w, 
         if (written != static_cast<size_t>(readCount)) {
           out.close();
           http.end();
-          LittleFS.remove(tempPath);
+          platform::fs::remove(tempPath);
           sRemoteIconRetryAfterMs[url] = nowMs + kRemoteIconRetryMs;
           return false;
         }
@@ -260,14 +260,14 @@ bool fetchRemoteIconToFile(const String& url, const String& outPath, int16_t w, 
   http.end();
 
   if (total != expected) {
-    LittleFS.remove(tempPath);
+    platform::fs::remove(tempPath);
     sRemoteIconRetryAfterMs[url] = nowMs + kRemoteIconRetryMs;
     return false;
   }
 
-  LittleFS.remove(outPath);
-  if (!LittleFS.rename(tempPath, outPath)) {
-    LittleFS.remove(tempPath);
+  platform::fs::remove(outPath);
+  if (!platform::fs::rename(tempPath, outPath)) {
+    platform::fs::remove(tempPath);
     sRemoteIconRetryAfterMs[url] = nowMs + kRemoteIconRetryMs;
     return false;
   }
@@ -284,11 +284,10 @@ const IconCacheEntry* loadIcon(const String& path, int16_t w, int16_t h) {
   if (const IconCacheEntry* cached = findIcon(key)) {
     return cached;
   }
-  if (loadIconPixelsFromFile(path, key, w, h)) {
-    return &sIconCache.back();
-  }
-
   if (!isRemoteIconPath(path)) {
+    if (loadIconPixelsFromFile(path, key, w, h)) {
+      return &sIconCache.back();
+    }
     return nullptr;
   }
   if (hasEmptyIconQuery(path)) {
@@ -530,7 +529,7 @@ void DslWidget::render(TFT_eSPI& tft) {
 
       if (node.type == dsl::NodeType::kLabel) {
         if ((node.font < 1 || node.font > 8) && dsl_.debug) {
-          Serial.printf("[%s] [%s] invalid font id=%u; using 2\n", widgetName().c_str(),
+          platform::logf("[%s] [%s] invalid font id=%u; using 2\n", widgetName().c_str(),
                         logTimestamp().c_str(), static_cast<unsigned>(node.font));
         }
         const uint8_t font = safeFontId(node.font);
@@ -598,7 +597,7 @@ void DslWidget::render(TFT_eSPI& tft) {
 
       if (node.type == dsl::NodeType::kValueBox) {
         if ((node.font < 1 || node.font > 8) && dsl_.debug) {
-          Serial.printf("[%s] [%s] invalid font id=%u; using 2\n", widgetName().c_str(),
+          platform::logf("[%s] [%s] invalid font id=%u; using 2\n", widgetName().c_str(),
                         logTimestamp().c_str(), static_cast<unsigned>(node.font));
         }
         const uint8_t font = safeFontId(node.font);

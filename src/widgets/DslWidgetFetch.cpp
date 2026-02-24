@@ -1,7 +1,6 @@
 #include "widgets/DslWidget.h"
 
 #include <HTTPClient.h>
-#include <WiFi.h>
 #include <WiFiClientSecure.h>
 
 #include <algorithm>
@@ -10,6 +9,7 @@
 
 #include "RuntimeGeo.h"
 #include "RuntimeSettings.h"
+#include "platform/Net.h"
 
 namespace {
 bool inferOffsetFromTimezone(const String& tz, int& outMinutes) {
@@ -114,7 +114,7 @@ bool DslWidget::executeTapAction(String& errorOut) {
     contentType = "application/json";
   }
 
-  if (WiFi.status() != WL_CONNECTED) {
+  if (!platform::net::isConnected()) {
     errorOut = "WiFi disconnected";
     return false;
   }
@@ -391,13 +391,13 @@ bool DslWidget::update(uint32_t nowMs) {
     if (!executeTapAction(actionError)) {
       status_ = "tap err";
       if (dsl_.debug) {
-        Serial.printf("[%s] [%s] TAP err=%s\n", widgetName().c_str(), logTimestamp().c_str(),
+        platform::logf("[%s] [%s] TAP err=%s\n", widgetName().c_str(), logTimestamp().c_str(),
                       clipText(actionError, 120).c_str());
       }
     } else {
       status_ = "ok";
       if (dsl_.debug) {
-        Serial.printf("[%s] [%s] TAP ok\n", widgetName().c_str(), logTimestamp().c_str());
+        platform::logf("[%s] [%s] TAP ok\n", widgetName().c_str(), logTimestamp().c_str());
       }
     }
     tapActionPending_ = false;
@@ -435,7 +435,7 @@ bool DslWidget::update(uint32_t nowMs) {
   if (dsl_.source == "local_time") {
     if (!buildLocalTimeDoc(doc, error)) {
       if (dsl_.debug) {
-        Serial.printf("[%s] - [%s] - DSL local_time error: %s\n", widgetName().c_str(),
+        platform::logf("[%s] - [%s] - DSL local_time error: %s\n", widgetName().c_str(),
                       logTimestamp().c_str(), error.c_str());
       }
     }
@@ -460,7 +460,7 @@ bool DslWidget::update(uint32_t nowMs) {
                                    String(RuntimeGeo::latitude, 4) + "/" +
                                    String(RuntimeGeo::longitude, 4) + "/" + radiusNm;
     if (dsl_.debug) {
-      Serial.printf("[%s] [%s] URL %s\n", widgetName().c_str(), logTimestamp().c_str(),
+      platform::logf("[%s] [%s] URL %s\n", widgetName().c_str(), logTimestamp().c_str(),
                     clipText(resolvedUrl, 88).c_str());
     }
     JsonDocument rawDoc;
@@ -474,7 +474,7 @@ bool DslWidget::update(uint32_t nowMs) {
     } else {
       if (altTransportUrl != resolvedUrl) {
         if (dsl_.debug) {
-          Serial.printf("[%s] [%s] ADSB retry http %s\n",
+          platform::logf("[%s] [%s] ADSB retry http %s\n",
                         widgetName().c_str(), logTimestamp().c_str(), altTransportUrl.c_str());
         }
         String altErr;
@@ -494,7 +494,7 @@ bool DslWidget::update(uint32_t nowMs) {
 
     if (!gotRaw) {
       if (dsl_.debug) {
-        Serial.printf("[%s] [%s] ADSB fallback %s\n", widgetName().c_str(),
+        platform::logf("[%s] [%s] ADSB fallback %s\n", widgetName().c_str(),
                       logTimestamp().c_str(), clipText(fallbackUrlHttps, 72).c_str());
       }
       String fallbackError;
@@ -517,7 +517,7 @@ bool DslWidget::update(uint32_t nowMs) {
       logHttpFetchResult(fetchMeta.statusCode, fetchMeta.contentLengthBytes);
       if (!buildAdsbNearestDoc(rawDoc, doc, error) && !fetchedFromFallback) {
         if (dsl_.debug) {
-          Serial.printf("[%s] [%s] ADSB parse err=%s\n", widgetName().c_str(),
+          platform::logf("[%s] [%s] ADSB parse err=%s\n", widgetName().c_str(),
                         logTimestamp().c_str(), clipText(error, 86).c_str());
         }
         String fallbackError;
@@ -538,13 +538,13 @@ bool DslWidget::update(uint32_t nowMs) {
       logHttpFetchResult(fetchMeta.statusCode, fetchMeta.contentLengthBytes);
       if (dsl_.debug) {
         if (fetchMeta.statusCode <= 0) {
-          Serial.printf(
+          platform::logf(
               "[%s] [%s] ADSB transport no-http-response code=%d reason='%s' elapsed=%lums\n",
               widgetName().c_str(), logTimestamp().c_str(), fetchMeta.statusCode,
               fetchMeta.transportReason.c_str(),
               static_cast<unsigned long>(fetchMeta.elapsedMs));
         }
-        Serial.printf(
+        platform::logf(
             "[%s] [%s] ADSB err=%s status=%d bytes=%u ctype='%s'\n", widgetName().c_str(),
             logTimestamp().c_str(), clipText(error, 140).c_str(), fetchMeta.statusCode,
             static_cast<unsigned>(fetchMeta.payloadBytes), fetchMeta.contentType.c_str());
@@ -556,10 +556,10 @@ bool DslWidget::update(uint32_t nowMs) {
     const std::map<String, String>* headersPtr =
         resolvedHeaders.empty() ? nullptr : &resolvedHeaders;
     if (dsl_.debug) {
-      Serial.printf("[%s] [%s] URL %s\n", widgetName().c_str(), logTimestamp().c_str(),
+      platform::logf("[%s] [%s] URL %s\n", widgetName().c_str(), logTimestamp().c_str(),
                     clipText(resolvedUrl, 88).c_str());
       if (!resolvedHeaders.empty()) {
-        Serial.printf("[%s] [%s] HTTP headers=%u\n", widgetName().c_str(),
+        platform::logf("[%s] [%s] HTTP headers=%u\n", widgetName().c_str(),
                       logTimestamp().c_str(), static_cast<unsigned>(resolvedHeaders.size()));
       }
     }
@@ -585,7 +585,7 @@ bool DslWidget::update(uint32_t nowMs) {
     if (!error.isEmpty()) {
       logHttpFetchResult(fetchMeta.statusCode, fetchMeta.contentLengthBytes);
       if (fetchMeta.statusCode <= 0) {
-        Serial.printf("[%s] [%s] DSL no-http-response url=%s code=%d reason='%s' elapsed=%lums\n",
+        platform::logf("[%s] [%s] DSL no-http-response url=%s code=%d reason='%s' elapsed=%lums\n",
                       widgetName().c_str(), logTimestamp().c_str(),
                       clipText(resolvedUrl, 96).c_str(), fetchMeta.statusCode,
                       fetchMeta.transportReason.c_str(),
@@ -593,17 +593,17 @@ bool DslWidget::update(uint32_t nowMs) {
       }
       if (dsl_.debug) {
         if (fetchMeta.statusCode <= 0) {
-          Serial.printf(
+          platform::logf(
               "[%s] [%s] DSL transport no-http-response code=%d reason='%s' elapsed=%lums\n",
               widgetName().c_str(), logTimestamp().c_str(), fetchMeta.statusCode,
               fetchMeta.transportReason.c_str(),
               static_cast<unsigned long>(fetchMeta.elapsedMs));
         } else if (fetchMeta.statusCode == 429 || fetchMeta.statusCode == 503) {
-          Serial.printf("[%s] [%s] DSL server throttle status=%d retry-after='%s'\n",
+          platform::logf("[%s] [%s] DSL server throttle status=%d retry-after='%s'\n",
                         widgetName().c_str(), logTimestamp().c_str(), fetchMeta.statusCode,
                         fetchMeta.retryAfter.c_str());
         }
-        Serial.printf(
+        platform::logf(
             "[%s] [%s] DSL err=%s status=%d bytes=%u ctype='%s'\n", widgetName().c_str(),
             logTimestamp().c_str(), clipText(error, 140).c_str(), fetchMeta.statusCode,
             static_cast<unsigned>(fetchMeta.payloadBytes), fetchMeta.contentType.c_str());
@@ -611,7 +611,7 @@ bool DslWidget::update(uint32_t nowMs) {
     } else {
       logHttpFetchResult(fetchMeta.statusCode, fetchMeta.contentLengthBytes);
       if (dsl_.debug) {
-        Serial.printf("[%s] [%s] DSL ok url=%s bytes=%u\n", widgetName().c_str(),
+        platform::logf("[%s] [%s] DSL ok url=%s bytes=%u\n", widgetName().c_str(),
                       logTimestamp().c_str(), clipText(resolvedUrl, 70).c_str(),
                       static_cast<unsigned>(fetchMeta.payloadBytes));
       }
@@ -619,7 +619,7 @@ bool DslWidget::update(uint32_t nowMs) {
   } else {
     error = "unsupported source: " + dsl_.source;
     if (dsl_.debug) {
-      Serial.printf("[%s] - [%s] - DSL config error: %s\n", widgetName().c_str(),
+      platform::logf("[%s] - [%s] - DSL config error: %s\n", widgetName().c_str(),
                     logTimestamp().c_str(), error.c_str());
     }
   }
@@ -643,7 +643,7 @@ bool DslWidget::update(uint32_t nowMs) {
       }
       adsbBackoffUntilMs_ = nowMs + backoffMs;
       if (dsl_.debug) {
-        Serial.printf("[%s] [%s] ADSB cooldown %lus streak=%u status=%d\n",
+        platform::logf("[%s] [%s] ADSB cooldown %lus streak=%u status=%d\n",
                       widgetName().c_str(), logTimestamp().c_str(),
                       static_cast<unsigned long>(backoffMs / 1000UL),
                       static_cast<unsigned>(adsbFailureStreak_), fetchMeta.statusCode);
@@ -658,7 +658,7 @@ bool DslWidget::update(uint32_t nowMs) {
 
   if (dsl_.source == "adsb_nearest") {
     if (dsl_.debug && adsbFailureStreak_ > 0) {
-      Serial.printf("[%s] [%s] ADSB recovered after %u failures\n", widgetName().c_str(),
+      platform::logf("[%s] [%s] ADSB recovered after %u failures\n", widgetName().c_str(),
                     logTimestamp().c_str(), static_cast<unsigned>(adsbFailureStreak_));
     }
     adsbFailureStreak_ = 0;

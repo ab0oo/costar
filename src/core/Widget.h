@@ -7,6 +7,7 @@
 #include <time.h>
 
 #include "WidgetTypes.h"
+#include "platform/Platform.h"
 
 class Widget {
  public:
@@ -23,7 +24,7 @@ class Widget {
   virtual void begin() {
     dirty_ = true;
     // Force first update immediately instead of waiting a full polling interval.
-    lastUpdateMs_ = millis() - config_.updateMs;
+    lastUpdateMs_ = platform::millisMs() - config_.updateMs;
   }
   virtual bool isNetworkWidget() const { return false; }
   virtual bool wantsImmediateUpdate() const { return false; }
@@ -110,17 +111,17 @@ class Widget {
       strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &nowTm);
       return String(buf);
     }
-    return String("uptime:") + String(millis() / 1000UL) + "s";
+    return String("uptime:") + String(platform::millisMs() / 1000UL) + "s";
   }
 
   void logHttpFetchResult(int statusCode, int contentLengthBytes = -1) const {
     if (contentLengthBytes >= 0) {
-      Serial.printf("[%s] - [%s] - HTTP Fetch %d content-length=%d\n", widgetName().c_str(),
-                    logTimestamp().c_str(), statusCode, contentLengthBytes);
+      platform::logf("[%s] - [%s] - HTTP Fetch %d content-length=%d\n", widgetName().c_str(),
+                     logTimestamp().c_str(), statusCode, contentLengthBytes);
       return;
     }
-    Serial.printf("[%s] - [%s] - HTTP Fetch %d content-length=unknown\n", widgetName().c_str(),
-                  logTimestamp().c_str(), statusCode);
+    platform::logf("[%s] - [%s] - HTTP Fetch %d content-length=unknown\n", widgetName().c_str(),
+                   logTimestamp().c_str(), statusCode);
   }
 
   void drawPanel(TFT_eSPI& tft, const String& title) const {

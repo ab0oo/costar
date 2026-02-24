@@ -1,5 +1,90 @@
 # Handoff Runbook (Release Prep)
 
+## 0) Session Log - ESP-IDF Port (2026-02-23)
+
+Summary: Major progress on ESP-IDF scaffold, Wi-Fi/touch/config flow, and logging cleanup. Several display/touch parity regressions were debugged. Session ended with one final display fix built but not yet hardware-verified.
+
+### What Worked (Successes)
+
+- ESP-IDF app scaffold boots and runs consistently (`idf/main/app_main.cpp`).
+- Logging cleanup moved IDF path away from Arduino-style `Serial.*` toward `ESP_LOG*`.
+- LittleFS mount + required asset verification added and functioning when storage image is present.
+- IDF config UI and touch interaction loop added:
+  - Wi-Fi/locale screen draw
+  - touch hit-test, tap markers, action logging
+- IDF touch bring-up on SPI works; raw + mapped touch logs are emitted.
+- Wi-Fi crash loop fixed:
+  - Cause was `esp_wifi_set_config()` during connecting state (`ESP_ERR_WIFI_STATE`).
+  - Fixed sequencing: disconnect -> apply config -> connect, with non-fatal handling.
+- Firmware identity verification process clarified:
+  - runtime `app_init` ELF SHA must match built artifact SHA.
+- Build blocker workaround added for offline/pip-restricted environments:
+  - `COSTAR_BUILD_LITTLEFS_IMAGE=OFF` option in `idf/main/CMakeLists.txt`.
+  - Verified build succeeds with:
+    - `idf.py -C idf -D COSTAR_BUILD_LITTLEFS_IMAGE=OFF build`
+
+### What Failed / Regressed
+
+- Display/touch parity did not match Arduino immediately.
+- Repeated orientation/mapping regressions:
+  - portrait-like config layout despite intended landscape
+  - large touch marker offset from tap point
+  - temporary left-right mirrored display after an intermediate coordinate transform patch
+- Root causes were mixed between:
+  - panel raw dimension assumptions
+  - MADCTL/rotation handling order
+  - touch axis mapping mismatch vs Arduino `TouchMapper`
+  - extra software coordinate remap layered on top of hardware rotation
+
+### Current Code State At End Of Day
+
+- `include/AppConfig.h`
+  - `kRotation = 1`
+  - raw panel dimensions set to `kPanelWidth=240`, `kPanelHeight=320`
+  - IDF touch calibration constants aligned to Arduino values.
+- `idf/main/TouchInputEspIdf.cpp`
+  - touch mapping updated to match Arduino `TouchMapper` axis logic.
+- `idf/main/app_main.cpp`
+  - Wi-Fi init/connect sequencing hardened; no `ESP_ERROR_CHECK` abort on `ESP_ERR_WIFI_STATE`.
+- `idf/main/DisplaySpiEspIdf.cpp`
+  - panel init uses explicit MADCTL by rotation.
+  - final patch removed extra software logical->panel remap that caused mirror.
+  - latest build completed successfully after mirror fix.
+
+### Latest Known Hardware Observation
+
+- User confirmed a new firmware flash occurred.
+- Orientation became correct at one point, but display was mirrored L<->R.
+- After the final change that removed the extra remap, hardware regressed back to portrait mode with badly misaligned touch points.
+- Net state at handoff: orientation/touch parity is still unresolved on IDF and remains the top blocker.
+
+### Build / Flash Notes (Important)
+
+- If pip/PyPI access fails during littlefs image generation:
+  - error includes connection refused to `/simple/littlefs-python/`
+  - use:
+    - `source /home/johgor/esp-idf/export.sh`
+    - `idf.py -C idf -D COSTAR_BUILD_LITTLEFS_IMAGE=OFF build`
+- With `COSTAR_BUILD_LITTLEFS_IMAGE=OFF`, `storage.bin` is not regenerated/flashed by default.
+
+### First Steps To Resume
+
+1. Flash latest app build and capture full `app_init` + early `tft` + first touch lines.
+2. Confirm runtime app SHA matches latest build.
+3. Verify whether mirror is gone after last `DisplaySpiEspIdf.cpp` patch.
+4. Validate touch alignment on config buttons (`SCAN`, `RETRY`, `OFFLINE`).
+5. If still off, port Arduino setup UI layout/hitbox definitions directly (shared module) instead of parallel implementations.
+
+### Resume Command Set
+
+- Build (offline-safe):
+  - `source /home/johgor/esp-idf/export.sh`
+  - `idf.py -C idf -D COSTAR_BUILD_LITTLEFS_IMAGE=OFF build`
+- Flash:
+  - `idf.py -C idf -p <PORT> flash`
+- Verify running image:
+  - compare runtime `app_init: ELF file SHA256: ...` to local image metadata.
+
 ## 1) Environment
 
 - Project root: `costar/`

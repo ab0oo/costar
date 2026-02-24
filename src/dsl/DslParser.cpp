@@ -3,9 +3,8 @@
 #include "dsl/DslExpr.h"
 
 #include <ArduinoJson.h>
-#include <FS.h>
-#include <LittleFS.h>
 #include <math.h>
+#include "platform/Fs.h"
 
 namespace {
 
@@ -377,7 +376,7 @@ void applyNodes(JsonArrayConst nodes, dsl::Document& out, const VarContext* ctx)
 namespace dsl {
 
 bool Parser::parseFile(const String& path, Document& out, String* error) {
-  fs::File dslFile = LittleFS.open(path, FILE_READ);
+  platform::fs::File dslFile = platform::fs::open(path, FILE_READ);
   if (!dslFile || dslFile.isDirectory()) {
     if (error != nullptr) {
       *error = "dsl file missing";

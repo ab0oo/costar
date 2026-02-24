@@ -1,0 +1,226 @@
+Command: make -j 14 all
+[  0%] Built target custom_bundle
+[  0%] Built target partition_table_bin
+[  0%] Built target _project_elf_src
+[  1%] Built target sections_ld_in_preprocess
+[  1%] Built target memory_ld_in_preprocess
+[  1%] Performing build step for 'bootloader'
+[  1%] Built target __idf_esp_https_ota
+[  2%] Built target __idf_esp_http_server
+[  2%] Built target _project_elf_src
+[  2%] Built target bootloader_ld_in_preprocess
+[  9%] Built target __idf_log
+LittleFS Configuration:
+  Block Size:       4096  /  0x1000
+  Image Size:    2031616  /  0x1F0000
+  Block Count:       496
+  Name Max:           64
+  Image:       /home/johgor/src/costar/idf/build/storage.bin
+Adding Directory: dsl_active
+Adding Directory: icons
+Adding File:      screen_layout_b.json
+Adding File:      screen_layout_a.json
+Adding Directory: dsl_available
+Adding File:      dsl_active/forecast.json
+Adding File:      dsl_active/weather_now.json
+Adding File:      dsl_active/clock_analog_full.json
+Adding File:      icons/weather_rain.raw
+Adding File:      icons/weather_sun.raw
+Adding File:      icons/weather_snow.raw
+Adding File:      icons/weather_storm.raw
+Adding File:      icons/sunrise.raw
+Adding File:      icons/weather_partly.raw
+Adding File:      icons/weather_fog.raw
+Adding File:      icons/weather_cloud.raw
+Adding Directory: icons/meteocons
+Adding File:      icons/weather_drizzle.raw
+Adding File:      icons/sunset.raw
+Adding File:      icons/moon.raw
+Adding File:      dsl_available/crypto_price.json
+Adding File:      dsl_available/clock_local.json
+Adding File:      dsl_available/homeassistant_entity.json
+Adding File:      dsl_available/stock_quote.json
+Adding File:      dsl_available/clock_analog.json
+Adding File:      dsl_available/forecast.json
+Adding File:      dsl_available/homeassistant_control_card.json
+Adding File:      dsl_available/weather_geo.json
+Adding File:      dsl_available/adsb_nearest.json
+Adding File:      dsl_available/weather_now.json
+Adding File:      dsl_available/clock_analog_quarter.json
+Adding File:      dsl_available/clock_analog_full.json
+Adding File:      icons/meteocons/cloudy.raw
+Adding File:      icons/meteocons/clear-day.raw
+Adding File:      icons/meteocons/snow.raw
+Adding File:      icons/meteocons/thunderstorms-day.raw
+Adding File:      icons/meteocons/rain.raw
+Adding File:      icons/meteocons/sunrise.raw
+Adding File:      icons/meteocons/drizzle.raw
+Adding File:      icons/meteocons/sunset.raw
+Adding File:      icons/meteocons/partly-cloudy-day.raw
+Adding File:      icons/meteocons/fog.raw
+[  3%] Built target __idf_esp_http_client
+[ 16%] Built target __idf_esp_rom
+[  3%] Built target littlefs_storage_bin
+[  4%] Built target __idf_tcp_transport
+[ 17%] Built target __idf_esp_common
+[  5%] Built target __idf_esp_adc
+[ 24%] Built target __idf_esp_hw_support
+[  5%] Built target __idf_esp_driver_i2s
+[ 25%] Built target __idf_esp_system
+[  6%] Built target __idf_esp-tls
+[ 30%] Built target __idf_efuse
+[  6%] Built target __idf_http_parser
+[ 47%] Built target __idf_bootloader_support
+[  6%] Built target __idf_esp_hal_i2c
+[ 50%] Built target __idf_esp_security
+[  6%] Built target __idf_esp_gdbstub
+[ 52%] Built target __idf_esp_hal_security
+[  7%] Built target __idf_esp_wifi
+[ 56%] Built target __idf_esp_hal_ana_conv
+[  8%] Built target __idf_esp_coex
+[ 58%] Built target __idf_esp_hal_i2s
+[ 61%] Built target __idf_esp_hal_uart
+[ 16%] Built target __idf_wpa_supplicant
+[ 63%] Built target __idf_esp_hal_wdt
+[ 17%] Built target __idf_esp_netif
+[ 65%] Built target __idf_esp_hal_timg
+[ 67%] Built target __idf_esp_bootloader_format
+[ 26%] Built target __idf_lwip
+[ 69%] Built target __idf_spi_flash
+[ 27%] Built target __idf_vfs
+[ 71%] Built target __idf_esp_hal_mspi
+[ 28%] Built target __idf_esp_phy
+[ 73%] Built target __idf_esp_hal_clock
+[ 77%] Built target __idf_esp_hal_gpspi
+[ 30%] Built target __idf_nvs_flash
+[ 79%] Built target __idf_micro-ecc
+[ 30%] Built target __idf_nvs_sec_provider
+[ 80%] Built target __idf_esp_hal_pmu
+[ 31%] Built target __idf_esp_event
+[ 84%] Built target __idf_esp_hal_gpio
+[ 31%] Built target __idf_esp_driver_uart
+[ 89%] Built target __idf_hal
+[ 32%] Built target __idf_esp_psram
+[ 32%] Built target __idf_esp_ringbuf
+[ 94%] Built target __idf_soc
+[ 33%] Built target __idf_esp_timer
+[ 96%] Built target __idf_xtensa
+[ 33%] Built target __idf_cxx
+[ 97%] Built target __idf_main
+[ 98%] Built target bootloader.elf
+[ 33%] Built target __idf_pthread
+[100%] Built target gen_bootloader_binary
+[ 35%] Built target __idf_esp_libc
+[100%] Built target gen_project_binary
+[ 37%] Built target __idf_freertos
+[ 42%] Built target __idf_esp_hw_support
+Bootloader binary size 0x6610 bytes. 0x9f0 bytes (9%) free.
+[100%] Built target bootloader_check_size
+[ 42%] Built target __idf_esp_hal_touch_sens
+[100%] Built target app
+[ 42%] Built target __idf_esp_hal_pmu
+[ 42%] No install step for 'bootloader'
+[ 43%] Built target __idf_esp_hal_gpio
+[ 43%] Completed 'bootloader'
+[ 44%] Built target __idf_soc
+[ 46%] Built target __idf_heap
+[ 46%] Built target bootloader
+[ 47%] Built target __idf_log
+[ 47%] Built target __idf_hal
+[ 48%] Built target __idf_esp_rom
+[ 48%] Built target __idf_esp_common
+[ 52%] Built target __idf_esp_system
+[ 54%] Built target __idf_spi_flash
+[ 55%] Built target __idf_bootloader_support
+[ 56%] Built target __idf_esp_hal_ana_conv
+[ 56%] Built target __idf_esp_hal_i2s
+[ 56%] Built target __idf_esp_hal_wdt
+[ 57%] Built target __idf_esp_hal_timg
+[ 60%] Built target tfpsacrypto
+[ 63%] Built target mbedtls
+[ 64%] Built target mbedx509
+[ 70%] Built target builtin
+[ 70%] Built target p256m
+[ 71%] Built target everest
+[ 72%] Built target __idf_mbedtls
+[ 72%] Built target __idf_esp_driver_dma
+[ 72%] Built target __idf_esp_mm
+[ 72%] Built target __idf_esp_pm
+[ 73%] Built target __idf_esp_hal_uart
+[ 73%] Built target __idf_esp_driver_gpio
+[ 73%] Built target __idf_esp_security
+[ 73%] Built target __idf_efuse
+[ 73%] Built target __idf_esp_partition
+[ 73%] Built target __idf_app_update
+[ 73%] Built target __idf_esp_bootloader_format
+[ 73%] Built target __idf_esp_app_format
+[ 73%] Built target __idf_esp_hal_security
+[ 74%] Built target __idf_esp_hal_mspi
+[ 74%] Built target __idf_esp_hal_clock
+[ 75%] Built target __idf_esp_hal_gpspi
+[ 75%] Built target __idf_esp_stdio
+[ 76%] Built target __idf_xtensa
+[ 77%] Built target __idf_esp_hal_sd
+[ 77%] Built target __idf_unity
+[ 77%] Built target __idf_esp_driver_cam
+[ 77%] Built target __idf_esp_driver_sdm
+[ 77%] Built target __idf_esp_hal_twai
+[ 78%] Built target __idf_esp_hal_mcpwm
+[ 78%] Built target __idf_esp_driver_dac
+[ 80%] Built target __idf_console
+[ 80%] Built target __idf_esp_driver_spi
+[ 80%] Built target __idf_esp_hal_pcnt
+[ 81%] Built target __idf_esp_hal_ledc
+[ 82%] Built target __idf_esp_driver_gptimer
+[ 82%] Built target __idf_esp_hal_rmt
+[ 82%] Built target __idf_esp_driver_i2c
+[ 82%] Built target __idf_esp_hal_emac
+[ 82%] Built target __idf_esp_hal_lcd
+[ 82%] Built target __idf_protobuf-c
+[ 82%] Built target __idf_esp_hid
+[ 82%] Built target __idf_esp_https_server
+[ 82%] Built target __idf_perfmon
+[ 83%] Built target __idf_esp_driver_touch_sens
+[ 84%] Built target __idf_wear_levelling
+[ 85%] Built target __idf_spiffs
+[ 85%] Built target __idf_rt
+[ 86%] Built target __idf_sdmmc
+[ 87%] Built target __idf_cmock
+[ 87%] Built target __idf_esp_driver_sdio
+[ 88%] Built target __idf_driver
+[ 89%] Built target __idf_esp_driver_ledc
+[ 89%] Built target __idf_esp_driver_pcnt
+[ 89%] Built target __idf_esp_driver_twai
+[ 90%] Built target __idf_esp_driver_mcpwm
+[ 91%] Built target __idf_esp_eth
+[ 91%] Built target __idf_esp_driver_sd_intf
+[ 91%] Built target __idf_esp_driver_sdspi
+[ 92%] Built target __idf_esp_lcd
+[ 94%] Built target __idf_protocomm
+[ 95%] Built target __idf_joltwallet__littlefs
+[ 96%] Built target __idf_esp_driver_rmt
+[ 97%] Built target __idf_esp_driver_sdmmc
+[ 98%] Built target __idf_esp_local_ctrl
+[ 99%] Building CXX object esp-idf/main/CMakeFiles/__idf_main.dir/DisplayBootstrapEspIdf.cpp.obj
+[ 99%] Building CXX object esp-idf/main/CMakeFiles/__idf_main.dir/DisplaySpiEspIdf.cpp.obj
+[ 99%] Building CXX object esp-idf/main/CMakeFiles/__idf_main.dir/app_main.cpp.obj
+[ 99%] Building CXX object esp-idf/main/CMakeFiles/__idf_main.dir/ConfigScreenEspIdf.cpp.obj
+[ 99%] Building CXX object esp-idf/main/CMakeFiles/__idf_main.dir/TouchInputEspIdf.cpp.obj
+[100%] Built target __idf_fatfs
+[100%] Linking C static library libmain.a
+[100%] Built target __idf_main
+[100%] Generating esp-idf/esp_system/ld/sections.ld
+[100%] Built target __ldgen_output_sections.ld
+[100%] Linking CXX executable costar_idf.elf
+[100%] Built target costar_idf.elf
+[100%] Generating binary image from built executable
+esptool v5.2.0
+Creating ESP32 image...
+Merged 3 ELF sections.
+Successfully created ESP32 image.
+Generated /home/johgor/src/costar/idf/build/costar_idf.bin
+[100%] Built target gen_costar_idf_binary
+[100%] Built target gen_project_binary
+costar_idf.bin binary size 0xd1090 bytes. Smallest app partition is 0x200000 bytes. 0x12ef70 bytes (59%) free.
+[100%] Built target app_check_size
+[100%] Built target app

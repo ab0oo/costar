@@ -1,0 +1,145 @@
+{
+  "version": 1,
+  "notes": {
+    "weather_code_ref": "Open-Meteo weather_code uses WMO weather interpretation codes (not consecutive integers). See https://open-meteo.com/en/docs#weather_variable_documentation"
+  },
+  "data": {
+    "source": "http",
+    "url": "https://api.open-meteo.com/v1/forecast?latitude={{geo.lat}}&longitude={{geo.lon}}&current=temperature_2m,relative_humidity_2m,pressure_msl,wind_speed_10m,wind_direction_10m,weather_code&daily=sunrise,sunset&timezone=UTC&forecast_days=1&wind_speed_unit=mph&temperature_unit=celsius",
+    "debug": true,
+    "poll_ms": 180000,
+    "fields": {
+      "temp_now": {
+        "path": "current.temperature_2m",
+        "format": {
+          "round": 0,
+          "unit": "{{pref.temp_unit}}",
+          "locale": "en-US"
+        }
+      },
+      "code_now": "current.weather_code",
+      "humidity_now": {
+        "path": "current.relative_humidity_2m",
+        "format": {
+          "round": 0,
+          "unit": "percent",
+          "locale": "en-US"
+        }
+      },
+      "pressure_now": {
+        "path": "current.pressure_msl",
+        "format": {
+          "unit": "pressure",
+          "locale": "en-US"
+        }
+      },
+      "wind_speed": {
+        "path": "current.wind_speed_10m",
+        "format": {
+          "round": 1,
+          "suffix": " mph",
+          "locale": "en-US"
+        }
+      },
+      "wind_dir": {
+        "path": "current.wind_direction_10m",
+        "format": {
+          "round": 0,
+          "suffix": " deg",
+          "locale": "en-US"
+        }
+      },
+      "sunrise": {
+        "path": "daily.sunrise[0]",
+        "format": {
+          "tz": "local",
+          "time_format": "%H:%M"
+        }
+      },
+      "sunset": {
+        "path": "daily.sunset[0]",
+        "format": {
+          "tz": "local",
+          "time_format": "%H:%M"
+        }
+      }
+    }
+  },
+  "ui": {
+    "title": "Weather Now",
+    "nodes": [
+      {
+        "type": "icon",
+        "x": 2,
+        "y": 0,
+        "w": 28,
+        "h": 28,
+        "path": "{{icon_now}}"
+      },
+      {
+        "type": "label",
+        "x": 36,
+        "y": 2,
+        "font": 4,
+        "color": "#9FD3FF",
+        "text": "{{temp_now}}"
+      },
+      {
+        "type": "label",
+        "x": 36,
+        "y": 32,
+        "font": 2,
+        "color": "#B0BEC5",
+        "text": "{{cond_now}}"
+      },
+      {
+        "type": "label",
+        "x": 6,
+        "y": 54,
+        "font": 1,
+        "color": "#C7D2D9",
+        "text": "Hum: {{humidity_now}} Press: {{pressure_now}}"
+      },
+      {
+        "type": "label",
+        "x": 6,
+        "y": 68,
+        "font": 1,
+        "color": "#C7D2D9",
+        "text": "Wind: {{wind_speed}} {{wind_dir}}"
+      },
+      {
+        "type": "icon",
+        "x": 6,
+        "y": 80,
+        "w": 28,
+        "h": 28,
+        "path": "/icons/meteocons/sunrise.raw"
+      },
+      {
+        "type": "label",
+        "x": 38,
+        "y": 90,
+        "font": 1,
+        "color": "#FFD54A",
+        "text": "{{sunrise}}"
+      },
+      {
+        "type": "icon",
+        "x": 98,
+        "y": 80,
+        "w": 28,
+        "h": 28,
+        "path": "/icons/meteocons/sunset.raw"
+      },
+      {
+        "type": "label",
+        "x": 130,
+        "y": 90,
+        "font": 1,
+        "color": "#F0625F",
+        "text": "{{sunset}}"
+      }
+    ]
+  }
+}

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "screen": {
-    "id": "weather-left-a",
+    "id": "weather-left-b",
     "orientation": "landscape",
     "width": 320,
     "height": 240,
@@ -40,21 +40,21 @@
       "type": "dsl",
       "update_ms": 1000,
       "settings": {
-        "dsl_path": "/dsl/weather_now.json"
+        "dsl_path": "/dsl_active/weather_now.json"
       }
     },
     "forecast": {
       "type": "dsl",
       "update_ms": 1000,
       "settings": {
-        "dsl_path": "/dsl/forecast.json"
+        "dsl_path": "/dsl_active/forecast.json"
       }
     },
     "clock-full": {
       "type": "dsl",
       "update_ms": 1000,
       "settings": {
-        "dsl_path": "/dsl/clock_analog_full.json",
+        "dsl_path": "/dsl_active/clock_analog_full.json",
         "use_sprite": "true"
       }
     }

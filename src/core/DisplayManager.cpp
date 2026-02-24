@@ -1,11 +1,11 @@
 #include "core/DisplayManager.h"
 
 #include <ArduinoJson.h>
-#include <FS.h>
-#include <LittleFS.h>
 
 #include "AppConfig.h"
 #include "core/WidgetFactory.h"
+#include "platform/Fs.h"
+#include "platform/Platform.h"
 
 DisplayManager::DisplayManager(TFT_eSPI& tft, const String& layoutPath)
     : tft_(tft), layoutPath_(layoutPath) {
@@ -127,7 +127,7 @@ bool DisplayManager::loadLayout() {
   xSemaphoreTake(widgetsMutex_, portMAX_DELAY);
   widgets_.clear();
 
-  fs::File manifest = LittleFS.open(layoutPath_, FILE_READ);
+  platform::fs::File manifest = platform::fs::open(layoutPath_, FILE_READ);
   if (!manifest || manifest.isDirectory()) {
     xSemaphoreGive(widgetsMutex_);
     drawBootMessage("Layout missing", layoutPath_);
@@ -208,7 +208,7 @@ void DisplayManager::networkTaskLoop() {
   }
 
   for (;;) {
-    const uint32_t nowMs = millis();
+    const uint32_t nowMs = platform::millisMs();
     xSemaphoreTake(widgetsMutex_, portMAX_DELAY);
     for (const auto& widget : widgets_) {
       if (widget->isNetworkWidget()) {

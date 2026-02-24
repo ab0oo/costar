@@ -1,19 +1,24 @@
 #include <Arduino.h>
 #include <SPI.h>
-#include <LittleFS.h>
 #include <TFT_eSPI.h>
 #include <WiFi.h>
 #include <XPT2046_Touchscreen.h>
 #include <time.h>
-#include <Preferences.h>
+#include <string>
 
 #include "AppConfig.h"
 #include "RuntimeGeo.h"
 #include "RuntimeSettings.h"
+#include "core/BootCommon.h"
 #include "core/DisplayManager.h"
 #include "core/TextEntry.h"
+#include "core/TimeSync.h"
 #include "core/TouchMapper.h"
 #include "core/WifiProvisioner.h"
+#include "platform/Fs.h"
+#include "platform/Net.h"
+#include "platform/Prefs.h"
+#include "platform/Platform.h"
 #include "services/GeoIpService.h"
 
 TFT_eSPI tft = TFT_eSPI();
@@ -45,8 +50,18 @@ constexpr char kInvertOnKey[] = "inv_on";
 constexpr char kLayoutPrefsNs[] = "layout";
 constexpr char kLayoutProfileKey[] = "profile";
 constexpr uint16_t kAdsbRadiusOptions[] = {20, 40, 80, 120};
-void configureTimeFromGeo();
-bool ensureUtcTime(uint32_t timeoutMs = 6000);
+
+boot::BaselineState gBaselineState;
+
+void baselineMark(const char* stage) {
+  boot::mark(gBaselineState, stage, AppConfig::kBaselineMetricsEnabled);
+}
+
+void baselineLoopMark(uint32_t nowMs) {
+  (void)nowMs;
+  boot::markLoop(gBaselineState, wifiReady, AppConfig::kBaselineMetricsEnabled,
+                 AppConfig::kBaselineLoopLogPeriodMs);
+}
 
 String layoutPathForProfile(int profile) {
   return profile == 1 ? String(AppConfig::kLayoutPathB) : String(AppConfig::kLayoutPathA);
@@ -57,21 +72,15 @@ int sanitizeLayoutProfile(int profile) {
 }
 
 void saveLayoutProfile(int profile) {
-  Preferences prefs;
-  prefs.begin(kLayoutPrefsNs, false);
-  prefs.putInt(kLayoutProfileKey, sanitizeLayoutProfile(profile));
-  prefs.end();
+  platform::prefs::putInt(kLayoutPrefsNs, kLayoutProfileKey, sanitizeLayoutProfile(profile));
 }
 
 void loadLayoutProfile() {
-  Preferences prefs;
-  prefs.begin(kLayoutPrefsNs, true);
-  const int savedProfile = prefs.getInt(kLayoutProfileKey, 0);
-  prefs.end();
+  const int savedProfile = platform::prefs::getInt(kLayoutPrefsNs, kLayoutProfileKey, 0);
   activeLayoutProfile = sanitizeLayoutProfile(savedProfile);
   activeLayoutPath = layoutPathForProfile(activeLayoutProfile);
   displayManager.setLayoutPath(activeLayoutPath);
-  Serial.printf("[layout] profile=%d path=%s\n", activeLayoutProfile, activeLayoutPath.c_str());
+  platform::logi("layout", "profile=%d path=%s", activeLayoutProfile, activeLayoutPath.c_str());
 }
 
 bool readUserButtonPressed() {
@@ -96,8 +105,8 @@ void initUserButton() {
   }
   userBtnRawPressed = readUserButtonPressed();
   userBtnStablePressed = userBtnRawPressed;
-  userBtnLastChangeMs = millis();
-  Serial.printf("[layout] USER button gpio=%d ready (active_%s)\n", AppConfig::kUserButtonPin,
+  userBtnLastChangeMs = platform::millisMs();
+  platform::logi("layout", "USER button gpio=%d ready (active_%s)", AppConfig::kUserButtonPin,
                 AppConfig::kUserButtonActiveLow ? "low" : "high");
 }
 
@@ -109,7 +118,7 @@ void toggleLayoutProfile() {
   const String nextPath = layoutPathForProfile(nextProfile);
 
   if (!displayManager.reloadLayout(nextPath)) {
-    Serial.printf("[layout] switch failed profile=%d path=%s, restoring profile=%d path=%s\n",
+    platform::logi("layout", "switch failed profile=%d path=%s, restoring profile=%d path=%s",
                   nextProfile, nextPath.c_str(), oldProfile, oldPath.c_str());
     displayManager.reloadLayout(oldPath);
     return;
@@ -118,7 +127,7 @@ void toggleLayoutProfile() {
   activeLayoutProfile = nextProfile;
   activeLayoutPath = nextPath;
   saveLayoutProfile(activeLayoutProfile);
-  Serial.printf("[layout] switched profile=%d path=%s\n", activeLayoutProfile,
+  platform::logi("layout", "switched profile=%d path=%s", activeLayoutProfile,
                 activeLayoutPath.c_str());
 }
 
@@ -181,7 +190,7 @@ void waitForTouchRelease() {
     return;
   }
   while (touch.touched()) {
-    delay(20);
+    platform::sleepMs(20);
   }
 }
 
@@ -264,31 +273,27 @@ void drawColorCalibrationScreen(bool bgr, bool inverted) {
 }
 
 void ensureDisplayColorOrder() {
-  Preferences prefs;
-  prefs.begin(kDisplayPrefsNs, false);
-  bool hasSetting = prefs.getBool(kColorSetKey, false);
-  bool hasInvertSetting = prefs.getBool(kInvertSetKey, false);
-  bool useBgr = prefs.getBool(kColorBgrKey, false);
-  bool useInvert = prefs.getBool(kInvertOnKey, false);
+  bool hasSetting = platform::prefs::getBool(kDisplayPrefsNs, kColorSetKey, false);
+  bool hasInvertSetting = platform::prefs::getBool(kDisplayPrefsNs, kInvertSetKey, false);
+  bool useBgr = platform::prefs::getBool(kDisplayPrefsNs, kColorBgrKey, false);
+  bool useInvert = platform::prefs::getBool(kDisplayPrefsNs, kInvertOnKey, false);
 
   if (hasSetting && hasInvertSetting) {
     applyPanelColorOrder(useBgr);
     applyPanelInversion(useInvert);
-    Serial.printf("[display] from NVS: order=%s invert=%s\n", useBgr ? "BGR" : "RGB",
+    platform::logi("display", "from NVS: order=%s invert=%s", useBgr ? "BGR" : "RGB",
                   useInvert ? "ON" : "OFF");
-    prefs.end();
     return;
   }
 
   if (!AppConfig::kTouchEnabled) {
     applyPanelColorOrder(useBgr);
     applyPanelInversion(useInvert);
-    prefs.putBool(kColorBgrKey, useBgr);
-    prefs.putBool(kColorSetKey, true);
-    prefs.putBool(kInvertOnKey, useInvert);
-    prefs.putBool(kInvertSetKey, true);
-    prefs.end();
-    Serial.printf("[display] no touch; defaults order=%s invert=%s\n",
+    platform::prefs::putBool(kDisplayPrefsNs, kColorBgrKey, useBgr);
+    platform::prefs::putBool(kDisplayPrefsNs, kColorSetKey, true);
+    platform::prefs::putBool(kDisplayPrefsNs, kInvertOnKey, useInvert);
+    platform::prefs::putBool(kDisplayPrefsNs, kInvertSetKey, true);
+    platform::logi("display", "no touch; defaults order=%s invert=%s",
                   useBgr ? "BGR" : "RGB", useInvert ? "ON" : "OFF");
     return;
   }
@@ -300,7 +305,7 @@ void ensureDisplayColorOrder() {
     uint16_t x = 0;
     uint16_t y = 0;
     while (!readTouchPoint(x, y)) {
-      delay(20);
+      platform::sleepMs(20);
     }
 
     if (y >= 172 && y <= 220 && x >= 8 && x <= 108) {
@@ -318,13 +323,12 @@ void ensureDisplayColorOrder() {
     }
 
     if (y >= 172 && y <= 220 && x >= 212 && x <= 312) {
-      prefs.putBool(kColorBgrKey, useBgr);
-      prefs.putBool(kColorSetKey, true);
-      prefs.putBool(kInvertOnKey, useInvert);
-      prefs.putBool(kInvertSetKey, true);
-      prefs.end();
+      platform::prefs::putBool(kDisplayPrefsNs, kColorBgrKey, useBgr);
+      platform::prefs::putBool(kDisplayPrefsNs, kColorSetKey, true);
+      platform::prefs::putBool(kDisplayPrefsNs, kInvertOnKey, useInvert);
+      platform::prefs::putBool(kDisplayPrefsNs, kInvertSetKey, true);
       waitForTouchRelease();
-      Serial.printf("[display] calibrated: order=%s invert=%s\n", useBgr ? "BGR" : "RGB",
+      platform::logi("display", "calibrated: order=%s invert=%s", useBgr ? "BGR" : "RGB",
                     useInvert ? "ON" : "OFF");
       return;
     }
@@ -390,13 +394,13 @@ void runSetupScreen() {
       uint16_t x = 0;
       uint16_t y = 0;
       while (!readTouchPoint(x, y)) {
-        delay(20);
+        platform::sleepMs(20);
       }
       waitForTouchRelease();
     } else {
-      const uint32_t startMs = millis();
-      while (millis() - startMs < timeoutMs) {
-        delay(20);
+      const uint32_t startMs = platform::millisMs();
+      while (platform::millisMs() - startMs < timeoutMs) {
+        platform::sleepMs(20);
       }
     }
   };
@@ -406,7 +410,7 @@ void runSetupScreen() {
     uint16_t x = 0;
     uint16_t y = 0;
     while (!readTouchPoint(x, y)) {
-      delay(20);
+      platform::sleepMs(20);
     }
     waitForTouchRelease();
 
@@ -432,7 +436,8 @@ void runSetupScreen() {
             setupGeoSource = geo.lastSource();
           }
         }
-        configureTimeFromGeo();
+        timesync::logUiTimeContext(RuntimeGeo::timezone.c_str(), RuntimeGeo::utcOffsetMinutes,
+                                   RuntimeGeo::hasUtcOffset);
       }
       continue;
     }
@@ -479,7 +484,7 @@ void runSetupScreen() {
         showMessage("WiFi required", "Connect first");
         continue;
       }
-      if (!ensureUtcTime()) {
+      if (!timesync::ensureUtcTime()) {
         showMessage("Time sync failed", "SSL may fail");
       }
       TextEntry entry(tft, touch);
@@ -493,7 +498,8 @@ void runSetupScreen() {
       GeoIpService geo;
       if (geo.setManualCity(city)) {
         setupGeoSource = geo.lastSource();
-        configureTimeFromGeo();
+        timesync::logUiTimeContext(RuntimeGeo::timezone.c_str(), RuntimeGeo::utcOffsetMinutes,
+                                   RuntimeGeo::hasUtcOffset);
         showMessage("Location set", city, 1200);
       } else {
         showMessage("Location failed", geo.lastError());
@@ -507,7 +513,7 @@ void runSetupScreen() {
         showMessage("WiFi required", "Connect first");
         continue;
       }
-      if (!ensureUtcTime()) {
+      if (!timesync::ensureUtcTime()) {
         showMessage("Time sync failed", "SSL may fail");
       }
       TextEntry entry(tft, touch);
@@ -536,7 +542,8 @@ void runSetupScreen() {
       GeoIpService geo;
       if (geo.setManualLatLon(lat, lon)) {
         setupGeoSource = geo.lastSource();
-        configureTimeFromGeo();
+        timesync::logUiTimeContext(RuntimeGeo::timezone.c_str(), RuntimeGeo::utcOffsetMinutes,
+                                   RuntimeGeo::hasUtcOffset);
         showMessage("Location set", String(lat, 4) + "," + String(lon, 4), 1200);
       } else {
         showMessage("Location failed", geo.lastError());
@@ -556,7 +563,8 @@ void runSetupScreen() {
           setupGeoSource = geo.lastSource();
         }
       }
-      configureTimeFromGeo();
+      timesync::logUiTimeContext(RuntimeGeo::timezone.c_str(), RuntimeGeo::utcOffsetMinutes,
+                                 RuntimeGeo::hasUtcOffset);
       showMessage("Geo-IP enabled", setupGeoSource, 1000);
       continue;
     }
@@ -570,12 +578,12 @@ void runSetupScreen() {
 
 void initBacklight() {
   if (AppConfig::kBacklightPin < 0) {
-    Serial.println("[boot] backlight pin control disabled");
+    platform::logi("boot", "backlight pin control disabled");
     return;
   }
   pinMode(AppConfig::kBacklightPin, OUTPUT);
   digitalWrite(AppConfig::kBacklightPin, AppConfig::kBacklightOnHigh ? HIGH : LOW);
-  Serial.printf("[boot] backlight pin %d set %s\n", AppConfig::kBacklightPin,
+  platform::logi("boot", "backlight pin %d set %s", AppConfig::kBacklightPin,
                 AppConfig::kBacklightOnHigh ? "HIGH" : "LOW");
 }
 
@@ -585,7 +593,7 @@ void initBoardLedOff() {
   }
   pinMode(AppConfig::kBoardBlueLedPin, OUTPUT);
   digitalWrite(AppConfig::kBoardBlueLedPin, AppConfig::kBoardBlueLedOffHigh ? HIGH : LOW);
-  Serial.printf("[boot] board LED pin %d forced %s\n", AppConfig::kBoardBlueLedPin,
+  platform::logi("boot", "board LED pin %d forced %s", AppConfig::kBoardBlueLedPin,
                 AppConfig::kBoardBlueLedOffHigh ? "HIGH" : "LOW");
 }
 
@@ -594,26 +602,26 @@ void initSpiDeviceChipSelects() {
   if (AppConfig::kTouchCsPin >= 0) {
     pinMode(AppConfig::kTouchCsPin, OUTPUT);
     digitalWrite(AppConfig::kTouchCsPin, HIGH);
-    Serial.printf("[boot] touch CS %d forced HIGH\n", AppConfig::kTouchCsPin);
+    platform::logi("boot", "touch CS %d forced HIGH", AppConfig::kTouchCsPin);
   }
 
   if (AppConfig::kSdCsPin >= 0) {
     pinMode(AppConfig::kSdCsPin, OUTPUT);
     digitalWrite(AppConfig::kSdCsPin, HIGH);
-    Serial.printf("[boot] SD CS %d forced HIGH\n", AppConfig::kSdCsPin);
+    platform::logi("boot", "SD CS %d forced HIGH", AppConfig::kSdCsPin);
   }
 }
 
 void initTouch() {
   if (!AppConfig::kTouchEnabled) {
-    Serial.println("[boot] touch disabled by config");
+    platform::logi("boot", "touch disabled by config");
     return;
   }
   touchSpi.begin(AppConfig::kTouchSpiSckPin, AppConfig::kTouchSpiMisoPin,
                  AppConfig::kTouchSpiMosiPin, AppConfig::kTouchCsPin);
   touch.begin(touchSpi);
   touch.setRotation(2);
-  Serial.println("[boot] touch initialized on VSPI");
+  platform::logi("boot", "touch initialized on VSPI");
 }
 
 void initDiagnosticLed() {
@@ -625,14 +633,14 @@ void initDiagnosticLed() {
 }
 
 void runDiagnosticLoop() {
-  const uint32_t nowMs = millis();
+  const uint32_t nowMs = platform::millisMs();
   if (nowMs - diagnosticLastBlinkMs >= AppConfig::kDiagnosticBlinkMs) {
     diagnosticLastBlinkMs = nowMs;
     diagnosticLedState = !diagnosticLedState;
     if (AppConfig::kDiagnosticLedPin >= 0) {
       digitalWrite(AppConfig::kDiagnosticLedPin, diagnosticLedState ? HIGH : LOW);
     }
-    Serial.printf("[diag] heartbeat ms=%lu, led=%d\n", static_cast<unsigned long>(nowMs),
+    platform::logi("diag", "heartbeat ms=%lu, led=%d", static_cast<unsigned long>(nowMs),
                   diagnosticLedState ? 1 : 0);
   }
 }
@@ -651,7 +659,7 @@ void drawTftDiagnosticScreen() {
 }
 
 void runTftDiagnosticLoop() {
-  const uint32_t nowMs = millis();
+  const uint32_t nowMs = platform::millisMs();
   if (nowMs - tftDiagLastMs < 20) {
     return;
   }
@@ -665,7 +673,7 @@ void runTftDiagnosticLoop() {
   }
 
   if ((nowMs % 1000) < 25) {
-    Serial.printf("[tftdiag] alive ms=%lu x=%d\n", static_cast<unsigned long>(nowMs), tftDiagX);
+    platform::logi("tftdiag", "alive ms=%lu x=%d", static_cast<unsigned long>(nowMs), tftDiagX);
   }
 }
 
@@ -691,63 +699,36 @@ void drawStaticFrame() {
   tft.drawString("If this is stable, issue is runtime path", 8, 152, 2);
 }
 
-void configureTimeFromGeo() {
-  // Always sync device clock in UTC; widgets apply geo/local offset explicitly.
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-  if (RuntimeGeo::hasUtcOffset) {
-    Serial.printf("[time] NTP UTC sync; local UI offset=%d min tz='%s'\n",
-                  RuntimeGeo::utcOffsetMinutes, RuntimeGeo::timezone.c_str());
-  } else if (!RuntimeGeo::timezone.isEmpty()) {
-    Serial.printf("[time] NTP UTC sync; tz='%s' (offset unknown)\n",
-                  RuntimeGeo::timezone.c_str());
-  } else {
-    Serial.println("[time] NTP UTC sync; timezone unavailable");
-  }
-}
-
-bool ensureUtcTime(uint32_t timeoutMs) {
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-  const uint32_t startMs = millis();
-  while (millis() - startMs < timeoutMs) {
-    const time_t nowUtc = time(nullptr);
-    if (nowUtc > 946684800) {
-      return true;
-    }
-    delay(120);
-  }
-  return false;
-}
 }  // namespace
 
 void setup() {
-  Serial.begin(115200);
-  delay(600);
-  Serial.println();
-  Serial.println("== WidgetOS boot ==");
-  Serial.println("[boot] setup start");
+  platform::serialBegin(115200);
+  platform::sleepMs(600);
+  boot::start(gBaselineState);
+  platform::logi("boot", "WidgetOS boot");
+  platform::logi("boot", "setup start");
+  baselineMark("setup_start");
   initUserButton();
   loadLayoutProfile();
   initBoardLedOff();
 
-  if (!LittleFS.begin(true)) {
-    Serial.println("LittleFS mount failed");
+  if (!platform::fs::begin(true)) {
+    platform::loge("boot", "LittleFS mount failed");
   } else {
-    Serial.println("[boot] LittleFS mounted");
+    platform::logi("boot", "LittleFS mounted");
   }
+  baselineMark("littlefs_ready");
   RuntimeSettings::load();
-  Serial.printf("[settings] clock=%s temp=%s dist=%s\n",
-                RuntimeSettings::use24HourClock ? "24h" : "12h",
-                RuntimeSettings::useFahrenheit ? "F" : "C",
-                RuntimeSettings::useMiles ? "mi" : "km");
+  boot::logSettingsSummary(false);
 
   if (diagnosticMode) {
-    Serial.println("[diag] Diagnostic mode enabled; skipping TFT/touch/WiFi");
+    platform::logi("diag", "Diagnostic mode enabled; skipping TFT/touch/WiFi");
     initDiagnosticLed();
-    Serial.println("[diag] Expect serial heartbeat + LED blink");
+    platform::logi("diag", "Expect serial heartbeat + LED blink");
     return;
   }
 
-  Serial.println("[boot] init backlight + TFT");
+  platform::logi("boot", "init backlight + TFT");
   initSpiDeviceChipSelects();
   initBacklight();
   tft.init();
@@ -755,95 +736,108 @@ void setup() {
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.drawString("Booting...", 8, 8, 2);
+  baselineMark("tft_ready");
 
   if (tftOnlyDiagnosticMode) {
-    Serial.println("[tftdiag] TFT-only diagnostic mode enabled");
+    platform::logi("tftdiag", "TFT-only diagnostic mode enabled");
     drawTftDiagnosticScreen();
     return;
   }
 
   if (staticFrameMode) {
-    Serial.println("[static] static-frame mode enabled");
+    platform::logi("static", "static-frame mode enabled");
     drawStaticFrame();
     return;
   }
 
-  Serial.println("[boot] init touch");
+  platform::logi("boot", "init touch");
   initTouch();
 
-  Serial.println("[boot] color-order calibration");
+  platform::logi("boot", "color-order calibration");
   ensureDisplayColorOrder();
 
-  Serial.println("[boot] start wifi provisioning");
+  platform::logi("boot", "start wifi provisioning");
   WifiProvisioner provisioner(tft, touch);
   wifiReady = provisioner.connectOrProvision();
+  baselineMark("wifi_ready");
 
   GeoIpService geo;
   if (geo.loadOverride()) {
     setupGeoSource = geo.lastSource();
-    Serial.printf("[geo] manual source=%s lat=%.4f lon=%.4f tz=%s off_min=%d known=%d\n",
+    platform::logi("geo", "manual source=%s lat=%.4f lon=%.4f tz=%s off_min=%d known=%d",
                   geo.lastSource().c_str(), RuntimeGeo::latitude, RuntimeGeo::longitude,
                   RuntimeGeo::timezone.c_str(), RuntimeGeo::utcOffsetMinutes,
                   RuntimeGeo::hasUtcOffset ? 1 : 0);
   } else if (geo.loadCached()) {
     setupGeoSource = geo.lastSource();
-    Serial.printf("[geo] cache hit source=%s lat=%.4f lon=%.4f tz=%s off_min=%d known=%d\n",
+    platform::logi("geo", "cache hit source=%s lat=%.4f lon=%.4f tz=%s off_min=%d known=%d",
                   geo.lastSource().c_str(), RuntimeGeo::latitude, RuntimeGeo::longitude,
                   RuntimeGeo::timezone.c_str(), RuntimeGeo::utcOffsetMinutes,
                   RuntimeGeo::hasUtcOffset ? 1 : 0);
   } else {
     setupGeoSource = "none";
-    Serial.printf("[geo] cache miss: %s\n", geo.lastError().c_str());
+    platform::logw("geo", "cache miss: %s", geo.lastError().c_str());
   }
 
   if (wifiReady && geo.lastSource() != "manual") {
-    Serial.printf("WiFi connected: %s\n", WiFi.localIP().toString().c_str());
+    std::string ipText;
+    if (platform::net::getLocalIp(ipText)) {
+      platform::logi("wifi", "connected ip=%s", ipText.c_str());
+    } else {
+      platform::logi("wifi", "connected");
+    }
     if (geo.refreshFromInternet()) {
       setupGeoSource = geo.lastSource();
-      Serial.printf("[geo] online source=%s lat=%.4f lon=%.4f tz=%s off_min=%d known=%d\n",
+      platform::logi("geo", "online source=%s lat=%.4f lon=%.4f tz=%s off_min=%d known=%d",
                     geo.lastSource().c_str(), RuntimeGeo::latitude, RuntimeGeo::longitude,
                     RuntimeGeo::timezone.c_str(), RuntimeGeo::utcOffsetMinutes,
                     RuntimeGeo::hasUtcOffset ? 1 : 0);
     } else {
-      Serial.printf("[geo] online fetch failed source=%s reason=%s\n",
+      platform::logw("geo", "online fetch failed source=%s reason=%s",
                     geo.lastSource().c_str(), geo.lastError().c_str());
     }
-    configureTimeFromGeo();
+    timesync::logUiTimeContext(RuntimeGeo::timezone.c_str(), RuntimeGeo::utcOffsetMinutes,
+                               RuntimeGeo::hasUtcOffset);
   } else {
-    Serial.println("[boot] continuing offline");
-    configureTimeFromGeo();
+    platform::logi("boot", "continuing offline");
+    timesync::logUiTimeContext(RuntimeGeo::timezone.c_str(), RuntimeGeo::utcOffsetMinutes,
+                               RuntimeGeo::hasUtcOffset);
   }
+  baselineMark("geo_time_ready");
 
-  Serial.println("[boot] init display manager");
+  platform::logi("boot", "init display manager");
   if (!displayManager.begin()) {
-    Serial.println("Display manager failed to load layout");
+    platform::loge("boot", "display manager failed to load layout");
   }
+  baselineMark("display_ready");
 
   if (wifiReady) {
-    Serial.println("Live data widgets enabled");
+    platform::logi("boot", "live data widgets enabled");
   }
-  Serial.println("[boot] setup complete");
+  platform::logi("boot", "setup complete");
+  baselineMark("setup_complete");
 }
 
 void loop() {
   if (diagnosticMode) {
     runDiagnosticLoop();
-    delay(10);
+    platform::sleepMs(10);
     return;
   }
 
   if (tftOnlyDiagnosticMode) {
     runTftDiagnosticLoop();
-    delay(5);
+    platform::sleepMs(5);
     return;
   }
 
   if (staticFrameMode) {
-    delay(50);
+    platform::sleepMs(50);
     return;
   }
 
-  const uint32_t nowMs = millis();
+  const uint32_t nowMs = platform::millisMs();
+  baselineLoopMark(nowMs);
   updateUserButton(nowMs);
 
   if (AppConfig::kTouchEnabled && touch.touched()) {
@@ -852,7 +846,7 @@ void loop() {
       const bool inCorner = (point.x >= static_cast<int16_t>(AppConfig::kScreenWidth - 32) &&
                              point.y <= 24);
       if (inCorner) {
-        const uint32_t startMs = millis();
+        const uint32_t startMs = platform::millisMs();
         bool held = false;
         while (touch.touched()) {
           TouchPoint current;
@@ -863,11 +857,11 @@ void loop() {
               current.y > 24) {
             break;
           }
-          if (millis() - startMs > 650) {
+          if (platform::millisMs() - startMs > 650) {
             held = true;
             break;
           }
-          delay(20);
+          platform::sleepMs(20);
         }
         if (held) {
           waitForTouchRelease();
@@ -882,5 +876,5 @@ void loop() {
   }
 
   displayManager.loop(nowMs);
-  delay(AppConfig::kLoopDelayMs);
+  platform::sleepMs(AppConfig::kLoopDelayMs);
 }
