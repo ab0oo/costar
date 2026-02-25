@@ -12,3 +12,9 @@ idf/build_*/
 idf/managed_components/
 idf/.idf-venv/
 idf/.cache/
+
+# PlatformIO ESP-IDF transient artifacts at repo root
+/managed_components/
+/sdkconfig.*
+/dependencies.lock
+/CMakeLists.txt

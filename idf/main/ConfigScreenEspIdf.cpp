@@ -595,7 +595,7 @@ void showWifiList(const char* const* labels, uint16_t count) {
     (void)display_spi::fillRect(8, y, static_cast<uint16_t>(w - 16), static_cast<uint16_t>(rowH - 1),
                                 rowColor);
 
-    char idxLabel[6] = {};
+    char idxLabel[8] = {};
     std::snprintf(idxLabel, sizeof(idxLabel), "%u:", static_cast<unsigned>(i + 1));
     drawText(12, static_cast<int>(y + 4), idxLabel, cSubtle, rowColor, 1);
 
