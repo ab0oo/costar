@@ -37,6 +37,7 @@ bool sDrawn = false;
 uint32_t sLastPulseMs = 0;
 bool sPulseOn = false;
 std::string sWidgetDefsObj;
+std::string sSharedSettingsObj;
 
 size_t skipWs(const std::string& s, size_t i) {
   while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i])) != 0) {
@@ -326,6 +327,8 @@ bool begin(const char* layoutPath) {
   }
   sWidgetDefsObj.clear();
   (void)extractObjectForKey(json, 0, "\"widget_defs\"", sWidgetDefsObj);
+  sSharedSettingsObj.clear();
+  (void)extractObjectForKey(json, 0, "\"shared_settings\"", sSharedSettingsObj);
 
   std::vector<std::string> regionObjects;
   if (!extractRegionObjects(json, regionObjects)) {
@@ -406,7 +409,9 @@ bool begin(const char* layoutPath) {
     bool widgetStarted = false;
     for (const std::string& path : candidatePaths) {
       const char* settingsJson = settingsObj.empty() ? nullptr : settingsObj.c_str();
-      if (dsl_widget_runtime::begin(r.widget.c_str(), path.c_str(), r.x, r.y, r.w, r.h, settingsJson)) {
+      const char* sharedSettingsJson = sSharedSettingsObj.empty() ? nullptr : sSharedSettingsObj.c_str();
+      if (dsl_widget_runtime::begin(r.widget.c_str(), path.c_str(), r.x, r.y, r.w, r.h, settingsJson,
+                                    sharedSettingsJson)) {
         widgetStarted = true;
         break;
       }
@@ -420,14 +425,17 @@ bool begin(const char* layoutPath) {
   return sActive;
 }
 
-void tick(uint32_t nowMs) {
+bool tick(uint32_t nowMs) {
   if (!sActive) {
-    return;
+    return false;
   }
+  bool drew = false;
   if (!sDrawn) {
     drawScene();
+    drew = true;
   }
-  dsl_widget_runtime::tick(nowMs);
+  drew = dsl_widget_runtime::tick(nowMs) || drew;
+  return drew;
 }
 
 bool onTap(uint16_t x, uint16_t y) {

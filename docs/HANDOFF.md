@@ -1,5 +1,103 @@
 # Handoff Runbook (Release Prep)
 
+## 0) Session Log - HA WS Narrowing, Soak Prep, and Parity Audit (2026-02-25, Evening)
+
+Summary: This session converted HA WS from a global event firehose to per-entity trigger subscriptions, added WS debugging/probe tooling, improved first-paint latency for HA cards, and performed a direct Arduino-vs-IDF DSL primitive comparison.
+
+### What Was Completed
+
+- Home Assistant WS transport/runtime:
+  - Replaced global `subscribe_events(state_changed)` with per-entity `subscribe_trigger` subscriptions in:
+    - `idf/main/DslWidgetRuntimeEspIdf.cpp`
+  - Kept bootstrap model (`render_template`) for initial entity state, then updates via trigger events.
+  - Added WS diagnostics:
+    - large-frame payload logging with heap context
+    - disconnect logging with heap context
+  - Added bootstrap trigger on WS auth ready so HA widgets bootstrap immediately.
+
+- HA card first-paint latency fix:
+  - Fixed scheduler behavior so deferred fetches do not consume the full initial cadence window.
+  - `lastFetchMs` now advances on successful updates only.
+  - Deferred fetches now use short retry backoff (`~250ms`) to accelerate first visible render after bootstrap.
+
+- Home Assistant icon behavior:
+  - Restored remote icon fetching path for HA widgets after temporary cache-only gating.
+  - Icon retry/backoff behavior remains in place for failed icon fetches.
+
+- TLS memory tuning:
+  - Reduced mbedTLS content buffers to lower recurring dynamic allocation pressure:
+    - `CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=2048`
+    - `CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=2048`
+  - Files:
+    - `idf/sdkconfig`
+    - `idf/sdkconfig.defaults`
+
+- Tooling:
+  - Added HA WS probe script:
+    - `tools/ha_ws_probe.py`
+  - Script now pretty-prints full TX/RX JSON frames and byte sizes.
+  - Default flow mirrors current ESP path for a single entity (`light.john_s_lamp`):
+    - auth
+    - `subscribe_trigger`
+    - bootstrap `render_template`
+    - stream trigger events
+
+### Current Soak Status / Known Risk
+
+- Good:
+  - HA WS connects/auths/bootstraps correctly.
+  - Per-entity trigger subscriptions are active.
+  - HA card population latency improved substantially vs prior behavior.
+- Still open:
+  - Long-soak stability issue remains: intermittent TLS read alloc failure leading to WS disconnect/reconnect under memory pressure.
+  - Disconnect is not intentional business logic; it follows transport failure.
+
+### Arduino vs IDF DSL Primitive Parity Check (Code Comparison)
+
+Reference compared:
+- Arduino:
+  - `src/dsl/DslParser.cpp`
+  - `src/dsl/DslModel.h`
+  - `src/widgets/DslWidget.cpp`
+  - `src/widgets/DslWidgetRender.cpp`
+- ESP-IDF:
+  - `idf/main/DslWidgetRuntimeEspIdf.cpp`
+
+Parity status:
+- Node primitives:
+  - Present on both: `label`, `value_box`, `progress`, `sparkline`, `arc/circle`, `line/hand`, `icon`, `moon_phase`.
+- Repeat node expansion:
+  - Present on both (`type: "repeat"` with `count/times/start/step/var`).
+- Sort path helpers:
+  - Present on both: `sort_num(...)`, `sort_alpha(...)`, `distance_sort(...)`, `sort_distance(...)`.
+- Runtime formatting:
+  - Numeric/unit/locale/time formatting support is present on both.
+- HTTP headers in DSL:
+  - Present on both.
+
+Not fully 1:1 yet (Arduino primitive/behavior not fully mirrored in IDF):
+- Legacy data source literal:
+  - Arduino supports `data.source == "adsb_nearest"` as a specialized source path.
+  - IDF currently supports `http`, `ha_ws`, `local_time`; ADS-B is expected via generic HTTP+transform DSL.
+- Text datum semantics:
+  - Arduino render model uses TFT datum semantics (including baseline variants).
+  - IDF uses `align`/`valign` abstraction and does not currently expose full datum baseline semantics as a first-class equivalent.
+
+Net assessment:
+- For current active DSL files in this repo, runtime parity is close and operational.
+- Remaining parity deltas are mostly legacy-compatibility semantics, plus soak stability under constrained heap.
+
+### Recommended Next Steps
+
+1. Complete long soak with per-entity trigger subscriptions enabled and collect:
+   - `ha_ws large frame ...`
+   - `ha_ws disconnected ... heap_largest=... heap_free=...`
+2. If disconnect persists, cap/trim inbound HA payload handling further (entity-scoped event extraction only, tighter frame/drop policy).
+3. Decide whether to implement explicit compatibility for:
+   - `source: adsb_nearest`
+   - baseline datum semantics
+   or formally deprecate them in favor of current DSL patterns.
+
 ## 0) Session Log - Final Transition Push (2026-02-25, Late)
 
 Summary: This session moved the IDF path from “core runtime parity” into “final-stage release parity”, including DSL interaction features (tap HTTP + modal), NYT fullscreen layout, HA speaker touch-region actions, icon caching, and runtime menu-based layout switching/config access. The remaining work is now heavily hardware-validation and soak-test focused.

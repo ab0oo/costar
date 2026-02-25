@@ -120,6 +120,12 @@
       height: 260px;
     }
 
+    #sharedSettingsEditor,
+    #widgetSettingsEditor,
+    #layoutSettingsEditor {
+      height: 160px;
+    }
+
     .status {
       font-size: 12px;
       color: var(--muted);
@@ -203,6 +209,29 @@
           <label><input id="animateClock" type="checkbox" checked> animate local_time widgets</label>
         </div>
         <div class="row">
+          <label>Shared Settings JSON (screen_layout.shared_settings)</label>
+        </div>
+        <div id="sharedSettingsEditor" class="editorArea"></div>
+        <div class="row">
+          <label>Widget Settings JSON (widget_defs[widget].settings)</label>
+        </div>
+        <div id="widgetSettingsEditor" class="editorArea"></div>
+        <div class="row">
+          <button id="applySettingsBtn" type="button">Apply Settings</button>
+          <label>Widget ID
+            <input id="layoutWidgetId" type="text" value="ha-card-1" size="14">
+          </label>
+        </div>
+        <div class="row">
+          <label>Optional Screen Layout JSON (import helper)</label>
+        </div>
+        <div id="layoutSettingsEditor" class="editorArea"></div>
+        <div class="row">
+          <button id="importLayoutSettingsBtn" type="button">Import From Layout JSON</button>
+        </div>
+        <div id="settingsStatus" class="status"></div>
+        <div id="settingsHint" class="hint"></div>
+        <div class="row">
           <label>Temp
             <select id="prefTempUnit">
               <option value="auto">Auto (Browser)</option>
@@ -254,8 +283,13 @@
   <script>
     const dslEditorEl = document.getElementById("dslEditor");
     const payloadEditorEl = document.getElementById("payloadEditor");
+    const sharedSettingsEditorEl = document.getElementById("sharedSettingsEditor");
+    const widgetSettingsEditorEl = document.getElementById("widgetSettingsEditor");
+    const layoutSettingsEditorEl = document.getElementById("layoutSettingsEditor");
     const dslStatus = document.getElementById("dslStatus");
     const payloadStatus = document.getElementById("payloadStatus");
+    const settingsStatus = document.getElementById("settingsStatus");
+    const settingsHint = document.getElementById("settingsHint");
     const animateClock = document.getElementById("animateClock");
     const prefTempUnit = document.getElementById("prefTempUnit");
     const prefDistanceUnit = document.getElementById("prefDistanceUnit");
@@ -263,6 +297,7 @@
     const geoLatInput = document.getElementById("geoLatInput");
     const geoLonInput = document.getElementById("geoLonInput");
     const useBrowserGeoBtn = document.getElementById("useBrowserGeoBtn");
+    const layoutWidgetId = document.getElementById("layoutWidgetId");
     const runtimePrefHint = document.getElementById("runtimePrefHint");
     const runtimeGeoHint = document.getElementById("runtimeGeoHint");
     const canvas = document.getElementById("screen");
@@ -363,6 +398,9 @@
 
     let parsedDsl = null;
     let parsedPayload = {};
+    let sharedSettings = {};
+    let widgetSettings = {};
+    let mergedSettings = {};
     let lastError = "";
     const iconCache = new Map();
     let dslDebounce = null;
@@ -398,17 +436,58 @@
       }
     });
 
+    const sharedSettingsEditor = new JSONEditor(sharedSettingsEditorEl, {
+      mode: "code",
+      modes: ["code", "tree"],
+      mainMenuBar: true,
+      navigationBar: false,
+      statusBar: false,
+      onChangeText: () => {
+        compileSettings();
+        renderPreview();
+      }
+    });
+
+    const widgetSettingsEditor = new JSONEditor(widgetSettingsEditorEl, {
+      mode: "code",
+      modes: ["code", "tree"],
+      mainMenuBar: true,
+      navigationBar: false,
+      statusBar: false,
+      onChangeText: () => {
+        compileSettings();
+        renderPreview();
+      }
+    });
+
+    const layoutSettingsEditor = new JSONEditor(layoutSettingsEditorEl, {
+      mode: "code",
+      modes: ["code", "tree"],
+      mainMenuBar: true,
+      navigationBar: false,
+      statusBar: false
+    });
+
     function resizeJsonEditors() {
       if (typeof dslEditor.refresh === "function") dslEditor.refresh();
       if (typeof payloadEditor.refresh === "function") payloadEditor.refresh();
+      if (typeof sharedSettingsEditor.refresh === "function") sharedSettingsEditor.refresh();
+      if (typeof widgetSettingsEditor.refresh === "function") widgetSettingsEditor.refresh();
+      if (typeof layoutSettingsEditor.refresh === "function") layoutSettingsEditor.refresh();
       if (typeof dslEditor.resize === "function") dslEditor.resize();
       if (typeof payloadEditor.resize === "function") payloadEditor.resize();
+      if (typeof sharedSettingsEditor.resize === "function") sharedSettingsEditor.resize();
+      if (typeof widgetSettingsEditor.resize === "function") widgetSettingsEditor.resize();
+      if (typeof layoutSettingsEditor.resize === "function") layoutSettingsEditor.resize();
     }
 
     if (typeof ResizeObserver !== "undefined") {
       const editorResizeObserver = new ResizeObserver(() => resizeJsonEditors());
       editorResizeObserver.observe(dslEditorEl);
       editorResizeObserver.observe(payloadEditorEl);
+      editorResizeObserver.observe(sharedSettingsEditorEl);
+      editorResizeObserver.observe(widgetSettingsEditorEl);
+      editorResizeObserver.observe(layoutSettingsEditorEl);
     }
 
     function setStatus(el, text, ok) {
@@ -431,10 +510,45 @@
       }
     }
 
+    function normalizeSettingValue(value) {
+      if (value == null) return "";
+      if (typeof value === "string") return value.trim();
+      if (typeof value === "boolean") return value ? "true" : "false";
+      if (typeof value === "number") {
+        if (!Number.isFinite(value)) return "";
+        if (Math.abs(value - Math.round(value)) < 0.000001) return String(Math.round(value));
+        let out = value.toFixed(3);
+        out = out.replace(/\.?0+$/, "");
+        return out;
+      }
+      try {
+        return JSON.stringify(value);
+      } catch {
+        return String(value);
+      }
+    }
+
+    function sanitizeSettingsMap(obj) {
+      const out = {};
+      if (!obj || typeof obj !== "object" || Array.isArray(obj)) return out;
+      for (const [rawKey, value] of Object.entries(obj)) {
+        const key = String(rawKey || "").trim();
+        if (!key) continue;
+        out[key] = normalizeSettingValue(value);
+      }
+      return out;
+    }
+
     function bindTemplate(text, values) {
       if (typeof text !== "string") return "";
       return text.replace(/{{\s*([^}]+)\s*}}/g, (full, keyRaw) => {
         const key = keyRaw.trim();
+        if (key.startsWith("setting.")) {
+          const settingKey = key.slice(8);
+          if (Object.prototype.hasOwnProperty.call(mergedSettings, settingKey)) {
+            return String(mergedSettings[settingKey]);
+          }
+        }
         if (values.hasOwnProperty(key)) return String(values[key]);
         if (runtimeContext.hasOwnProperty(key)) return String(runtimeContext[key]);
         return full;
@@ -1593,9 +1707,57 @@
       }
     }
 
+    function compileSettings() {
+      try {
+        const sharedObj = sharedSettingsEditor.get();
+        const widgetObj = widgetSettingsEditor.get();
+        sharedSettings = sanitizeSettingsMap(sharedObj);
+        widgetSettings = sanitizeSettingsMap(widgetObj);
+        mergedSettings = Object.assign({}, sharedSettings, widgetSettings);
+        const sharedCount = Object.keys(sharedSettings).length;
+        const widgetCount = Object.keys(widgetSettings).length;
+        const mergedKeys = Object.keys(mergedSettings);
+        const preview = mergedKeys.slice(0, 8).join(", ");
+        settingsHint.textContent = `Merged setting.* keys (${mergedKeys.length}): ${preview || "(none)"}`;
+        setStatus(settingsStatus, `Settings parsed: shared=${sharedCount}, widget=${widgetCount}. Widget overrides shared on key collisions.`, true);
+      } catch (err) {
+        sharedSettings = {};
+        widgetSettings = {};
+        mergedSettings = {};
+        settingsHint.textContent = "Merged setting.* keys (0): (none)";
+        setStatus(settingsStatus, "Settings parse error: " + err.message, false);
+      }
+    }
+
     document.getElementById("applyPayloadBtn").addEventListener("click", () => {
       compilePayload();
       renderPreview();
+    });
+
+    document.getElementById("applySettingsBtn").addEventListener("click", () => {
+      compileSettings();
+      renderPreview();
+    });
+
+    document.getElementById("importLayoutSettingsBtn").addEventListener("click", () => {
+      try {
+        const layoutObj = layoutSettingsEditor.get();
+        const shared = layoutObj && typeof layoutObj === "object" ? (layoutObj.shared_settings || {}) : {};
+        const widgetDefs = layoutObj && typeof layoutObj === "object" ? (layoutObj.widget_defs || {}) : {};
+        const widgetId = String(layoutWidgetId.value || "").trim();
+        const widgetDef = (widgetId && widgetDefs && typeof widgetDefs === "object") ? widgetDefs[widgetId] : null;
+        const widget = (widgetDef && typeof widgetDef === "object" && widgetDef.settings && typeof widgetDef.settings === "object")
+          ? widgetDef.settings
+          : {};
+
+        sharedSettingsEditor.set(shared);
+        widgetSettingsEditor.set(widget);
+        compileSettings();
+        renderPreview();
+        setStatus(settingsStatus, `Imported settings for widget '${widgetId || "(none)"}' from layout JSON.`, true);
+      } catch (err) {
+        setStatus(settingsStatus, "Layout import error: " + err.message, false);
+      }
     });
 
     for (const prefEl of [prefTempUnit, prefDistanceUnit, prefClockMode]) {
@@ -1668,7 +1830,7 @@
 
     document.getElementById("loadWeatherBtn").addEventListener("click", async () => {
       try {
-        dslEditor.setText(await loadRepoFile("/data/dsl/weather_now.json"));
+        dslEditor.setText(await loadRepoFile("/data/dsl_active/weather_now.json"));
         payloadEditor.setText(`{
   "current": {
     "temperature_2m": 18.2,
@@ -1693,7 +1855,7 @@
 
     document.getElementById("loadAdsbBtn").addEventListener("click", async () => {
       try {
-        dslEditor.setText(await loadRepoFile("/data/dsl/adsb_nearest.json"));
+        dslEditor.setText(await loadRepoFile("/data/dsl_available/adsb_nearest.json"));
         payloadEditor.setText(`{
   "ac": [
     {"flight":"UAL2423","t":"B739","alt_baro":10025,"dst":35.6,"destination":"KSFO","lat":37.65,"lon":-121.98},
@@ -1972,8 +2134,21 @@
   }
 }`);
     payloadEditor.setText("{}");
+    sharedSettingsEditor.set({});
+    widgetSettingsEditor.set({});
+    layoutSettingsEditor.set({
+      shared_settings: {},
+      widget_defs: {
+        "ha-card-1": {
+          settings: {
+            entity_id: "light.john_s_lamp"
+          }
+        }
+      }
+    });
     compileDsl();
     compilePayload();
+    compileSettings();
     renderPreview();
     requestAnimationFrame(tick);
   </script>

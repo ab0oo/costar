@@ -62,15 +62,18 @@
       }
     ]
   },
+  "shared_settings": {
+    "ha_base_url": "https://homeassistant.edh.gorkos.net",
+    "ha_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkOTJlMjRkMmI4NzY0NjUwYWY5Yzc1ZDZhMDY3OTYxNSIsImlhdCI6MTc3MTcxMjIzNCwiZXhwIjoyMDg3MDcyMjM0fQ.A9fTF3UIZzjTg6yJjKwYY82EuT8NIxU1TK-a00ru7mc",
+    "ha_ws_path": "/api/websocket"
+  },
   "widget_defs": {
     "ha-card-1": {
       "type": "dsl",
       "update_ms": 1000,
       "settings": {
         "dsl_path": "/dsl_available/homeassistant_control_card.json",
-        "ha_base_url": "https://homeassistant.edh.gorkos.net",
         "entity_id": "light.family_room_lamp",
-        "ha_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkOTJlMjRkMmI4NzY0NjUwYWY5Yzc1ZDZhMDY3OTYxNSIsImlhdCI6MTc3MTcxMjIzNCwiZXhwIjoyMDg3MDcyMjM0fQ.A9fTF3UIZzjTg6yJjKwYY82EuT8NIxU1TK-a00ru7mc",
         "tap_action": "http",
         "tap_method": "POST",
         "tap_url": "{{setting.ha_base_url}}/api/services/light/toggle",
@@ -86,9 +89,7 @@
       "update_ms": 1000,
       "settings": {
         "dsl_path": "/dsl_available/homeassistant_control_card.json",
-        "ha_base_url": "https://homeassistant.edh.gorkos.net",
         "entity_id": "light.torchier_socket_1",
-        "ha_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkOTJlMjRkMmI4NzY0NjUwYWY5Yzc1ZDZhMDY3OTYxNSIsImlhdCI6MTc3MTcxMjIzNCwiZXhwIjoyMDg3MDcyMjM0fQ.A9fTF3UIZzjTg6yJjKwYY82EuT8NIxU1TK-a00ru7mc",
         "tap_action": "http",
         "tap_method": "POST",
         "tap_url": "{{setting.ha_base_url}}/api/services/light/toggle",
@@ -104,9 +105,7 @@
       "update_ms": 1000,
       "settings": {
         "dsl_path": "/dsl_available/homeassistant_control_card.json",
-        "ha_base_url": "https://homeassistant.edh.gorkos.net",
         "entity_id": "light.torchier_socket_1_2",
-        "ha_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkOTJlMjRkMmI4NzY0NjUwYWY5Yzc1ZDZhMDY3OTYxNSIsImlhdCI6MTc3MTcxMjIzNCwiZXhwIjoyMDg3MDcyMjM0fQ.A9fTF3UIZzjTg6yJjKwYY82EuT8NIxU1TK-a00ru7mc",
         "tap_action": "http",
         "tap_method": "POST",
         "tap_url": "{{setting.ha_base_url}}/api/services/light/toggle",
@@ -122,9 +121,7 @@
       "update_ms": 1000,
       "settings": {
         "dsl_path": "/dsl_available/homeassistant_control_card.json",
-        "ha_base_url": "https://homeassistant.edh.gorkos.net",
         "entity_id": "light.outside_entry_lights",
-        "ha_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkOTJlMjRkMmI4NzY0NjUwYWY5Yzc1ZDZhMDY3OTYxNSIsImlhdCI6MTc3MTcxMjIzNCwiZXhwIjoyMDg3MDcyMjM0fQ.A9fTF3UIZzjTg6yJjKwYY82EuT8NIxU1TK-a00ru7mc",
         "tap_action": "http",
         "tap_method": "POST",
         "tap_url": "{{setting.ha_base_url}}/api/services/light/toggle",
@@ -140,9 +137,7 @@
       "update_ms": 1000,
       "settings": {
         "dsl_path": "/dsl_available/homeassistant_control_card.json",
-        "ha_base_url": "https://homeassistant.edh.gorkos.net",
         "entity_id": "light.outside_garage_lights",
-        "ha_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkOTJlMjRkMmI4NzY0NjUwYWY5Yzc1ZDZhMDY3OTYxNSIsImlhdCI6MTc3MTcxMjIzNCwiZXhwIjoyMDg3MDcyMjM0fQ.A9fTF3UIZzjTg6yJjKwYY82EuT8NIxU1TK-a00ru7mc",
         "tap_action": "http",
         "tap_method": "POST",
         "tap_url": "{{setting.ha_base_url}}/api/services/light/toggle",
@@ -158,9 +153,7 @@
       "update_ms": 1000,
       "settings": {
         "dsl_path": "/dsl_available/homeassistant_control_card.json",
-        "ha_base_url": "https://homeassistant.edh.gorkos.net",
         "entity_id": "light.john_s_lamp",
-        "ha_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkOTJlMjRkMmI4NzY0NjUwYWY5Yzc1ZDZhMDY3OTYxNSIsImlhdCI6MTc3MTcxMjIzNCwiZXhwIjoyMDg3MDcyMjM0fQ.A9fTF3UIZzjTg6yJjKwYY82EuT8NIxU1TK-a00ru7mc",
         "tap_action": "http",
         "tap_method": "POST",
         "tap_url": "{{setting.ha_base_url}}/api/services/light/toggle",

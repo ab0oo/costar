@@ -1,13 +1,9 @@
 {
   "version": 1,
   "data": {
-    "source": "http",
-    "url": "{{setting.ha_base_url}}/api/states/{{setting.entity_id}}",
-    "headers": {
-      "Authorization": "Bearer {{setting.ha_token}}",
-      "Content-Type": "application/json"
-    },
-    "poll_ms": 30000,
+    "source": "ha_ws",
+    "entity_id": "{{setting.entity_id}}",
+    "poll_ms": 3000,
     "fields": {
       "name": "attributes.friendly_name",
       "state": "state",

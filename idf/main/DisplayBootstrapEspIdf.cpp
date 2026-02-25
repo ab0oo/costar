@@ -23,15 +23,35 @@ void setOutputLevel(int8_t pin, int level, const char* label) {
   ESP_ERROR_CHECK(gpio_set_level(gpio, level));
   ESP_LOGI(kBootTag, "%s pin %d set %s", label, static_cast<int>(pin), level ? "HIGH" : "LOW");
 }
+
+void setLedOff(int8_t pin, bool offHigh, const char* label) {
+  if (pin < 0) {
+    return;
+  }
+  const int offLevel = offHigh ? 1 : 0;
+  setOutputLevel(pin, offLevel, label);
+}
+
+void warnIfLedSharesCriticalPin(int8_t ledPin, const char* ledLabel) {
+  if (ledPin < 0) {
+    return;
+  }
+  if (ledPin == AppConfig::kTftDcPin || ledPin == AppConfig::kTftCsPin || ledPin == AppConfig::kTftSclkPin ||
+      ledPin == AppConfig::kTftMosiPin || ledPin == AppConfig::kTftMisoPin || ledPin == AppConfig::kTftRstPin) {
+    ESP_LOGW(kBootTag, "%s pin %d shares TFT bus signal; it may glow/toggle during display updates", ledLabel,
+             static_cast<int>(ledPin));
+  }
+}
 }  // namespace
 
 namespace display_bootstrap {
 
 void initPins() {
-  if (AppConfig::kBoardBlueLedPin >= 0) {
-    const int ledOffLevel = AppConfig::kBoardBlueLedOffHigh ? 1 : 0;
-    setOutputLevel(AppConfig::kBoardBlueLedPin, ledOffLevel, "board LED");
-  }
+  // Force all configured indicator LEDs off before any peripheral setup.
+  setLedOff(AppConfig::kBoardBlueLedPin, AppConfig::kBoardBlueLedOffHigh, "board LED");
+  setLedOff(AppConfig::kDiagnosticLedPin, false, "diagnostic LED");
+  warnIfLedSharesCriticalPin(AppConfig::kBoardBlueLedPin, "board LED");
+  warnIfLedSharesCriticalPin(AppConfig::kDiagnosticLedPin, "diagnostic LED");
 
   if (AppConfig::kTouchEnabled && AppConfig::kTouchCsPin >= 0) {
     setOutputLevel(AppConfig::kTouchCsPin, 1, "touch CS");

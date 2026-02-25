@@ -40,7 +40,6 @@ touch_input::Calibration sCalibration = {};
 bool sTouchWasPressed = false;
 int32_t sFilteredX = 0;
 int32_t sFilteredY = 0;
-uint32_t sNoIrqPollCounter = 0;
 
 int32_t clampi(int32_t value, int32_t minValue, int32_t maxValue) {
   if (value < minValue) {
@@ -221,15 +220,10 @@ bool read(Point& out) {
   if (!init()) {
     return false;
   }
-  if (!isPressedByIrq()) {
-    // Some boards have unreliable IRQ behavior; use it as a hint to reduce
-    // idle polling but still allow reads so touches are never fully blocked.
-    ++sNoIrqPollCounter;
-    if ((sNoIrqPollCounter & 0x3U) != 0U) {
-      sTouchWasPressed = false;
-      return false;
-    }
-  }
+  // IRQ on CYD-class boards can be noisy or unreliable depending on wiring and
+  // panel variant. Treat it as advisory only and always attempt a real sample
+  // so short taps are not dropped.
+  (void)isPressedByIrq();
 
   uint16_t rawX = 0;
   uint16_t rawY = 0;

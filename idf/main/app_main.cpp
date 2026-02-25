@@ -45,7 +45,7 @@ constexpr uint32_t kConfigPostFailMs = 12000;
 constexpr uint32_t kConfigPostConnectMs = 2500;
 constexpr bool kBaselineEnabled = true;
 constexpr unsigned long kBaselineLoopPeriodMs = 30000UL;
-constexpr unsigned long kRuntimeTickPeriodMs = 100UL;
+constexpr unsigned long kRuntimeTickPeriodMs = 33UL;
 constexpr const char* kLayoutPrefsNs = "ui";
 constexpr const char* kLayoutPrefsKey = "layout";
 constexpr const char* kLayoutAPath = "/littlefs/screen_layout_a.json";
@@ -1342,6 +1342,11 @@ void runtimeLoopTask(void* arg) {
             }
           } else {
             handled = layout_runtime::onTap(tapX, tapY);
+            if (handled) {
+              // DSL tap handlers can redraw widgets; repaint the menu button
+              // once so it stays visually on top.
+              sRuntimeMenu.dirty = true;
+            }
           }
           ESP_LOGI(kTouchTag, "runtime tap dispatch x=%u y=%u handled=%d menu_open=%d", tapX, tapY,
                    handled ? 1 : 0, sRuntimeMenu.open ? 1 : 0);
@@ -1350,7 +1355,9 @@ void runtimeLoopTask(void* arg) {
       }
     }
     if (!sRuntimeMenu.open) {
-      layout_runtime::tick(nowMs);
+      if (layout_runtime::tick(nowMs)) {
+        sRuntimeMenu.dirty = true;
+      }
     }
     if (sRuntimeMenu.dirty) {
       drawRuntimeMenuButton(sRuntimeMenu.open);
@@ -1358,9 +1365,6 @@ void runtimeLoopTask(void* arg) {
         drawRuntimeMenuOverlay(ctx->activeLayoutPath);
       }
       sRuntimeMenu.dirty = false;
-    } else if (!sRuntimeMenu.open) {
-      // Keep button visible atop widget redraw activity.
-      drawRuntimeMenuButton(false);
     }
     if (nowMs - lastTickMs >= kBaselineLoopPeriodMs) {
       lastTickMs = nowMs;
@@ -1507,7 +1511,7 @@ extern "C" void app_main() {
     for (;;) {
       platform::sleepMs(kRuntimeTickPeriodMs);
       const uint32_t nowMs = platform::millisMs();
-      layout_runtime::tick(nowMs);
+      (void)layout_runtime::tick(nowMs);
       if (nowMs - lastTickMs >= kBaselineLoopPeriodMs) {
         lastTickMs = nowMs;
         boot::markLoop(baselineState, wifiReady, kBaselineEnabled, kBaselineLoopPeriodMs);
