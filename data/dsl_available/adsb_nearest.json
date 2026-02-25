@@ -1,12 +1,73 @@
 {
   "version": 1,
   "data": {
-    "source": "adsb_nearest",
-    "url": "https://api.adsb.lol/v2/lat/{{geo.lat}}/lon/{{geo.lon}}/dist/{{setting.radius_nm}}",
+    "source": "http",
+    "url": "https://api.adsb.lol/v2/lat/{{geo.lat}}/lon/{{geo.lon}}/dist/40",
     "poll_ms": 30000,
     "debug": true,
+    "transforms": [
+      {
+        "op": "map",
+        "from": "ac",
+        "to": "rows",
+        "fields": {
+          "flight": {
+            "coalesce": ["flight", "callsign", "hex"],
+            "default": "?"
+          },
+          "type": {
+            "coalesce": ["t", "type"],
+            "default": "?"
+          },
+          "dest": {
+            "coalesce": ["destination", "route", "to"],
+            "default": "?"
+          },
+          "alt_text": {
+            "coalesce": ["alt_baro", "altitude"],
+            "default": "?"
+          },
+          "lat": "lat",
+          "lon": "lon",
+          "dst": "dst"
+        }
+      },
+      {
+        "op": "compute_distance",
+        "from": "rows",
+        "to_field": "km",
+        "prefer_nm_path": "dst",
+        "lat_path": "lat",
+        "lon_path": "lon",
+        "origin_lat": "{{geo.lat}}",
+        "origin_lon": "{{geo.lon}}"
+      },
+      {
+        "op": "sort",
+        "from": "rows",
+        "by": "km",
+        "numeric": true,
+        "order": "asc"
+      },
+      {
+        "op": "take",
+        "from": "rows",
+        "count": 5
+      },
+      {
+        "op": "index_rows",
+        "from": "rows",
+        "count": 5,
+        "count_key": "top_count",
+        "fields": ["line"],
+        "prefix_map": {
+          "line": "row"
+        },
+        "fill_empty": true
+      }
+    ],
     "fields": {
-      "count": "count"
+      "count": "top_count"
     }
   },
   "ui": {

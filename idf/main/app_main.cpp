@@ -7,6 +7,7 @@
 #include "TouchInputEspIdf.h"
 #include "TextEntryEspIdf.h"
 #include "LvglPasswordPrompt.h"
+#include "Font5x7Classic.h"
 #include "core/BootCommon.h"
 #include "core/TimeSync.h"
 #include "platform/Fs.h"
@@ -21,6 +22,7 @@
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "freertos/event_groups.h"
+#include "freertos/task.h"
 #include "nvs_flash.h"
 
 #include <cmath>
@@ -37,18 +39,66 @@ constexpr const char* kBootTag = "boot";
 constexpr const char* kWifiTag = "wifi";
 constexpr const char* kFsTag = "fs";
 constexpr const char* kTouchTag = "touch";
+constexpr const char* kUiTag = "ui";
 constexpr uint32_t kTouchBootProbeMs = 0;
 constexpr uint32_t kConfigPostFailMs = 12000;
 constexpr uint32_t kConfigPostConnectMs = 2500;
 constexpr bool kBaselineEnabled = true;
 constexpr unsigned long kBaselineLoopPeriodMs = 30000UL;
 constexpr unsigned long kRuntimeTickPeriodMs = 100UL;
+constexpr const char* kLayoutPrefsNs = "ui";
+constexpr const char* kLayoutPrefsKey = "layout";
+constexpr const char* kLayoutAPath = "/littlefs/screen_layout_a.json";
+constexpr const char* kLayoutBPath = "/littlefs/screen_layout_b.json";
+constexpr const char* kLayoutNytPath = "/littlefs/screen_layout_nyt.json";
 constexpr EventBits_t kWifiConnectedBit = BIT0;
 constexpr EventBits_t kWifiFailedBit = BIT1;
 
 EventGroupHandle_t sWifiEventGroup = nullptr;
 bool sWifiStackReady = false;
 bool sWifiHandlersRegistered = false;
+TaskHandle_t sRuntimeTaskHandle = nullptr;
+
+struct RuntimeLoopContext {
+  boot::BaselineState baselineState;
+  bool wifiReady = false;
+  std::string activeLayoutPath = kLayoutAPath;
+};
+
+struct UiRect {
+  uint16_t x = 0;
+  uint16_t y = 0;
+  uint16_t w = 0;
+  uint16_t h = 0;
+};
+
+struct RuntimeMenuRects {
+  UiRect button;
+  UiRect panel;
+  UiRect rowLayoutA;
+  UiRect rowLayoutB;
+  UiRect rowLayoutNyt;
+  UiRect rowConfig;
+  UiRect rowTouchCal;
+};
+
+enum class RuntimeMenuAction : uint8_t {
+  None = 0,
+  Toggle,
+  SelectLayoutA,
+  SelectLayoutB,
+  SelectLayoutNyt,
+  OpenConfig,
+  OpenTouchCalibration,
+  Dismiss,
+};
+
+struct RuntimeMenuState {
+  bool open = false;
+  bool dirty = true;
+};
+
+RuntimeMenuState sRuntimeMenu;
 
 struct WifiApEntry {
   std::string ssid;
@@ -250,6 +300,173 @@ bool hasStoredWifiCreds() {
   return !savedSsid.empty();
 }
 
+uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
+  return static_cast<uint16_t>(((r & 0xF8U) << 8) | ((g & 0xFCU) << 3) | (b >> 3));
+}
+
+bool rectContains(const UiRect& r, uint16_t x, uint16_t y) {
+  const uint16_t x2 = static_cast<uint16_t>(r.x + r.w);
+  const uint16_t y2 = static_cast<uint16_t>(r.y + r.h);
+  return x >= r.x && x < x2 && y >= r.y && y < y2;
+}
+
+void drawTinyChar(int x, int y, char c, uint16_t fg, uint16_t bg, int scale) {
+  if (c < 0x20 || c > 0x7E) {
+    c = '?';
+  }
+  const size_t idx = static_cast<size_t>(static_cast<uint8_t>(c)) * 5U;
+  for (int col = 0; col < 5; ++col) {
+    const uint8_t line = font[idx + static_cast<size_t>(col)];
+    for (int row = 0; row < 8; ++row) {
+      const bool on = ((line >> row) & 0x01U) != 0U;
+      (void)display_spi::fillRect(static_cast<uint16_t>(x + col * scale),
+                                  static_cast<uint16_t>(y + row * scale),
+                                  static_cast<uint16_t>(scale),
+                                  static_cast<uint16_t>(scale),
+                                  on ? fg : bg);
+    }
+  }
+}
+
+void drawTinyText(int x, int y, const char* text, uint16_t fg, uint16_t bg, int scale) {
+  if (text == nullptr) {
+    return;
+  }
+  int penX = x;
+  for (const char* p = text; *p != '\0'; ++p) {
+    if (*p == ' ') {
+      penX += scale * 6;
+      continue;
+    }
+    drawTinyChar(penX, y, *p, fg, bg, scale);
+    penX += scale * 6;
+  }
+}
+
+RuntimeMenuRects calcRuntimeMenuRects() {
+  RuntimeMenuRects out = {};
+  const uint16_t w = display_spi::width();
+  const uint16_t menuBtnW = 24;
+  const uint16_t menuBtnH = 20;
+  const uint16_t margin = 4;
+  out.button = {static_cast<uint16_t>(w - menuBtnW - margin), margin, menuBtnW, menuBtnH};
+
+  const uint16_t panelW = 160;
+  const uint16_t rowH = 18;
+  out.panel = {static_cast<uint16_t>(w - panelW - margin), static_cast<uint16_t>(out.button.y + out.button.h + 4),
+               panelW, static_cast<uint16_t>(rowH * 5 + 6)};
+  out.rowLayoutA = {static_cast<uint16_t>(out.panel.x + 3), static_cast<uint16_t>(out.panel.y + 3),
+                    static_cast<uint16_t>(panelW - 6), rowH};
+  out.rowLayoutB = {static_cast<uint16_t>(out.panel.x + 3), static_cast<uint16_t>(out.panel.y + 3 + rowH),
+                    static_cast<uint16_t>(panelW - 6), rowH};
+  out.rowLayoutNyt = {static_cast<uint16_t>(out.panel.x + 3), static_cast<uint16_t>(out.panel.y + 3 + rowH * 2),
+                      static_cast<uint16_t>(panelW - 6), rowH};
+  out.rowConfig = {static_cast<uint16_t>(out.panel.x + 3), static_cast<uint16_t>(out.panel.y + 3 + rowH * 3),
+                   static_cast<uint16_t>(panelW - 6), rowH};
+  out.rowTouchCal = {static_cast<uint16_t>(out.panel.x + 3), static_cast<uint16_t>(out.panel.y + 3 + rowH * 4),
+                     static_cast<uint16_t>(panelW - 6), rowH};
+  return out;
+}
+
+void drawRuntimeMenuButton(bool active) {
+  const RuntimeMenuRects r = calcRuntimeMenuRects();
+  const uint16_t bg = active ? rgb565(70, 90, 130) : rgb565(22, 31, 46);
+  const uint16_t line = rgb565(220, 234, 248);
+  (void)display_spi::fillRect(r.button.x, r.button.y, r.button.w, r.button.h, bg);
+  (void)display_spi::fillRect(r.button.x, r.button.y, r.button.w, 1, line);
+  (void)display_spi::fillRect(r.button.x, static_cast<uint16_t>(r.button.y + r.button.h - 1), r.button.w, 1, line);
+  (void)display_spi::fillRect(r.button.x, r.button.y, 1, r.button.h, line);
+  (void)display_spi::fillRect(static_cast<uint16_t>(r.button.x + r.button.w - 1), r.button.y, 1, r.button.h, line);
+  const uint16_t barW = static_cast<uint16_t>(r.button.w - 10);
+  for (int i = 0; i < 3; ++i) {
+    const uint16_t y = static_cast<uint16_t>(r.button.y + 5 + i * 5);
+    (void)display_spi::fillRect(static_cast<uint16_t>(r.button.x + 5), y, barW, 2, line);
+  }
+}
+
+void drawRuntimeMenuOverlay(const std::string& activeLayoutPath) {
+  const RuntimeMenuRects r = calcRuntimeMenuRects();
+  const uint16_t panelBg = rgb565(10, 16, 28);
+  const uint16_t border = rgb565(160, 185, 214);
+  const uint16_t rowBg = rgb565(22, 34, 54);
+  const uint16_t rowActive = rgb565(58, 92, 122);
+  const uint16_t rowText = rgb565(225, 235, 245);
+
+  (void)display_spi::fillRect(r.panel.x, r.panel.y, r.panel.w, r.panel.h, panelBg);
+  (void)display_spi::fillRect(r.panel.x, r.panel.y, r.panel.w, 1, border);
+  (void)display_spi::fillRect(r.panel.x, static_cast<uint16_t>(r.panel.y + r.panel.h - 1), r.panel.w, 1, border);
+  (void)display_spi::fillRect(r.panel.x, r.panel.y, 1, r.panel.h, border);
+  (void)display_spi::fillRect(static_cast<uint16_t>(r.panel.x + r.panel.w - 1), r.panel.y, 1, r.panel.h, border);
+
+  const bool layoutAActive = activeLayoutPath == kLayoutAPath;
+  const bool layoutBActive = activeLayoutPath == kLayoutBPath;
+  const bool layoutNytActive = activeLayoutPath == kLayoutNytPath;
+  (void)display_spi::fillRect(r.rowLayoutA.x, r.rowLayoutA.y, r.rowLayoutA.w, r.rowLayoutA.h,
+                              layoutAActive ? rowActive : rowBg);
+  (void)display_spi::fillRect(r.rowLayoutB.x, r.rowLayoutB.y, r.rowLayoutB.w, r.rowLayoutB.h,
+                              layoutBActive ? rowActive : rowBg);
+  (void)display_spi::fillRect(r.rowLayoutNyt.x, r.rowLayoutNyt.y, r.rowLayoutNyt.w, r.rowLayoutNyt.h,
+                              layoutNytActive ? rowActive : rowBg);
+  (void)display_spi::fillRect(r.rowConfig.x, r.rowConfig.y, r.rowConfig.w, r.rowConfig.h, rowBg);
+  (void)display_spi::fillRect(r.rowTouchCal.x, r.rowTouchCal.y, r.rowTouchCal.w, r.rowTouchCal.h, rowBg);
+
+  drawTinyText(r.rowLayoutA.x + 4, r.rowLayoutA.y + 5, "Layout A (HA)", rowText,
+               layoutAActive ? rowActive : rowBg, 1);
+  drawTinyText(r.rowLayoutB.x + 4, r.rowLayoutB.y + 5, "Layout B (WX)", rowText,
+               layoutBActive ? rowActive : rowBg, 1);
+  drawTinyText(r.rowLayoutNyt.x + 4, r.rowLayoutNyt.y + 5, "Layout C (NYT)", rowText,
+               layoutNytActive ? rowActive : rowBg, 1);
+  drawTinyText(r.rowConfig.x + 4, r.rowConfig.y + 5, "WiFi / Units", rowText, rowBg, 1);
+  drawTinyText(r.rowTouchCal.x + 4, r.rowTouchCal.y + 5, "Touch Calibrate", rowText, rowBg, 1);
+}
+
+RuntimeMenuAction hitTestRuntimeMenu(uint16_t x, uint16_t y, bool menuOpen) {
+  const RuntimeMenuRects r = calcRuntimeMenuRects();
+  if (rectContains(r.button, x, y)) {
+    return RuntimeMenuAction::Toggle;
+  }
+  if (!menuOpen) {
+    return RuntimeMenuAction::None;
+  }
+  if (rectContains(r.rowLayoutA, x, y)) {
+    return RuntimeMenuAction::SelectLayoutA;
+  }
+  if (rectContains(r.rowLayoutB, x, y)) {
+    return RuntimeMenuAction::SelectLayoutB;
+  }
+  if (rectContains(r.rowLayoutNyt, x, y)) {
+    return RuntimeMenuAction::SelectLayoutNyt;
+  }
+  if (rectContains(r.rowConfig, x, y)) {
+    return RuntimeMenuAction::OpenConfig;
+  }
+  if (rectContains(r.rowTouchCal, x, y)) {
+    return RuntimeMenuAction::OpenTouchCalibration;
+  }
+  if (rectContains(r.panel, x, y)) {
+    return RuntimeMenuAction::None;
+  }
+  return RuntimeMenuAction::Dismiss;
+}
+
+std::string loadPreferredLayoutPath() {
+  std::string path = platform::prefs::getString(kLayoutPrefsNs, kLayoutPrefsKey, kLayoutAPath);
+  if (path.empty()) {
+    return kLayoutAPath;
+  }
+  if (path != kLayoutAPath && path != kLayoutBPath && path != kLayoutNytPath) {
+    return kLayoutAPath;
+  }
+  return path;
+}
+
+void savePreferredLayoutPath(const std::string& path) {
+  if (path != kLayoutAPath && path != kLayoutBPath && path != kLayoutNytPath) {
+    return;
+  }
+  (void)platform::prefs::putString(kLayoutPrefsNs, kLayoutPrefsKey, path.c_str());
+}
+
 void drawCalibrationTarget(uint16_t x, uint16_t y, uint16_t color) {
   const uint16_t dot = 8;
   const uint16_t arm = 16;
@@ -262,6 +479,143 @@ void drawCalibrationTarget(uint16_t x, uint16_t y, uint16_t color) {
                               static_cast<uint16_t>(arm * 2), color);
   (void)display_spi::fillRect(static_cast<uint16_t>(x - arm), static_cast<uint16_t>(y - 1),
                               static_cast<uint16_t>(arm * 2), 3, color);
+}
+
+void showPostCalibrationColorCheck() {
+  const uint16_t w = display_spi::width();
+  const uint16_t h = display_spi::height();
+  if (w < 40 || h < 40) {
+    return;
+  }
+  const uint16_t halfW = w / 2;
+  const uint16_t halfH = h / 2;
+  const uint16_t cBlack = 0x0000;
+  const uint16_t cWhite = 0xFFFF;
+  const uint16_t cRed = 0xF800;
+  const uint16_t cGreen = 0x07E0;
+  const uint16_t cBlue = 0x001F;
+
+  (void)display_spi::fillRect(0, 0, halfW, halfH, cBlack);
+  (void)display_spi::fillRect(halfW, 0, static_cast<uint16_t>(w - halfW), halfH, cWhite);
+
+  const uint16_t lowerY = halfH;
+  const uint16_t lowerH = static_cast<uint16_t>(h - halfH);
+  const uint16_t third = w / 3;
+  (void)display_spi::fillRect(0, lowerY, third, lowerH, cRed);
+  (void)display_spi::fillRect(third, lowerY, third, lowerH, cGreen);
+  (void)display_spi::fillRect(static_cast<uint16_t>(third * 2), lowerY,
+                              static_cast<uint16_t>(w - third * 2), lowerH, cBlue);
+
+  ESP_LOGI(kTouchTag, "post-calibration color check shown (TL black, TR white, RGB bottom)");
+  platform::sleepMs(1200);
+}
+
+void drawDisplayModePattern(bool bgr, bool invert) {
+  const uint16_t w = display_spi::width();
+  const uint16_t h = display_spi::height();
+  if (w < 40 || h < 40) {
+    return;
+  }
+  const uint16_t cBlack = 0x0000;
+  const uint16_t cWhite = 0xFFFF;
+  const uint16_t cRed = 0xF800;
+  const uint16_t cGreen = 0x07E0;
+  const uint16_t cBlue = 0x001F;
+  const uint16_t cYellow = 0xFFE0;
+
+  (void)display_spi::clear(0x0000);
+  const uint16_t halfW = w / 2;
+  const uint16_t topH = h / 3;
+  const uint16_t midY = topH;
+  const uint16_t midH = h / 3;
+  const uint16_t botY = static_cast<uint16_t>(topH + midH);
+  const uint16_t botH = static_cast<uint16_t>(h - botY);
+
+  (void)display_spi::fillRect(0, 0, halfW, topH, cBlack);
+  (void)display_spi::fillRect(halfW, 0, static_cast<uint16_t>(w - halfW), topH, cWhite);
+
+  const uint16_t quarter = w / 4;
+  (void)display_spi::fillRect(0, midY, quarter, midH, cRed);
+  (void)display_spi::fillRect(quarter, midY, quarter, midH, cGreen);
+  (void)display_spi::fillRect(static_cast<uint16_t>(quarter * 2), midY, quarter, midH, cBlue);
+  (void)display_spi::fillRect(static_cast<uint16_t>(quarter * 3), midY,
+                              static_cast<uint16_t>(w - quarter * 3), midH, cYellow);
+
+  const uint16_t leftColor = bgr ? 0x001F : 0x07E0;
+  const uint16_t rightColor = invert ? 0xF800 : 0x07E0;
+  (void)display_spi::fillRect(0, botY, halfW, botH, leftColor);
+  (void)display_spi::fillRect(halfW, botY, static_cast<uint16_t>(w - halfW), botH, rightColor);
+}
+
+bool runDisplayModeCalibrationIfNeeded() {
+  constexpr const char* kDisplayPrefsNs = "display";
+  constexpr const char* kColorSetKey = "color_set";
+  constexpr const char* kColorBgrKey = "color_bgr";
+  constexpr const char* kInvertSetKey = "inv_set";
+  constexpr const char* kInvertOnKey = "inv_on";
+
+  const bool haveColor = platform::prefs::getBool(kDisplayPrefsNs, kColorSetKey, false);
+  const bool haveInvert = platform::prefs::getBool(kDisplayPrefsNs, kInvertSetKey, false);
+
+  bool bgr = platform::prefs::getBool(kDisplayPrefsNs, kColorBgrKey, false);
+  bool invert = platform::prefs::getBool(kDisplayPrefsNs, kInvertOnKey, true);
+  if (!display_spi::applyPanelTuning(bgr, invert, false)) {
+    return false;
+  }
+
+  if (haveColor && haveInvert) {
+    ESP_LOGI(kTouchTag, "display mode already calibrated; using saved bgr=%d invert=%d",
+             bgr ? 1 : 0, invert ? 1 : 0);
+    return true;
+  }
+
+  drawDisplayModePattern(bgr, invert);
+  ESP_LOGW(kTouchTag,
+           "display mode calibration: tap LEFT half toggles RGB/BGR, RIGHT half toggles invert, "
+           "BOTTOM third saves");
+
+  if (!AppConfig::kTouchEnabled) {
+    (void)display_spi::applyPanelTuning(bgr, invert, true);
+    return true;
+  }
+
+  const uint32_t start = platform::millisMs();
+  bool held = false;
+  while (platform::millisMs() - start < 45000U) {
+    touch_input::Point p;
+    if (!touch_input::read(p)) {
+      held = false;
+      platform::sleepMs(15);
+      continue;
+    }
+    if (held) {
+      platform::sleepMs(25);
+      continue;
+    }
+    held = true;
+    const uint16_t h = display_spi::height();
+    const uint16_t w = display_spi::width();
+    if (p.y >= (h * 2U) / 3U) {
+      (void)display_spi::applyPanelTuning(bgr, invert, true);
+      ESP_LOGI(kTouchTag, "display mode saved bgr=%d invert=%d", bgr ? 1 : 0, invert ? 1 : 0);
+      (void)display_spi::clear(0x0000);
+      return true;
+    }
+    if (p.x < (w / 2U)) {
+      bgr = !bgr;
+    } else {
+      invert = !invert;
+    }
+    (void)display_spi::applyPanelTuning(bgr, invert, false);
+    drawDisplayModePattern(bgr, invert);
+    ESP_LOGI(kTouchTag, "display mode trial bgr=%d invert=%d", bgr ? 1 : 0, invert ? 1 : 0);
+  }
+
+  (void)display_spi::applyPanelTuning(bgr, invert, true);
+  ESP_LOGW(kTouchTag, "display mode calibration timeout; saved current bgr=%d invert=%d", bgr ? 1 : 0,
+           invert ? 1 : 0);
+  (void)display_spi::clear(0x0000);
+  return true;
 }
 
 bool captureCalibrationPoint(uint16_t targetX, uint16_t targetY, uint16_t& rawX, uint16_t& rawY,
@@ -318,7 +672,9 @@ bool captureCalibrationPoint(uint16_t targetX, uint16_t targetY, uint16_t& rawX,
         maxRawY = std::max<uint16_t>(maxRawY, p.rawY);
         ++count;
       }
-      config_screen::markTouch(p.x, p.y);
+      if (requireNearTarget) {
+        config_screen::markTouch(p.x, p.y);
+      }
       platform::sleepMs(20);
       continue;
     }
@@ -346,12 +702,17 @@ bool captureCalibrationPoint(uint16_t targetX, uint16_t targetY, uint16_t& rawX,
   return false;
 }
 
-bool runTouchCalibrationIfNeeded() {
+bool runTouchCalibration(bool force) {
   touch_input::Calibration cal = {};
-  if (touch_input::loadCalibration(cal)) {
-    ESP_LOGI(kTouchTag, "cal loaded minX=%u maxX=%u minY=%u maxY=%u invX=%d invY=%d", cal.rawMinX,
-             cal.rawMaxX, cal.rawMinY, cal.rawMaxY, cal.invertX ? 1 : 0, cal.invertY ? 1 : 0);
-    return true;
+  if (!force) {
+    if (touch_input::loadCalibration(cal)) {
+      ESP_LOGI(kTouchTag, "cal loaded minX=%u maxX=%u minY=%u maxY=%u invX=%d invY=%d", cal.rawMinX,
+               cal.rawMaxX, cal.rawMinY, cal.rawMaxY, cal.invertX ? 1 : 0, cal.invertY ? 1 : 0);
+      return true;
+    }
+  } else if (touch_input::loadCalibration(cal)) {
+    ESP_LOGI(kTouchTag, "forcing calibration over stored minX=%u maxX=%u minY=%u maxY=%u",
+             cal.rawMinX, cal.rawMaxX, cal.rawMinY, cal.rawMaxY);
   }
 
   ESP_LOGW(kTouchTag, "no persisted calibration; entering calibration");
@@ -511,6 +872,7 @@ bool runTouchCalibrationIfNeeded() {
     ESP_LOGI(kTouchTag, "cal saved pass2 minX=%u maxX=%u minY=%u maxY=%u swap=%d invX=%d invY=%d",
              pass2Cal.rawMinX, pass2Cal.rawMaxX, pass2Cal.rawMinY, pass2Cal.rawMaxY,
              pass2Cal.swapXY ? 1 : 0, pass2Cal.invertX ? 1 : 0, pass2Cal.invertY ? 1 : 0);
+    showPostCalibrationColorCheck();
     (void)display_spi::clear(0x0000);
     return true;
   }
@@ -523,6 +885,7 @@ bool runTouchCalibrationIfNeeded() {
              "cal saved pass1 fallback minX=%u maxX=%u minY=%u maxY=%u swap=%d invX=%d invY=%d",
              pass1Cal.rawMinX, pass1Cal.rawMaxX, pass1Cal.rawMinY, pass1Cal.rawMaxY,
              pass1Cal.swapXY ? 1 : 0, pass1Cal.invertX ? 1 : 0, pass1Cal.invertY ? 1 : 0);
+    showPostCalibrationColorCheck();
     (void)display_spi::clear(0x0000);
     return true;
   }
@@ -770,10 +1133,13 @@ void verifyLittlefsAssets() {
   };
 
   static constexpr RequiredAsset kRequired[] = {
+      {"layout_a", "/littlefs/screen_layout_a.json"},
       {"layout_b", "/littlefs/screen_layout_b.json"},
+      {"layout_nyt", "/littlefs/screen_layout_nyt.json"},
       {"dsl_weather_now", "/littlefs/dsl_active/weather_now.json"},
       {"dsl_forecast", "/littlefs/dsl_active/forecast.json"},
       {"dsl_clock_analog_full", "/littlefs/dsl_active/clock_analog_full.json"},
+      {"dsl_ha_card", "/littlefs/dsl_available/homeassistant_control_card.json"},
   };
 
   int missing = 0;
@@ -856,6 +1222,153 @@ GeoContext loadGeoContextFromPrefs() {
 
   return geo;
 }
+
+void refreshLayout(RuntimeLoopContext* ctx) {
+  if (ctx == nullptr) {
+    return;
+  }
+  if (!layout_runtime::begin(ctx->activeLayoutPath.c_str())) {
+    ESP_LOGW(kUiTag, "layout begin failed path=%s; falling back to layout A",
+             ctx->activeLayoutPath.c_str());
+    ctx->activeLayoutPath = kLayoutAPath;
+    (void)layout_runtime::begin(kLayoutAPath);
+  }
+  sRuntimeMenu.dirty = true;
+}
+
+void switchLayout(RuntimeLoopContext* ctx, const char* path) {
+  if (ctx == nullptr || path == nullptr || *path == '\0') {
+    return;
+  }
+  ctx->activeLayoutPath = path;
+  savePreferredLayoutPath(ctx->activeLayoutPath);
+  ESP_LOGI(kUiTag, "switch layout path=%s", ctx->activeLayoutPath.c_str());
+  refreshLayout(ctx);
+}
+
+void openRuntimeConfig(RuntimeLoopContext* ctx) {
+  const bool hasCreds = hasStoredWifiCreds();
+  const bool wifiConnected = platform::net::isConnected();
+  ESP_LOGI(kUiTag, "open runtime config");
+  const ConfigInteractionResult result =
+      runConfigInteraction(20000, hasCreds, wifiConnected, true);
+  if (result.retryRequested) {
+    const char* requested =
+        result.selectedSsid.empty() ? nullptr : result.selectedSsid.c_str();
+    ctx->wifiReady = startWifiStation(10000, requested);
+  } else {
+    ctx->wifiReady = platform::net::isConnected();
+  }
+  refreshLayout(ctx);
+}
+
+void openRuntimeTouchCalibration(RuntimeLoopContext* ctx) {
+  ESP_LOGI(kUiTag, "open runtime touch calibration");
+  (void)runTouchCalibration(true);
+  refreshLayout(ctx);
+}
+
+void runtimeLoopTask(void* arg) {
+  RuntimeLoopContext* ctx = static_cast<RuntimeLoopContext*>(arg);
+  if (ctx == nullptr) {
+    vTaskDelete(nullptr);
+    return;
+  }
+  ESP_LOGI(kTag, "runtime loop task started core=%d", static_cast<int>(xPortGetCoreID()));
+  uint32_t lastTickMs = platform::millisMs();
+  bool touchDown = false;
+  uint16_t tapX = 0;
+  uint16_t tapY = 0;
+  uint32_t touchDownMs = 0;
+  constexpr uint32_t kTapMaxMs = 700;
+  for (;;) {
+    platform::sleepMs(kRuntimeTickPeriodMs);
+    const uint32_t nowMs = platform::millisMs();
+    if (AppConfig::kTouchEnabled) {
+      touch_input::Point p;
+      if (touch_input::read(p)) {
+        if (!touchDown) {
+          touchDown = true;
+          tapX = p.x;
+          tapY = p.y;
+          touchDownMs = nowMs;
+          ESP_LOGI(kTouchTag, "runtime tap down x=%u y=%u", tapX, tapY);
+        }
+      } else if (touchDown) {
+        const uint32_t heldMs = nowMs - touchDownMs;
+        ESP_LOGI(kTouchTag, "runtime tap up x=%u y=%u held_ms=%u", tapX, tapY,
+                 static_cast<unsigned>(heldMs));
+        if (heldMs <= kTapMaxMs) {
+          bool handled = false;
+          const RuntimeMenuAction menuAction = hitTestRuntimeMenu(tapX, tapY, sRuntimeMenu.open);
+          if (menuAction != RuntimeMenuAction::None) {
+            handled = true;
+            ESP_LOGI(kUiTag, "menu action=%d x=%u y=%u", static_cast<int>(menuAction), tapX, tapY);
+            if (menuAction == RuntimeMenuAction::Toggle) {
+              const bool newOpen = !sRuntimeMenu.open;
+              if (newOpen != sRuntimeMenu.open) {
+                sRuntimeMenu.open = newOpen;
+                sRuntimeMenu.dirty = true;
+                if (!sRuntimeMenu.open) {
+                  refreshLayout(ctx);
+                }
+              }
+            } else if (menuAction == RuntimeMenuAction::Dismiss) {
+              if (sRuntimeMenu.open) {
+                sRuntimeMenu.open = false;
+                sRuntimeMenu.dirty = true;
+                refreshLayout(ctx);
+              }
+            } else if (menuAction == RuntimeMenuAction::SelectLayoutA) {
+              sRuntimeMenu.open = false;
+              sRuntimeMenu.dirty = true;
+              switchLayout(ctx, kLayoutAPath);
+            } else if (menuAction == RuntimeMenuAction::SelectLayoutB) {
+              sRuntimeMenu.open = false;
+              sRuntimeMenu.dirty = true;
+              switchLayout(ctx, kLayoutBPath);
+            } else if (menuAction == RuntimeMenuAction::SelectLayoutNyt) {
+              sRuntimeMenu.open = false;
+              sRuntimeMenu.dirty = true;
+              switchLayout(ctx, kLayoutNytPath);
+            } else if (menuAction == RuntimeMenuAction::OpenConfig) {
+              sRuntimeMenu.open = false;
+              sRuntimeMenu.dirty = true;
+              openRuntimeConfig(ctx);
+            } else if (menuAction == RuntimeMenuAction::OpenTouchCalibration) {
+              sRuntimeMenu.open = false;
+              sRuntimeMenu.dirty = true;
+              openRuntimeTouchCalibration(ctx);
+            }
+          } else {
+            handled = layout_runtime::onTap(tapX, tapY);
+          }
+          ESP_LOGI(kTouchTag, "runtime tap dispatch x=%u y=%u handled=%d menu_open=%d", tapX, tapY,
+                   handled ? 1 : 0, sRuntimeMenu.open ? 1 : 0);
+        }
+        touchDown = false;
+      }
+    }
+    if (!sRuntimeMenu.open) {
+      layout_runtime::tick(nowMs);
+    }
+    if (sRuntimeMenu.dirty) {
+      drawRuntimeMenuButton(sRuntimeMenu.open);
+      if (sRuntimeMenu.open) {
+        drawRuntimeMenuOverlay(ctx->activeLayoutPath);
+      }
+      sRuntimeMenu.dirty = false;
+    } else if (!sRuntimeMenu.open) {
+      // Keep button visible atop widget redraw activity.
+      drawRuntimeMenuButton(false);
+    }
+    if (nowMs - lastTickMs >= kBaselineLoopPeriodMs) {
+      lastTickMs = nowMs;
+      boot::markLoop(ctx->baselineState, ctx->wifiReady, kBaselineEnabled, kBaselineLoopPeriodMs);
+      logHeapLargest();
+    }
+  }
+}
 }  // namespace
 
 extern "C" void app_main() {
@@ -890,10 +1403,13 @@ extern "C" void app_main() {
   if (AppConfig::kTouchEnabled) {
     if (touch_input::init()) {
       ESP_LOGI(kTouchTag, "touch ready after tft init");
-      (void)runTouchCalibrationIfNeeded();
+      (void)runTouchCalibration(false);
+      (void)runDisplayModeCalibrationIfNeeded();
     } else {
       ESP_LOGE(kTouchTag, "touch init failed after tft init");
     }
+  } else {
+    (void)runDisplayModeCalibrationIfNeeded();
   }
 
   const bool savedCreds = hasStoredWifiCreds();
@@ -960,24 +1476,48 @@ extern "C" void app_main() {
                              geo.utcOffsetMinutes, geo.hasUtcOffset);
   boot::mark(baselineState, "geo_time_ready", kBaselineEnabled);
 
+  std::string activeLayoutPath = loadPreferredLayoutPath();
   ESP_LOGI(kBootTag, "idf scaffold ready");
   boot::mark(baselineState, "display_ready", kBaselineEnabled);
-  const bool runtimeReady = layout_runtime::begin("/littlefs/screen_layout_b.json");
+  bool runtimeReady = layout_runtime::begin(activeLayoutPath.c_str());
+  if (!runtimeReady && activeLayoutPath != kLayoutAPath) {
+    ESP_LOGW(kUiTag, "preferred layout failed path=%s fallback=%s", activeLayoutPath.c_str(),
+             kLayoutAPath);
+    activeLayoutPath = kLayoutAPath;
+    runtimeReady = layout_runtime::begin(activeLayoutPath.c_str());
+  }
   ESP_LOGI(kBootTag, "layout runtime=%d", runtimeReady ? 1 : 0);
   ESP_LOGI(kBootTag, "setup complete");
   boot::mark(baselineState, "setup_complete", kBaselineEnabled);
   logHeapLargest();
 
-  ESP_LOGI(kTag, "ESP-IDF runtime loop started (DisplayManager port in progress).");
-  uint32_t lastTickMs = platform::millisMs();
-  for (;;) {
-    platform::sleepMs(kRuntimeTickPeriodMs);
-    const uint32_t nowMs = platform::millisMs();
-    layout_runtime::tick(nowMs);
-    if (nowMs - lastTickMs >= kBaselineLoopPeriodMs) {
-      lastTickMs = nowMs;
-      boot::markLoop(baselineState, wifiReady, kBaselineEnabled, kBaselineLoopPeriodMs);
-      logHeapLargest();
+  auto* loopCtx = new RuntimeLoopContext();
+  if (loopCtx != nullptr) {
+    loopCtx->baselineState = baselineState;
+    loopCtx->wifiReady = wifiReady;
+    loopCtx->activeLayoutPath = activeLayoutPath;
+  }
+  if (loopCtx == nullptr ||
+      xTaskCreatePinnedToCore(runtimeLoopTask, "costar_runtime", 8192, loopCtx, 4, &sRuntimeTaskHandle,
+                              1) != pdPASS) {
+    ESP_LOGE(kTag, "failed to start runtime task on core 1; running inline");
+    delete loopCtx;
+    ESP_LOGI(kTag, "ESP-IDF runtime loop started (inline)");
+    uint32_t lastTickMs = platform::millisMs();
+    for (;;) {
+      platform::sleepMs(kRuntimeTickPeriodMs);
+      const uint32_t nowMs = platform::millisMs();
+      layout_runtime::tick(nowMs);
+      if (nowMs - lastTickMs >= kBaselineLoopPeriodMs) {
+        lastTickMs = nowMs;
+        boot::markLoop(baselineState, wifiReady, kBaselineEnabled, kBaselineLoopPeriodMs);
+        logHeapLargest();
+      }
     }
+  }
+
+  ESP_LOGI(kTag, "runtime task pinned core=1; main task idling on core=%d", static_cast<int>(xPortGetCoreID()));
+  for (;;) {
+    platform::sleepMs(1000);
   }
 }

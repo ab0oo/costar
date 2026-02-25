@@ -1,5 +1,98 @@
 # Handoff Runbook (Release Prep)
 
+## 0) Session Log - Final Transition Push (2026-02-25, Late)
+
+Summary: This session moved the IDF path from “core runtime parity” into “final-stage release parity”, including DSL interaction features (tap HTTP + modal), NYT fullscreen layout, HA speaker touch-region actions, icon caching, and runtime menu-based layout switching/config access. The remaining work is now heavily hardware-validation and soak-test focused.
+
+### What Was Completed This Session
+
+- Runtime/task behavior:
+  - Runtime loop pinned to core 1; HTTP worker pinned to core 0.
+  - Added touch dispatch logging and region hit/miss logging.
+  - Added post-tap delayed refresh (`~750ms`) for HTTP tap actions.
+
+- Transport/logging:
+  - Added/expanded HTTP request logging for provider/proxy calls and headers (with sensitive redaction).
+  - Reduced noisy `http start/http done/http hdr` logs from INFO to DEBUG to improve touch/menu debugging visibility.
+
+- Display/touch setup:
+  - Added display mode tuning support and calibration persistence.
+  - Updated behavior to skip interactive color-mode calibration when saved display tuning already exists.
+  - Added runtime entry to force touch recalibration from menu.
+
+- Layout/runtime:
+  - Added runtime menu button + overlay in top-right with actions:
+    - switch layouts
+    - open Wi-Fi/units config
+    - launch touch calibration
+  - Added persisted preferred layout (`ui/layout`) with boot fallback to layout A.
+  - Added fullscreen NYT layout:
+    - `data/screen_layout_nyt.json`
+  - Updated runtime menu to include NYT option.
+
+- DSL engine parity additions:
+  - Added `ui.modals` parsing/rendering.
+  - Added `ui.touch_regions` support:
+    - `on_touch.action = "modal"` (+ optional `dismiss_ms`)
+    - `on_touch.action = "http"` (url/method/content_type/headers/body)
+  - Added modal open/close and auto-dismiss handling.
+  - Added HTTP touch-region action execution path with delayed refresh.
+
+- Content/widgets:
+  - Restored HA icon state coloring in DSL (`on` -> yellow, otherwise blue).
+  - Added icon memory + LittleFS cache path for remote icon fetches (`/littlefs/icon_cache`).
+  - Added and validated inclusion of:
+    - `data/dsl_available/nyt_headlines.json`
+    - `data/dsl_available/ha_speaker_card.json`
+
+### Latest Built Image (for verification)
+
+- App version: `498608a-dirty`
+- Compile time: `Feb 24 2026 23:00:57`
+- ELF SHA256: `3ef3f1b537c38a7b5d0d7c895baa97fa90a1e1dcfecbf04e1a87e559448d6f1b`
+- ESP-IDF: `v6.1-dev-2636-g97d9585357`
+
+### Known Open Issue (Top Priority)
+
+- Runtime menu still had field reports of repeated redraw + unresponsive row selection.
+- Last patch changed menu rendering to dirty/event-driven and added explicit `ui: menu action=...` logs.
+- This patch is built but needs hardware confirmation.
+
+### Where We Stand vs Parity
+
+- DSL/runtime/interaction feature parity: largely in place.
+- Remaining gap is now mostly verification quality:
+  - on-device visual/touch behavior across all key layouts/widgets
+  - HA authenticated control reliability
+  - stability/soak confidence
+
+### Tomorrow’s Recommended Verification Order
+
+1. Flash latest image + LittleFS and confirm image identity via boot logs.
+2. Validate runtime menu:
+   - open/close behavior
+   - row hit selection for Layout A/B/NYT + Config + Touch Cal
+   - verify `ui: menu action=...` logs on each tap
+3. Validate NYT fullscreen:
+   - feed fetch
+   - headline taps open modal
+   - modal close and auto-dismiss behavior
+4. Validate HA speaker card:
+   - modal tap region
+   - VOL-/VOL+ touch-region HTTP actions
+5. Validate HA 6-card screen:
+   - icon cache hit behavior (reduced repeated fetches)
+   - tap actions + post-tap refresh responsiveness
+6. Run 2-4 hour soak:
+   - no crashes, no stuck touch/menu state, no progressive heap collapse
+
+### Final Transition Exit Criteria (Practical)
+
+- Menu navigation + layout switching consistently usable.
+- NYT + HA speaker + HA 6-card + weather/forecast/clock all function on hardware.
+- Tap actions and modal interactions stable.
+- Soak run clean enough to retire Arduino path safely.
+
 ## 0) Session Log - ESP-IDF DSL Engine Parity (2026-02-25)
 
 Summary: Ported the generic DSL runtime in ESP-IDF toward Arduino parity, using `origin/http_client_rewrite` as the reference for fetch/runtime behavior. This was done as an engine implementation (not widget-specific C++).

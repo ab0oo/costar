@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "screen": {
+    "id": "nyt-fullscreen",
+    "orientation": "landscape",
+    "width": 320,
+    "height": 240,
+    "regions": [
+      {
+        "id": "nyt-headlines",
+        "widget": "nyt-headlines",
+        "x": 0,
+        "y": 0,
+        "w": 320,
+        "h": 240,
+        "draw_border": false
+      }
+    ]
+  },
+  "widget_defs": {
+    "nyt-headlines": {
+      "type": "dsl",
+      "update_ms": 1000,
+      "settings": {
+        "dsl_path": "/dsl_available/nyt_headlines.json",
+        "rss_proxy_base": "http://vps.gorkos.net:8085",
+        "limit": "5"
+      }
+    }
+  }
+}

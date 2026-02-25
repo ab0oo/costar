@@ -178,9 +178,12 @@ bool applyPanelRuntimeTuning() {
   constexpr const char* kInvertOnKey = "inv_on";
 
   const bool hasColorSetting = platform::prefs::getBool(kDisplayPrefsNs, kColorSetKey, false);
-  const bool useBgr = platform::prefs::getBool(kDisplayPrefsNs, kColorBgrKey, false);
+  const bool useBgr =
+      hasColorSetting ? platform::prefs::getBool(kDisplayPrefsNs, kColorBgrKey, false) : false;
   const bool hasInvertSetting = platform::prefs::getBool(kDisplayPrefsNs, kInvertSetKey, false);
-  const bool useInvert = platform::prefs::getBool(kDisplayPrefsNs, kInvertOnKey, false);
+  const bool storedInvert =
+      hasInvertSetting ? platform::prefs::getBool(kDisplayPrefsNs, kInvertOnKey, false) : false;
+  const bool useInvert = hasInvertSetting ? storedInvert : true;
 
   const uint8_t madctl = madctlForRotationAndOrder(rotation(), useBgr);
   if (!writeReg(0x36, &madctl, 1U)) {
@@ -191,9 +194,23 @@ bool applyPanelRuntimeTuning() {
   }
 
   ESP_LOGI(kTag,
-           "panel runtime tuning rot=%u madctl=0x%02x color_set=%d bgr=%d inv_set=%d invert=%d",
+           "panel runtime tuning rot=%u madctl=0x%02x color_set=%d bgr=%d inv_set=%d "
+           "invert(stored=%d applied=%d)",
            static_cast<unsigned>(rotation()), madctl, hasColorSetting ? 1 : 0, useBgr ? 1 : 0,
-           hasInvertSetting ? 1 : 0, useInvert ? 1 : 0);
+           hasInvertSetting ? 1 : 0, storedInvert ? 1 : 0, useInvert ? 1 : 0);
+  return true;
+}
+
+bool applyPanelRuntimeTuningExplicit(bool useBgr, bool useInvert) {
+  const uint8_t madctl = madctlForRotationAndOrder(rotation(), useBgr);
+  if (!writeReg(0x36, &madctl, 1U)) {
+    return false;
+  }
+  if (!writeCommand(useInvert ? 0x21 : 0x20)) {
+    return false;
+  }
+  ESP_LOGI(kTag, "panel explicit tuning rot=%u madctl=0x%02x bgr=%d invert=%d",
+           static_cast<unsigned>(rotation()), madctl, useBgr ? 1 : 0, useInvert ? 1 : 0);
   return true;
 }
 
@@ -212,7 +229,7 @@ bool setAddressWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
 }
 
 bool fillColor565(uint16_t color, uint32_t pixelCount) {
-  static constexpr size_t kChunkPixels = 96;
+  static constexpr size_t kChunkPixels = 2048;
   uint8_t line[kChunkPixels * 2];
   const uint8_t hi = static_cast<uint8_t>(color >> 8);
   const uint8_t lo = static_cast<uint8_t>(color & 0xFF);
@@ -303,6 +320,25 @@ bool initPanel() {
   sPanelInitialized = true;
   ESP_LOGI(kTag, "panel init complete (ili9341-style sequence)");
   return true;
+}
+
+bool applyPanelTuning(bool bgr, bool invert, bool persist) {
+  constexpr const char* kDisplayPrefsNs = "display";
+  constexpr const char* kColorSetKey = "color_set";
+  constexpr const char* kColorBgrKey = "color_bgr";
+  constexpr const char* kInvertSetKey = "inv_set";
+  constexpr const char* kInvertOnKey = "inv_on";
+
+  if (!sPanelInitialized && !initPanel()) {
+    return false;
+  }
+  if (persist) {
+    (void)platform::prefs::putBool(kDisplayPrefsNs, kColorSetKey, true);
+    (void)platform::prefs::putBool(kDisplayPrefsNs, kColorBgrKey, bgr);
+    (void)platform::prefs::putBool(kDisplayPrefsNs, kInvertSetKey, true);
+    (void)platform::prefs::putBool(kDisplayPrefsNs, kInvertOnKey, invert);
+  }
+  return applyPanelRuntimeTuningExplicit(bgr, invert);
 }
 
 bool drawSanityPattern() {
@@ -421,9 +457,9 @@ bool drawRgb565(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t* 
     return false;
   }
 
-  // Panel expects RGB565 as big-endian bytes on SPI.
-  static constexpr size_t kChunkPixels = 128;
-  uint8_t chunk[kChunkPixels * 2];
+  // Panel expects RGB565 as big-endian bytes on SPI. Keep chunks large to reduce SPI transaction overhead.
+  static constexpr size_t kChunkPixels = 2048;
+  static uint8_t chunk[kChunkPixels * 2];
   const uint32_t total = static_cast<uint32_t>(outW) * static_cast<uint32_t>(outH);
   uint32_t idx = 0;
   while (idx < total) {

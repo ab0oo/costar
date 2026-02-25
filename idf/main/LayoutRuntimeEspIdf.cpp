@@ -36,6 +36,7 @@ bool sActive = false;
 bool sDrawn = false;
 uint32_t sLastPulseMs = 0;
 bool sPulseOn = false;
+std::string sWidgetDefsObj;
 
 size_t skipWs(const std::string& s, size_t i) {
   while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i])) != 0) {
@@ -145,6 +146,94 @@ bool extractRegionObjects(const std::string& json, std::vector<std::string>& out
   return !out.empty();
 }
 
+bool extractObjectForKey(const std::string& json, size_t searchStart, const std::string& quotedKey,
+                         std::string& outObject) {
+  const size_t keyPos = json.find(quotedKey, searchStart);
+  if (keyPos == std::string::npos) {
+    return false;
+  }
+  size_t colon = json.find(':', keyPos + quotedKey.size());
+  if (colon == std::string::npos) {
+    return false;
+  }
+  colon = skipWs(json, colon + 1);
+  if (colon >= json.size() || json[colon] != '{') {
+    return false;
+  }
+
+  int depth = 0;
+  bool inString = false;
+  bool esc = false;
+  for (size_t i = colon; i < json.size(); ++i) {
+    const char c = json[i];
+    if (inString) {
+      if (esc) {
+        esc = false;
+      } else if (c == '\\') {
+        esc = true;
+      } else if (c == '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (c == '"') {
+      inString = true;
+      continue;
+    }
+    if (c == '{') {
+      ++depth;
+    } else if (c == '}') {
+      --depth;
+      if (depth == 0) {
+        outObject = json.substr(colon, i - colon + 1);
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool resolveWidgetDslPath(const std::string& widget, std::string& outPath) {
+  outPath.clear();
+  if (sWidgetDefsObj.empty() || widget.empty()) {
+    return false;
+  }
+  std::string widgetObj;
+  const std::string key = "\"" + widget + "\"";
+  if (!extractObjectForKey(sWidgetDefsObj, 0, key, widgetObj)) {
+    return false;
+  }
+  std::string settingsObj;
+  if (!extractObjectForKey(widgetObj, 0, "\"settings\"", settingsObj)) {
+    return false;
+  }
+  const std::string dslPath = findStringField(settingsObj, "dsl_path");
+  if (dslPath.empty()) {
+    return false;
+  }
+  if (dslPath.rfind("/littlefs/", 0) == 0) {
+    outPath = dslPath;
+  } else if (!dslPath.empty() && dslPath.front() == '/') {
+    outPath = "/littlefs" + dslPath;
+  } else {
+    outPath = "/littlefs/" + dslPath;
+  }
+  return true;
+}
+
+bool resolveWidgetSettingsObject(const std::string& widget, std::string& outSettingsObj) {
+  outSettingsObj.clear();
+  if (sWidgetDefsObj.empty() || widget.empty()) {
+    return false;
+  }
+  std::string widgetObj;
+  const std::string key = "\"" + widget + "\"";
+  if (!extractObjectForKey(sWidgetDefsObj, 0, key, widgetObj)) {
+    return false;
+  }
+  return extractObjectForKey(widgetObj, 0, "\"settings\"", outSettingsObj);
+}
+
 std::string readFile(const char* path) {
   if (path == nullptr || *path == '\0') {
     return {};
@@ -228,12 +317,15 @@ bool begin(const char* layoutPath) {
   sDrawn = false;
   sLastPulseMs = 0;
   sPulseOn = false;
+  dsl_widget_runtime::reset();
 
   const std::string json = readFile(layoutPath);
   if (json.empty()) {
     ESP_LOGE(kTag, "layout read failed path=%s", layoutPath != nullptr ? layoutPath : "(null)");
     return false;
   }
+  sWidgetDefsObj.clear();
+  (void)extractObjectForKey(json, 0, "\"widget_defs\"", sWidgetDefsObj);
 
   std::vector<std::string> regionObjects;
   if (!extractRegionObjects(json, regionObjects)) {
@@ -287,19 +379,45 @@ bool begin(const char* layoutPath) {
   }
 
   drawScene();
+  int started = 0;
   for (const Region& r : sRegions) {
     if (r.widget.empty()) {
       continue;
     }
-    std::string dslName = r.widget;
-    std::replace(dslName.begin(), dslName.end(), '-', '_');
-    const std::string dslPath = "/littlefs/dsl_active/" + dslName + ".json";
-    if (dsl_widget_runtime::begin(r.widget.c_str(), dslPath.c_str(), r.x, r.y, r.w, r.h)) {
-      break;  // first active DSL widget for this migration step
+    std::vector<std::string> candidatePaths;
+    std::string settingsObj;
+    (void)resolveWidgetSettingsObject(r.widget, settingsObj);
+    std::string dslPath;
+    if (resolveWidgetDslPath(r.widget, dslPath)) {
+      candidatePaths.push_back(dslPath);
+      ESP_LOGI(kTag, "widget=%s dsl path from widget_defs: %s", r.widget.c_str(), dslPath.c_str());
+    } else {
+      std::string dslName = r.widget;
+      std::replace(dslName.begin(), dslName.end(), '-', '_');
+      dslPath = "/littlefs/dsl_active/" + dslName + ".json";
+      candidatePaths.push_back(dslPath);
+      ESP_LOGW(kTag, "widget=%s missing widget_defs dsl_path, fallback=%s", r.widget.c_str(),
+               dslPath.c_str());
+      if (r.widget == "clock-full") {
+        candidatePaths.push_back("/littlefs/dsl_active/clock_analog_full.json");
+      }
+    }
+
+    bool widgetStarted = false;
+    for (const std::string& path : candidatePaths) {
+      const char* settingsJson = settingsObj.empty() ? nullptr : settingsObj.c_str();
+      if (dsl_widget_runtime::begin(r.widget.c_str(), path.c_str(), r.x, r.y, r.w, r.h, settingsJson)) {
+        widgetStarted = true;
+        break;
+      }
+    }
+    if (widgetStarted) {
+      ++started;
     }
   }
-  sActive = true;
-  return true;
+  sActive = started > 0;
+  ESP_LOGI(kTag, "dsl widgets started=%d", started);
+  return sActive;
 }
 
 void tick(uint32_t nowMs) {
@@ -309,25 +427,28 @@ void tick(uint32_t nowMs) {
   if (!sDrawn) {
     drawScene();
   }
-
-  // Lightweight heartbeat: pulse border of first region once/sec so runtime
-  // phase is visually and temporally alive while full widget renderer is ported.
-  if (sRegions.empty()) {
-    return;
-  }
-  if (nowMs - sLastPulseMs < 1000U) {
-    return;
-  }
-  sLastPulseMs = nowMs;
-  sPulseOn = !sPulseOn;
   dsl_widget_runtime::tick(nowMs);
+}
 
-  const Region& r = sRegions.front();
-  const uint16_t pulse = sPulseOn ? 0xFFE0 : kBorder;
-  (void)display_spi::fillRect(r.x, r.y, r.w, 1, pulse);
-  (void)display_spi::fillRect(r.x, static_cast<uint16_t>(r.y + r.h - 1), r.w, 1, pulse);
-  (void)display_spi::fillRect(r.x, r.y, 1, r.h, pulse);
-  (void)display_spi::fillRect(static_cast<uint16_t>(r.x + r.w - 1), r.y, 1, r.h, pulse);
+bool onTap(uint16_t x, uint16_t y) {
+  if (!sActive) {
+    ESP_LOGW(kTag, "tap ignored inactive x=%u y=%u", static_cast<unsigned>(x),
+             static_cast<unsigned>(y));
+    return false;
+  }
+  for (const Region& r : sRegions) {
+    const uint16_t x2 = static_cast<uint16_t>(r.x + r.w);
+    const uint16_t y2 = static_cast<uint16_t>(r.y + r.h);
+    if (x >= r.x && x < x2 && y >= r.y && y < y2 && !r.widget.empty()) {
+      const uint16_t localX = static_cast<uint16_t>(x - r.x);
+      const uint16_t localY = static_cast<uint16_t>(y - r.y);
+      ESP_LOGI(kTag, "tap hit region id=%s widget=%s local=%u,%u", r.id.c_str(), r.widget.c_str(),
+               static_cast<unsigned>(localX), static_cast<unsigned>(localY));
+      return dsl_widget_runtime::onTap(r.widget.c_str(), localX, localY);
+    }
+  }
+  ESP_LOGW(kTag, "tap miss x=%u y=%u", static_cast<unsigned>(x), static_cast<unsigned>(y));
+  return false;
 }
 
 bool isActive() { return sActive; }
