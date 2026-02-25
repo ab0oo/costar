@@ -1,5 +1,59 @@
 # Handoff Runbook (Release Prep)
 
+## 0) Session Log - PlatformIO IDF Default Cutover (2026-02-25, Night)
+
+Summary: We cut PlatformIO over to ESP-IDF as the default environment, preserved Arduino as a legacy env, and fixed the build routing so `pio run` now compiles the IDF app path instead of Arduino `src/` sources.
+
+### What Was Completed
+
+- PlatformIO default env switched to IDF:
+  - `platformio.ini`
+  - `[platformio] default_envs = esp32dev_idf`
+  - Added `[env:esp32dev_idf]`
+  - Renamed Arduino env to `[env:esp32dev_arduino_legacy]`
+
+- PlatformIO ESP-IDF source routing fixed:
+  - Added explicit ESP-IDF component definition under:
+    - `src/CMakeLists.txt`
+  - This component now builds from:
+    - `idf/main/*.cpp`
+    - shared runtime files in `src/core/*` used by IDF
+
+- PlatformIO IDF component dependency manifest added:
+  - `src/idf_component.yml`
+  - Includes:
+    - `joltwallet/littlefs`
+    - `lvgl/lvgl`
+    - `espressif/esp_websocket_client` pinned to `==1.4.0` for PIO/IDF 5.5 compatibility
+
+- IDF env partition size alignment fixed for PlatformIO:
+  - `platformio.ini` now sets:
+    - `board_build.partitions = idf/partitions.csv`
+  - This resolves false app-size overflow checks from default 1MB app partition assumptions.
+
+- Build warning cleanup:
+  - Fixed `-Wformat-truncation` in:
+    - `idf/main/ConfigScreenEspIdf.cpp`
+
+- Repository hygiene:
+  - Added root-level PIO ESP-IDF generated-artifact ignores in:
+    - `.gitignore`
+
+### Build Verification (PlatformIO)
+
+- Verified with local venv binary:
+  - `/home/johgor/.venv/bin/pio project config`
+  - `/home/johgor/.venv/bin/pio run`
+- Result:
+  - `pio run` succeeds on default `esp32dev_idf`.
+  - Output includes successful `firmware.bin` generation.
+
+### Current Caveats
+
+- Configure-time warning still appears:
+  - `Flash memory size mismatch detected. Expected 4MB, found 2MB`
+- This did not block build success, but board/flash profile should be double-checked on target hardware before release tagging.
+
 ## 0) Session Log - HA WS Narrowing, Soak Prep, and Parity Audit (2026-02-25, Evening)
 
 Summary: This session converted HA WS from a global event firehose to per-entity trigger subscriptions, added WS debugging/probe tooling, improved first-paint latency for HA cards, and performed a direct Arduino-vs-IDF DSL primitive comparison.

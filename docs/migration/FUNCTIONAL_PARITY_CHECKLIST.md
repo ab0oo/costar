@@ -42,6 +42,8 @@ Legend:
 ## 5. Stability + Verification
 
 - `[x]` IDF build succeeds with `COSTAR_BUILD_LITTLEFS_IMAGE=OFF`
+- `[x]` PlatformIO default env cutover to IDF completed (`default_envs = esp32dev_idf`)
+- `[x]` `pio run` succeeds on IDF env and emits firmware image
 - `[ ]` hardware validation of active screens:
   - `weather_now`
   - `forecast`

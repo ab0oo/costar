@@ -27,6 +27,12 @@ export PORT=/dev/ttyUSB0
 ```bash
 mkdir -p logs
 ```
+4. PlatformIO path (default env is now IDF):
+```bash
+/home/johgor/.venv/bin/pio project config
+/home/johgor/.venv/bin/pio run
+```
+Expected: default env is `esp32dev_idf` and build reaches `SUCCESS`.
 
 ## 2) Build + Flash
 
@@ -46,6 +52,11 @@ idf.py -C idf build flash
 ```bash
 idf.py -C idf -p "$PORT" erase-flash
 idf.py -C idf -p "$PORT" flash
+```
+5. PlatformIO equivalents (if preferred):
+```bash
+/home/johgor/.venv/bin/pio run
+/home/johgor/.venv/bin/pio run -t upload
 ```
 
 ## 3) Capture Session Log
