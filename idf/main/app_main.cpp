@@ -3,7 +3,10 @@
 #include "ConfigScreenEspIdf.h"
 #include "DisplayBootstrapEspIdf.h"
 #include "DisplaySpiEspIdf.h"
+#include "LayoutRuntimeEspIdf.h"
 #include "TouchInputEspIdf.h"
+#include "TextEntryEspIdf.h"
+#include "LvglPasswordPrompt.h"
 #include "core/BootCommon.h"
 #include "core/TimeSync.h"
 #include "platform/Fs.h"
@@ -13,6 +16,7 @@
 
 #include "esp_err.h"
 #include "esp_event.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
@@ -25,6 +29,7 @@
 #include <algorithm>
 #include <string>
 #include <vector>
+#include <cstdlib>
 
 namespace {
 constexpr const char* kTag = "costar-idf";
@@ -32,11 +37,12 @@ constexpr const char* kBootTag = "boot";
 constexpr const char* kWifiTag = "wifi";
 constexpr const char* kFsTag = "fs";
 constexpr const char* kTouchTag = "touch";
-constexpr uint32_t kTouchBootProbeMs = 10000;
+constexpr uint32_t kTouchBootProbeMs = 0;
 constexpr uint32_t kConfigPostFailMs = 12000;
 constexpr uint32_t kConfigPostConnectMs = 2500;
 constexpr bool kBaselineEnabled = true;
 constexpr unsigned long kBaselineLoopPeriodMs = 30000UL;
+constexpr unsigned long kRuntimeTickPeriodMs = 100UL;
 constexpr EventBits_t kWifiConnectedBit = BIT0;
 constexpr EventBits_t kWifiFailedBit = BIT1;
 
@@ -160,10 +166,15 @@ void applySavedStaConfig() {
   ESP_LOGI(kWifiTag, "loaded credentials from prefs ns=wifi");
 }
 
-bool startWifiStation(uint32_t timeoutMs) {
+bool startWifiStation(uint32_t timeoutMs, const char* requestedSsid = nullptr) {
   ESP_LOGI(kBootTag, "start wifi provisioning");
   if (!ensureWifiStackReady()) {
     return false;
+  }
+  if (requestedSsid != nullptr && *requestedSsid != '\0') {
+    config_screen::showWifiStatus("CONNECTING WIFI", requestedSsid, false);
+  } else {
+    config_screen::showWifiStatus("CONNECTING WIFI", "TRYING SAVED CREDENTIALS", false);
   }
   (void)esp_wifi_disconnect();
   applySavedStaConfig();
@@ -176,9 +187,13 @@ bool startWifiStation(uint32_t timeoutMs) {
                           pdMS_TO_TICKS(timeoutMs));
   if ((bits & kWifiConnectedBit) != 0) {
     ESP_LOGI(kWifiTag, "connected with stored credentials");
+    config_screen::showWifiStatus("WIFI CONNECTED", requestedSsid != nullptr ? requestedSsid : "", false);
+    platform::sleepMs(500);
     return true;
   }
   ESP_LOGW(kWifiTag, "connect timeout/no stored credentials");
+  config_screen::showWifiStatus("CONNECT FAILED", "TAP RETRY OR SCAN", true);
+  platform::sleepMs(700);
   return false;
 }
 
@@ -235,11 +250,293 @@ bool hasStoredWifiCreds() {
   return !savedSsid.empty();
 }
 
+void drawCalibrationTarget(uint16_t x, uint16_t y, uint16_t color) {
+  const uint16_t dot = 8;
+  const uint16_t arm = 16;
+  const uint16_t halfDot = dot / 2;
+  (void)display_spi::fillRect(static_cast<uint16_t>(x - halfDot), static_cast<uint16_t>(y - 1), dot, 3,
+                              color);
+  (void)display_spi::fillRect(static_cast<uint16_t>(x - 1), static_cast<uint16_t>(y - halfDot), 3, dot,
+                              color);
+  (void)display_spi::fillRect(static_cast<uint16_t>(x - 1), static_cast<uint16_t>(y - arm), 3,
+                              static_cast<uint16_t>(arm * 2), color);
+  (void)display_spi::fillRect(static_cast<uint16_t>(x - arm), static_cast<uint16_t>(y - 1),
+                              static_cast<uint16_t>(arm * 2), 3, color);
+}
+
+bool captureCalibrationPoint(uint16_t targetX, uint16_t targetY, uint16_t& rawX, uint16_t& rawY,
+                             bool requireNearTarget) {
+  const uint16_t cBg = 0x0000;
+  const uint16_t cTarget = 0xFFFF;
+
+  (void)display_spi::clear(cBg);
+  drawCalibrationTarget(targetX, targetY, cTarget);
+
+  const uint32_t timeoutMs = 20000;
+  const uint32_t start = platform::millisMs();
+  // Require release before starting this corner capture to avoid carrying
+  // a lingering previous press into the next point.
+  while (platform::millisMs() - start < 1500U) {
+    touch_input::Point p;
+    if (!touch_input::read(p)) {
+      break;
+    }
+    platform::sleepMs(12);
+  }
+
+  uint32_t sumX = 0;
+  uint32_t sumY = 0;
+  uint16_t count = 0;
+  bool touching = false;
+  uint16_t minRawX = 0xFFFF;
+  uint16_t maxRawX = 0;
+  uint16_t minRawY = 0xFFFF;
+  uint16_t maxRawY = 0;
+  constexpr uint16_t kMinSamples = 8;
+  constexpr uint16_t kMaxRawJitter = 180;
+  constexpr int32_t kNearRadiusPx = 40;
+
+  while (platform::millisMs() - start < timeoutMs) {
+    touch_input::Point p;
+    if (touch_input::read(p)) {
+      touching = true;
+      if (requireNearTarget) {
+        const int32_t dx = static_cast<int32_t>(p.x) - static_cast<int32_t>(targetX);
+        const int32_t dy = static_cast<int32_t>(p.y) - static_cast<int32_t>(targetY);
+        if (dx < -kNearRadiusPx || dx > kNearRadiusPx || dy < -kNearRadiusPx ||
+            dy > kNearRadiusPx) {
+          platform::sleepMs(20);
+          continue;
+        }
+      }
+      if (count < 24) {
+        sumX += p.rawX;
+        sumY += p.rawY;
+        minRawX = std::min<uint16_t>(minRawX, p.rawX);
+        maxRawX = std::max<uint16_t>(maxRawX, p.rawX);
+        minRawY = std::min<uint16_t>(minRawY, p.rawY);
+        maxRawY = std::max<uint16_t>(maxRawY, p.rawY);
+        ++count;
+      }
+      config_screen::markTouch(p.x, p.y);
+      platform::sleepMs(20);
+      continue;
+    }
+
+    if (touching) {
+      const uint16_t jitterX = static_cast<uint16_t>(maxRawX - minRawX);
+      const uint16_t jitterY = static_cast<uint16_t>(maxRawY - minRawY);
+      if (count >= kMinSamples && jitterX <= kMaxRawJitter && jitterY <= kMaxRawJitter) {
+        rawX = static_cast<uint16_t>(sumX / count);
+        rawY = static_cast<uint16_t>(sumY / count);
+        platform::sleepMs(120);
+        return true;
+      }
+      touching = false;
+      sumX = 0;
+      sumY = 0;
+      count = 0;
+      minRawX = 0xFFFF;
+      maxRawX = 0;
+      minRawY = 0xFFFF;
+      maxRawY = 0;
+    }
+    platform::sleepMs(12);
+  }
+  return false;
+}
+
+bool runTouchCalibrationIfNeeded() {
+  touch_input::Calibration cal = {};
+  if (touch_input::loadCalibration(cal)) {
+    ESP_LOGI(kTouchTag, "cal loaded minX=%u maxX=%u minY=%u maxY=%u invX=%d invY=%d", cal.rawMinX,
+             cal.rawMaxX, cal.rawMinY, cal.rawMaxY, cal.invertX ? 1 : 0, cal.invertY ? 1 : 0);
+    return true;
+  }
+
+  ESP_LOGW(kTouchTag, "no persisted calibration; entering calibration");
+  const uint16_t w = AppConfig::kScreenWidth;
+  const uint16_t h = AppConfig::kScreenHeight;
+  const uint16_t m = 24;
+  const uint16_t ulX = m;
+  const uint16_t ulY = m;
+  const uint16_t urX = static_cast<uint16_t>(w - 1 - m);
+  const uint16_t urY = m;
+  const uint16_t llX = m;
+  const uint16_t llY = static_cast<uint16_t>(h - 1 - m);
+  const uint16_t lrX = static_cast<uint16_t>(w - 1 - m);
+  const uint16_t lrY = static_cast<uint16_t>(h - 1 - m);
+
+  auto solveCalibration = [&](uint16_t ulRawX, uint16_t ulRawY, uint16_t urRawX, uint16_t urRawY,
+                              uint16_t llRawX, uint16_t llRawY, uint16_t lrRawX, uint16_t lrRawY,
+                              touch_input::Calibration& calibrated) -> bool {
+    const int32_t horizDxX = std::abs(static_cast<int32_t>(urRawX) - static_cast<int32_t>(ulRawX)) +
+                             std::abs(static_cast<int32_t>(lrRawX) - static_cast<int32_t>(llRawX));
+    const int32_t horizDxY = std::abs(static_cast<int32_t>(urRawY) - static_cast<int32_t>(ulRawY)) +
+                             std::abs(static_cast<int32_t>(lrRawY) - static_cast<int32_t>(llRawY));
+    const bool swapXY = horizDxY > horizDxX;
+
+    const uint16_t srcUlX = swapXY ? ulRawY : ulRawX;
+    const uint16_t srcUrX = swapXY ? urRawY : urRawX;
+    const uint16_t srcLlX = swapXY ? llRawY : llRawX;
+    const uint16_t srcLrX = swapXY ? lrRawY : lrRawX;
+    const uint16_t srcUlY = swapXY ? ulRawX : ulRawY;
+    const uint16_t srcUrY = swapXY ? urRawX : urRawY;
+    const uint16_t srcLlY = swapXY ? llRawX : llRawY;
+    const uint16_t srcLrY = swapXY ? lrRawX : lrRawY;
+
+    const uint16_t minRawX = std::min(std::min(srcUlX, srcUrX), std::min(srcLlX, srcLrX));
+    const uint16_t maxRawX = std::max(std::max(srcUlX, srcUrX), std::max(srcLlX, srcLrX));
+    const uint16_t minRawY = std::min(std::min(srcUlY, srcUrY), std::min(srcLlY, srcLrY));
+    const uint16_t maxRawY = std::max(std::max(srcUlY, srcUrY), std::max(srcLlY, srcLrY));
+    const uint16_t spanX = static_cast<uint16_t>(maxRawX - minRawX);
+    const uint16_t spanY = static_cast<uint16_t>(maxRawY - minRawY);
+    if (spanX < 600 || spanY < 600) {
+      return false;
+    }
+
+    // Corner targets are inset by "m" pixels, so the measured raw min/max
+    // correspond to x=m..(w-1-m), y=m..(h-1-m). Extrapolate to true screen
+    // edges so mapped touch coordinates don't clip inward by ~m pixels.
+    const int32_t mPx = 24;
+    const int32_t wPx = static_cast<int32_t>(AppConfig::kScreenWidth);
+    const int32_t hPx = static_cast<int32_t>(AppConfig::kScreenHeight);
+    const int32_t innerW = wPx - 1 - 2 * mPx;
+    const int32_t innerH = hPx - 1 - 2 * mPx;
+    if (innerW <= 0 || innerH <= 0) {
+      return false;
+    }
+
+    const int32_t rawSpanX = static_cast<int32_t>(maxRawX) - static_cast<int32_t>(minRawX);
+    const int32_t rawSpanY = static_cast<int32_t>(maxRawY) - static_cast<int32_t>(minRawY);
+    const int32_t edgePadRawX = (rawSpanX * mPx) / innerW;
+    const int32_t edgePadRawY = (rawSpanY * mPx) / innerH;
+
+    int32_t effectiveMinX = static_cast<int32_t>(minRawX) - edgePadRawX;
+    int32_t effectiveMaxX = static_cast<int32_t>(maxRawX) + edgePadRawX;
+    int32_t effectiveMinY = static_cast<int32_t>(minRawY) - edgePadRawY;
+    int32_t effectiveMaxY = static_cast<int32_t>(maxRawY) + edgePadRawY;
+
+    effectiveMinX = std::max<int32_t>(0, effectiveMinX);
+    effectiveMinY = std::max<int32_t>(0, effectiveMinY);
+    effectiveMaxX = std::min<int32_t>(4095, effectiveMaxX);
+    effectiveMaxY = std::min<int32_t>(4095, effectiveMaxY);
+
+    calibrated.rawMinX = static_cast<uint16_t>(effectiveMinX);
+    calibrated.rawMaxX = static_cast<uint16_t>(effectiveMaxX);
+    calibrated.rawMinY = static_cast<uint16_t>(effectiveMinY);
+    calibrated.rawMaxY = static_cast<uint16_t>(effectiveMaxY);
+    calibrated.swapXY = swapXY;
+    const uint32_t leftAvgX = (static_cast<uint32_t>(srcUlX) + srcLlX) / 2U;
+    const uint32_t rightAvgX = (static_cast<uint32_t>(srcUrX) + srcLrX) / 2U;
+    const uint32_t topAvgY = (static_cast<uint32_t>(srcUlY) + srcUrY) / 2U;
+    const uint32_t bottomAvgY = (static_cast<uint32_t>(srcLlY) + srcLrY) / 2U;
+    calibrated.invertX = leftAvgX > rightAvgX;
+    calibrated.invertY = topAvgY > bottomAvgY;
+    calibrated.xCorrLeft = 0;
+    calibrated.xCorrRight = 0;
+    calibrated.yCorr = 0;
+    return true;
+  };
+
+  touch_input::Calibration pass1Cal = {};
+  touch_input::Calibration pass2Cal = {};
+  bool pass1Ok = false;
+  bool pass2Ok = false;
+
+  for (int pass = 1; pass <= 2; ++pass) {
+    const bool requireNearTarget = (pass == 2);
+    bool passSolved = false;
+    for (int attempt = 1; attempt <= 2; ++attempt) {
+      uint16_t ulRawX = 0, ulRawY = 0;
+      uint16_t urRawX = 0, urRawY = 0;
+      uint16_t llRawX = 0, llRawY = 0;
+      uint16_t lrRawX = 0, lrRawY = 0;
+      if (!captureCalibrationPoint(ulX, ulY, ulRawX, ulRawY, requireNearTarget) ||
+          !captureCalibrationPoint(urX, urY, urRawX, urRawY, requireNearTarget) ||
+          !captureCalibrationPoint(llX, llY, llRawX, llRawY, requireNearTarget) ||
+          !captureCalibrationPoint(lrX, lrY, lrRawX, lrRawY, requireNearTarget)) {
+        ESP_LOGE(kTouchTag, "cal capture timeout pass=%d attempt=%d", pass, attempt);
+        continue;
+      }
+      ESP_LOGI(kTouchTag,
+               "cal raw pass=%d attempt=%d UL=(%u,%u) UR=(%u,%u) LL=(%u,%u) LR=(%u,%u)", pass,
+               attempt, ulRawX, ulRawY, urRawX, urRawY, llRawX, llRawY, lrRawX, lrRawY);
+
+      touch_input::Calibration solved = {};
+      if (!solveCalibration(ulRawX, ulRawY, urRawX, urRawY, llRawX, llRawY, lrRawX, lrRawY,
+                            solved)) {
+        ESP_LOGE(kTouchTag, "cal spans invalid pass=%d attempt=%d", pass, attempt);
+        continue;
+      }
+
+      if (pass == 1) {
+        pass1Cal = solved;
+        pass1Ok = true;
+        touch_input::setCalibration(pass1Cal);
+        ESP_LOGI(kTouchTag,
+                 "cal pass1 solved minX=%u maxX=%u minY=%u maxY=%u swap=%d invX=%d invY=%d",
+                 pass1Cal.rawMinX, pass1Cal.rawMaxX, pass1Cal.rawMinY, pass1Cal.rawMaxY,
+                 pass1Cal.swapXY ? 1 : 0, pass1Cal.invertX ? 1 : 0, pass1Cal.invertY ? 1 : 0);
+      } else {
+        pass2Cal = solved;
+        pass2Cal.xCorrLeft = 0;
+        pass2Cal.xCorrRight = 0;
+        pass2Cal.yCorr = 0;
+        pass2Ok = true;
+        ESP_LOGI(kTouchTag,
+                 "cal pass2 solved minX=%u maxX=%u minY=%u maxY=%u swap=%d invX=%d invY=%d "
+                 "xCorrL=%d xCorrR=%d yCorr=%d",
+                 pass2Cal.rawMinX, pass2Cal.rawMaxX, pass2Cal.rawMinY, pass2Cal.rawMaxY,
+                 pass2Cal.swapXY ? 1 : 0, pass2Cal.invertX ? 1 : 0, pass2Cal.invertY ? 1 : 0,
+                 static_cast<int>(pass2Cal.xCorrLeft), static_cast<int>(pass2Cal.xCorrRight),
+                 static_cast<int>(pass2Cal.yCorr));
+      }
+      passSolved = true;
+      break;
+    }
+    if (!passSolved) {
+      ESP_LOGE(kTouchTag, "calibration pass %d failed", pass);
+      if (pass == 1) {
+        break;
+      }
+    }
+  }
+
+  if (pass2Ok) {
+    touch_input::setCalibration(pass2Cal);
+    if (!touch_input::saveCalibration(pass2Cal)) {
+      ESP_LOGW(kTouchTag, "failed to persist pass2 calibration");
+    }
+    ESP_LOGI(kTouchTag, "cal saved pass2 minX=%u maxX=%u minY=%u maxY=%u swap=%d invX=%d invY=%d",
+             pass2Cal.rawMinX, pass2Cal.rawMaxX, pass2Cal.rawMinY, pass2Cal.rawMaxY,
+             pass2Cal.swapXY ? 1 : 0, pass2Cal.invertX ? 1 : 0, pass2Cal.invertY ? 1 : 0);
+    (void)display_spi::clear(0x0000);
+    return true;
+  }
+  if (pass1Ok) {
+    touch_input::setCalibration(pass1Cal);
+    if (!touch_input::saveCalibration(pass1Cal)) {
+      ESP_LOGW(kTouchTag, "failed to persist pass1 calibration fallback");
+    }
+    ESP_LOGW(kTouchTag,
+             "cal saved pass1 fallback minX=%u maxX=%u minY=%u maxY=%u swap=%d invX=%d invY=%d",
+             pass1Cal.rawMinX, pass1Cal.rawMaxX, pass1Cal.rawMinY, pass1Cal.rawMaxY,
+             pass1Cal.swapXY ? 1 : 0, pass1Cal.invertX ? 1 : 0, pass1Cal.invertY ? 1 : 0);
+    (void)display_spi::clear(0x0000);
+    return true;
+  }
+
+  ESP_LOGE(kTouchTag, "calibration failed after retries; using defaults");
+  return false;
+}
+
 struct ConfigInteractionResult {
   bool offlineRequested = false;
   bool retryRequested = false;
   bool openWifiListRequested = false;
   bool localeChanged = false;
+  std::string selectedSsid;
 };
 
 config_screen::ViewState makeViewState(bool hasStoredCreds, bool wifiConnected,
@@ -291,7 +588,7 @@ ConfigInteractionResult runConfigInteraction(uint32_t durationMs, bool hasStored
   const uint32_t startMs = platform::millisMs();
   uint32_t lastLogMs = 0;
   bool touchHeld = false;
-  while (platform::millisMs() - startMs < durationMs) {
+  while (durationMs == 0 || (platform::millisMs() - startMs < durationMs)) {
     touch_input::Point p;
     if (!touch_input::read(p)) {
       touchHeld = false;
@@ -331,6 +628,7 @@ ConfigInteractionResult runConfigInteraction(uint32_t durationMs, bool hasStored
       config_screen::show(makeViewState(hasStoredCreds, wifiConnected, showWifiButtons));
     } else if (action == config_screen::Action::OpenWifiList && showWifiButtons) {
       result.openWifiListRequested = true;
+      config_screen::showWifiScanInterstitial();
       std::vector<WifiApEntry> networks;
       if (!scanWifiNetworks(networks)) {
         ESP_LOGW(kWifiTag, "wifi scan failed");
@@ -354,14 +652,26 @@ ConfigInteractionResult runConfigInteraction(uint32_t durationMs, bool hasStored
         ptrs.push_back(label.c_str());
       }
 
+      // Drain the touch that triggered SCAN so the AP list doesn't consume a stale press.
+      {
+        const uint32_t releaseStart = platform::millisMs();
+        touch_input::Point discard;
+        while (platform::millisMs() - releaseStart < 800U) {
+          if (!touch_input::read(discard)) {
+            break;
+          }
+          platform::sleepMs(15);
+        }
+      }
+
       config_screen::showWifiList(ptrs.empty() ? nullptr : ptrs.data(),
                                   static_cast<uint16_t>(ptrs.size()));
       ESP_LOGI(kWifiTag, "scan complete aps=%u", static_cast<unsigned>(networks.size()));
 
       bool inList = true;
-      bool listTouchHeld = true;
+      bool listTouchHeld = false;
       const uint32_t listStart = platform::millisMs();
-      while (inList && platform::millisMs() - listStart < durationMs) {
+      while (inList && (durationMs == 0 || platform::millisMs() - listStart < durationMs)) {
         touch_input::Point lp;
         if (!touch_input::read(lp)) {
           listTouchHeld = false;
@@ -389,16 +699,29 @@ ConfigInteractionResult runConfigInteraction(uint32_t durationMs, bool hasStored
         const WifiApEntry& selected = networks[static_cast<size_t>(row)];
         ESP_LOGI(kWifiTag, "selected ssid=%s secure=%d rssi=%d", selected.ssid.c_str(),
                  selected.secure ? 1 : 0, static_cast<int>(selected.rssi));
+
+        std::string password;
         if (selected.secure) {
-          ESP_LOGW(kWifiTag, "secure AP selected; password entry not implemented yet");
-          inList = false;
-          break;
+          if (!lvgl_password_prompt::prompt("WIFI PASSWORD", selected.ssid, password)) {
+            text_entry::Options opts = {};
+            opts.title = "WIFI PASSWORD";
+            opts.subtitle = selected.ssid;
+            opts.maskInput = true;
+            opts.maxLen = 63;
+            if (!text_entry::prompt(opts, password)) {
+              config_screen::showWifiList(ptrs.empty() ? nullptr : ptrs.data(),
+                                          static_cast<uint16_t>(ptrs.size()));
+              platform::sleepMs(80);
+              continue;
+            }
+          }
         }
 
         if (!platform::prefs::putString("wifi", "ssid", selected.ssid.c_str()) ||
-            !platform::prefs::putString("wifi", "password", "")) {
-          ESP_LOGW(kWifiTag, "failed to persist open-network credentials");
+            !platform::prefs::putString("wifi", "password", password.c_str())) {
+          ESP_LOGW(kWifiTag, "failed to persist credentials");
         }
+        result.selectedSsid = selected.ssid;
         result.retryRequested = true;
         return result;
       }
@@ -473,6 +796,13 @@ void verifyLittlefsAssets() {
 
 bool isGeoValid(float lat, float lon, const std::string& timezone) {
   return !std::isnan(lat) && !std::isnan(lon) && !timezone.empty();
+}
+
+void logHeapLargest() {
+  const size_t largest8 = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  const size_t largestDma = heap_caps_get_largest_free_block(MALLOC_CAP_DMA);
+  ESP_LOGI("perf", "heap_largest_8bit=%u heap_largest_dma=%u", static_cast<unsigned>(largest8),
+           static_cast<unsigned>(largestDma));
 }
 
 GeoContext loadGeoContextFromPrefs() {
@@ -552,25 +882,39 @@ extern "C" void app_main() {
     ESP_LOGE(kBootTag, "TFT SPI init failed");
   } else if (!display_spi::initPanel()) {
     ESP_LOGE(kBootTag, "TFT panel init failed");
-  } else if (!display_spi::drawSanityPattern()) {
-    ESP_LOGE(kBootTag, "TFT sanity pattern failed");
+  } else if (!display_spi::clear(0x0000)) {
+    ESP_LOGE(kBootTag, "TFT clear failed");
   }
   boot::mark(baselineState, "tft_ready", kBaselineEnabled);
+
+  if (AppConfig::kTouchEnabled) {
+    if (touch_input::init()) {
+      ESP_LOGI(kTouchTag, "touch ready after tft init");
+      (void)runTouchCalibrationIfNeeded();
+    } else {
+      ESP_LOGE(kTouchTag, "touch init failed after tft init");
+    }
+  }
 
   const bool savedCreds = hasStoredWifiCreds();
   bool wifiReady = false;
   bool offlineSelected = false;
 
-  // Always present config UI briefly pre-WiFi to validate touch actions during porting.
-  const ConfigInteractionResult preWifi =
-      runConfigInteraction(kTouchBootProbeMs, savedCreds, false, true);
-  if (preWifi.offlineRequested) {
-    offlineSelected = true;
-    ESP_LOGI(kWifiTag, "offline mode selected before connect");
+  // Production-style behavior: if credentials exist, boot directly to app path.
+  // Only enter config first-run flow when no credentials are stored.
+  if (!savedCreds) {
+    const ConfigInteractionResult preWifi =
+        runConfigInteraction(kTouchBootProbeMs, savedCreds, false, true);
+    if (preWifi.offlineRequested) {
+      offlineSelected = true;
+      ESP_LOGI(kWifiTag, "offline mode selected before connect");
+    }
+  } else {
+    ESP_LOGI(kBootTag, "saved wifi creds present; skipping pre-wifi config");
   }
 
   if (!offlineSelected) {
-    wifiReady = startWifiStation(10000);
+    wifiReady = startWifiStation(10000, nullptr);
   } else {
     ESP_LOGI(kWifiTag, "skipping WiFi connect");
   }
@@ -583,7 +927,9 @@ extern "C" void app_main() {
       ESP_LOGI(kWifiTag, "offline mode selected after connect failure");
     } else if (postFail.retryRequested) {
       ESP_LOGI(kWifiTag, "retry requested from config screen");
-      wifiReady = startWifiStation(10000);
+      const char* requested =
+          postFail.selectedSsid.empty() ? nullptr : postFail.selectedSsid.c_str();
+      wifiReady = startWifiStation(10000, requested);
     }
   }
 
@@ -616,12 +962,22 @@ extern "C" void app_main() {
 
   ESP_LOGI(kBootTag, "idf scaffold ready");
   boot::mark(baselineState, "display_ready", kBaselineEnabled);
+  const bool runtimeReady = layout_runtime::begin("/littlefs/screen_layout_b.json");
+  ESP_LOGI(kBootTag, "layout runtime=%d", runtimeReady ? 1 : 0);
   ESP_LOGI(kBootTag, "setup complete");
   boot::mark(baselineState, "setup_complete", kBaselineEnabled);
+  logHeapLargest();
 
-  ESP_LOGI(kTag, "ESP-IDF shell running. Full app port in progress.");
+  ESP_LOGI(kTag, "ESP-IDF runtime loop started (DisplayManager port in progress).");
+  uint32_t lastTickMs = platform::millisMs();
   for (;;) {
-    platform::sleepMs(30000);
-    boot::markLoop(baselineState, wifiReady, kBaselineEnabled, kBaselineLoopPeriodMs);
+    platform::sleepMs(kRuntimeTickPeriodMs);
+    const uint32_t nowMs = platform::millisMs();
+    layout_runtime::tick(nowMs);
+    if (nowMs - lastTickMs >= kBaselineLoopPeriodMs) {
+      lastTickMs = nowMs;
+      boot::markLoop(baselineState, wifiReady, kBaselineEnabled, kBaselineLoopPeriodMs);
+      logHeapLargest();
+    }
   }
 }

@@ -1,6 +1,71 @@
 # Handoff Runbook (Release Prep)
 
-## 0) Session Log - ESP-IDF Port (2026-02-23)
+## 0) Session Log - ESP-IDF DSL Engine Parity (2026-02-25)
+
+Summary: Ported the generic DSL runtime in ESP-IDF toward Arduino parity, using `origin/http_client_rewrite` as the reference for fetch/runtime behavior. This was done as an engine implementation (not widget-specific C++).
+
+### What Was Completed
+
+- Reviewed Arduino DSL engine and `origin/http_client_rewrite` branch for parity targets.
+- Replaced IDF DSL runtime internals with a generic parser/resolver in:
+  - `idf/main/DslWidgetRuntimeEspIdf.cpp`
+- Added DSL config parsing support for:
+  - `data.source`
+  - `data.url`
+  - `data.poll_ms`
+  - `data.debug`
+  - `data.fields` (both string and object field specs)
+  - `format` block (`round`, `unit`, `locale`, `prefix`, `suffix`, `tz`, `time_format`)
+  - `ui.nodes` label parsing
+- Added runtime template binding support:
+  - `{{geo.*}}`, `{{pref.*}}`, field values
+  - conditionals: `if_eq`, `if_ne`, `if_true`, `if_gt`, `if_gte`, `if_lt`, `if_lte`
+- Added JSON path resolution for nested objects + arrays:
+  - examples: `current.temperature_2m`, `daily.sunrise[0]`
+- Added source handling:
+  - `http`
+  - `local_time`
+- Added derived weather mapping in runtime:
+  - `code_now/day1_code/day2_code` -> `cond_*` + `icon_*`
+- Added HTTP transport hardening inspired by rewrite branch:
+  - mutex gate around HTTP transport
+  - retry backoff using failure streak
+  - explicit transport/status logs
+
+### Build Verification
+
+- Verified successful build with:
+  - `source /home/johgor/esp-idf/export.sh`
+  - `/home/johgor/esp-idf/tools/idf.py -C idf -D COSTAR_BUILD_LITTLEFS_IMAGE=OFF build`
+- Result:
+  - `idf/build/costar_idf.bin` generated
+  - app size check passed
+
+### Known Gaps / Remaining Work
+
+- Sort transforms are still pending in IDF runtime:
+  - `sort_num(...)`
+  - `sort_alpha(...)`
+  - `distance_sort(...)` / `sort_distance(...)`
+- Current IDF runtime node rendering is still label-centric in this file; full node parity (icons/arcs/progress/repeat/sparkline/etc.) remains to be completed.
+- Current layout runtime still activates first DSL widget in migration path (intentional earlier step).
+
+### Workspace State (Important)
+
+- Local changes present:
+  - `idf/main/app_main.cpp` (modified from earlier work)
+  - `idf/main/DslWidgetRuntimeEspIdf.cpp` (new/untracked; now contains major runtime port)
+  - `idf/main/LayoutRuntimeEspIdf.cpp` (new/untracked from earlier migration steps)
+
+### Suggested Next Step At Home
+
+1. Flash latest IDF app and validate `weather_now` end-to-end (confirm sunrise/sunset bind correctly).
+2. Confirm runtime logs show stable HTTP fetch cadence/backoff behavior.
+3. Start next parity chunk:
+   - implement sort transforms in IDF runtime
+   - then expand node renderer parity (repeat + graphics nodes)
+
+## 0b) Session Log - ESP-IDF Port (2026-02-23)
 
 Summary: Major progress on ESP-IDF scaffold, Wi-Fi/touch/config flow, and logging cleanup. Several display/touch parity regressions were debugged. Session ended with one final display fix built but not yet hardware-verified.
 

@@ -5,8 +5,12 @@ idf_component_register(
     "NetEspIdf.cpp"
     "DisplayBootstrapEspIdf.cpp"
     "DisplaySpiEspIdf.cpp"
+    "LayoutRuntimeEspIdf.cpp"
+    "DslWidgetRuntimeEspIdf.cpp"
     "ConfigScreenEspIdf.cpp"
     "TouchInputEspIdf.cpp"
+    "TextEntryEspIdf.cpp"
+    "LvglPasswordPrompt.cpp"
     "PlatformEspIdf.cpp"
     "PrefsEspIdf.cpp"
     "../../src/core/BootCommon.cpp"
@@ -22,9 +26,11 @@ idf_component_register(
     esp_wifi
     esp_driver_gpio
     esp_driver_spi
+    esp_http_client
     freertos
     heap
     littlefs
+    mbedtls
     nvs_flash
     esp_netif
 )

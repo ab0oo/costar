@@ -13,9 +13,17 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.20.4
+  lvgl/lvgl:
+    component_hash: 184e532558c1c45fefed631f3e235423d22582aafb4630f3e8885c35281a49ae
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 9.5.0
 direct_dependencies:
 - idf
 - joltwallet/littlefs
-manifest_hash: 88c979f6fcb0ccb475b18d2aa97d457b91b89eea947fec3b199334ff9f8c31e6
+- lvgl/lvgl
+manifest_hash: c5112daa6bc0b09b9bd3140a415cbee52d1c4a469f5ee0d430235fa77ebab2d5
 target: esp32
 version: 2.0.0

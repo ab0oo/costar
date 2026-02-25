@@ -1,6 +1,7 @@
 #include "TouchInputEspIdf.h"
 
 #include "AppConfig.h"
+#include "platform/Prefs.h"
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
@@ -17,9 +18,28 @@ constexpr int kTouchClockHz = 2500000;
 // Keep threshold slightly lower than Arduino library during porting so weak
 // presses are still captured while we validate mapping.
 constexpr int kTouchZThreshold = 180;
+constexpr bool kEnableRuntimeWarpCorrection = false;
+constexpr const char* kTouchPrefsNs = "touch";
+constexpr const char* kTouchCalValidKey = "cal_ok";
+constexpr const char* kTouchMinXKey = "min_x";
+constexpr const char* kTouchMaxXKey = "max_x";
+constexpr const char* kTouchMinYKey = "min_y";
+constexpr const char* kTouchMaxYKey = "max_y";
+constexpr const char* kTouchSwapXYKey = "sw_xy";
+constexpr const char* kTouchInvXKey = "inv_x";
+constexpr const char* kTouchInvYKey = "inv_y";
+constexpr const char* kTouchXCorrLKey = "xcor_l";
+constexpr const char* kTouchXCorrRKey = "xcor_r";
+constexpr const char* kTouchYCorrKey = "ycor";
 
 spi_device_handle_t sTouchDevice = nullptr;
 bool sBusInitialized = false;
+bool sCalibrationInitialized = false;
+bool sCalibrationPresent = false;
+touch_input::Calibration sCalibration = {};
+bool sTouchWasPressed = false;
+int32_t sFilteredX = 0;
+int32_t sFilteredY = 0;
 uint32_t sNoIrqPollCounter = 0;
 
 int32_t clampi(int32_t value, int32_t minValue, int32_t maxValue) {
@@ -119,11 +139,31 @@ bool readRawStable(uint16_t& rawX, uint16_t& rawY, uint16_t& zOut) {
   zOut = static_cast<uint16_t>(z);
   return true;
 }
+
+void initCalibrationDefaults() {
+  if (sCalibrationInitialized) {
+    return;
+  }
+  sCalibration.rawMinX = AppConfig::kTouchRawMinX;
+  sCalibration.rawMaxX = AppConfig::kTouchRawMaxX;
+  sCalibration.rawMinY = AppConfig::kTouchRawMinY;
+  sCalibration.rawMaxY = AppConfig::kTouchRawMaxY;
+  // Arduino path maps screen X from rawY and screen Y from rawX.
+  sCalibration.swapXY = true;
+  sCalibration.invertX = AppConfig::kTouchInvertX;
+  sCalibration.invertY = AppConfig::kTouchInvertY;
+  sCalibration.xCorrLeft = 0;
+  sCalibration.xCorrRight = 0;
+  sCalibration.yCorr = 0;
+  sCalibrationPresent = false;
+  sCalibrationInitialized = true;
+}
 }  // namespace
 
 namespace touch_input {
 
 bool init() {
+  initCalibrationDefaults();
   if (sTouchDevice != nullptr) {
     return true;
   }
@@ -177,15 +217,16 @@ bool init() {
 }
 
 bool read(Point& out) {
+  initCalibrationDefaults();
   if (!init()) {
     return false;
   }
-  const bool irqPressed = isPressedByIrq();
-  if (!irqPressed) {
-    // On some boards IRQ wiring/noise can miss presses; poll periodically anyway
-    // and rely on pressure threshold filtering from the controller data.
+  if (!isPressedByIrq()) {
+    // Some boards have unreliable IRQ behavior; use it as a hint to reduce
+    // idle polling but still allow reads so touches are never fully blocked.
     ++sNoIrqPollCounter;
     if ((sNoIrqPollCounter & 0x3U) != 0U) {
+      sTouchWasPressed = false;
       return false;
     }
   }
@@ -194,31 +235,151 @@ bool read(Point& out) {
   uint16_t rawY = 0;
   uint16_t z = 0;
   if (!readRawStable(rawX, rawY, z)) {
+    sTouchWasPressed = false;
     return false;
   }
 
-  // Match Arduino TouchMapper exactly:
-  // y <- raw.x (min->max), x <- raw.y (max->min).
-  int32_t y = mapLinear(rawX, AppConfig::kTouchRawMinX, AppConfig::kTouchRawMaxX, 0,
-                        static_cast<int32_t>(AppConfig::kScreenHeight) - 1);
-  int32_t x = mapLinear(rawY, AppConfig::kTouchRawMaxY, AppConfig::kTouchRawMinY, 0,
+  const int32_t sourceForX = sCalibration.swapXY ? static_cast<int32_t>(rawY)
+                                                 : static_cast<int32_t>(rawX);
+  const int32_t sourceForY = sCalibration.swapXY ? static_cast<int32_t>(rawX)
+                                                 : static_cast<int32_t>(rawY);
+  int32_t x = mapLinear(sourceForX, sCalibration.rawMinX, sCalibration.rawMaxX, 0,
                         static_cast<int32_t>(AppConfig::kScreenWidth) - 1);
+  int32_t y = mapLinear(sourceForY, sCalibration.rawMinY, sCalibration.rawMaxY, 0,
+                        static_cast<int32_t>(AppConfig::kScreenHeight) - 1);
 
   x = clampi(x, 0, static_cast<int32_t>(AppConfig::kScreenWidth) - 1);
   y = clampi(y, 0, static_cast<int32_t>(AppConfig::kScreenHeight) - 1);
 
-  if (AppConfig::kTouchInvertX) {
+  if (sCalibration.invertX) {
     x = static_cast<int32_t>(AppConfig::kScreenWidth) - 1 - x;
   }
-  if (AppConfig::kTouchInvertY) {
+  if (sCalibration.invertY) {
     y = static_cast<int32_t>(AppConfig::kScreenHeight) - 1 - y;
   }
 
+  // Linear horizontal dewarp: apply stronger correction near left edge and
+  // taper toward right edge (or vice versa) based on calibration refinement.
+  if (kEnableRuntimeWarpCorrection) {
+    const int32_t w1 = static_cast<int32_t>(AppConfig::kScreenWidth) - 1;
+    if (w1 > 0) {
+      const int32_t corr =
+          ((w1 - x) * static_cast<int32_t>(sCalibration.xCorrLeft) +
+           x * static_cast<int32_t>(sCalibration.xCorrRight)) /
+          w1;
+      x += corr;
+    }
+    y += static_cast<int32_t>(sCalibration.yCorr);
+  }
+  x = clampi(x, 0, static_cast<int32_t>(AppConfig::kScreenWidth) - 1);
+  y = clampi(y, 0, static_cast<int32_t>(AppConfig::kScreenHeight) - 1);
+
+  if (!sTouchWasPressed) {
+    sFilteredX = x;
+    sFilteredY = y;
+    sTouchWasPressed = true;
+  } else {
+    // Keep pointer stable for dense targets (Wi-Fi rows, keyboard keys).
+    sFilteredX = (sFilteredX * 3 + x) / 4;
+    sFilteredY = (sFilteredY * 3 + y) / 4;
+  }
+  sFilteredX = clampi(sFilteredX, 0, static_cast<int32_t>(AppConfig::kScreenWidth) - 1);
+  sFilteredY = clampi(sFilteredY, 0, static_cast<int32_t>(AppConfig::kScreenHeight) - 1);
+
   out.rawX = rawX;
   out.rawY = rawY;
-  out.x = static_cast<uint16_t>(x);
-  out.y = static_cast<uint16_t>(y);
+  out.x = static_cast<uint16_t>(sFilteredX);
+  out.y = static_cast<uint16_t>(sFilteredY);
   return true;
+}
+
+bool hasCalibration() {
+  initCalibrationDefaults();
+  return sCalibrationPresent;
+}
+
+bool loadCalibration(Calibration& out) {
+  initCalibrationDefaults();
+  const bool valid = platform::prefs::getBool(kTouchPrefsNs, kTouchCalValidKey, false);
+  if (!valid) {
+    out = sCalibration;
+    sCalibrationPresent = false;
+    return false;
+  }
+
+  Calibration loaded = {};
+  loaded.rawMinX = static_cast<uint16_t>(
+      platform::prefs::getUInt(kTouchPrefsNs, kTouchMinXKey, AppConfig::kTouchRawMinX));
+  loaded.rawMaxX = static_cast<uint16_t>(
+      platform::prefs::getUInt(kTouchPrefsNs, kTouchMaxXKey, AppConfig::kTouchRawMaxX));
+  loaded.rawMinY = static_cast<uint16_t>(
+      platform::prefs::getUInt(kTouchPrefsNs, kTouchMinYKey, AppConfig::kTouchRawMinY));
+  loaded.rawMaxY = static_cast<uint16_t>(
+      platform::prefs::getUInt(kTouchPrefsNs, kTouchMaxYKey, AppConfig::kTouchRawMaxY));
+  loaded.swapXY = platform::prefs::getBool(kTouchPrefsNs, kTouchSwapXYKey, true);
+  loaded.invertX = platform::prefs::getBool(kTouchPrefsNs, kTouchInvXKey, AppConfig::kTouchInvertX);
+  loaded.invertY = platform::prefs::getBool(kTouchPrefsNs, kTouchInvYKey, AppConfig::kTouchInvertY);
+  loaded.xCorrLeft =
+      static_cast<int16_t>(platform::prefs::getInt(kTouchPrefsNs, kTouchXCorrLKey, 0));
+  loaded.xCorrRight =
+      static_cast<int16_t>(platform::prefs::getInt(kTouchPrefsNs, kTouchXCorrRKey, 0));
+  loaded.yCorr = static_cast<int16_t>(platform::prefs::getInt(kTouchPrefsNs, kTouchYCorrKey, 0));
+
+  // Basic sanity check so bad values cannot brick touch.
+  if (loaded.rawMaxX <= loaded.rawMinX + 50 || loaded.rawMaxY <= loaded.rawMinY + 50) {
+    ESP_LOGW(kTag, "invalid persisted calibration; using defaults");
+    out = sCalibration;
+    sCalibrationPresent = false;
+    return false;
+  }
+
+  sCalibration = loaded;
+  sCalibrationPresent = true;
+  out = sCalibration;
+  return true;
+}
+
+bool saveCalibration(const Calibration& calibration) {
+  initCalibrationDefaults();
+  if (calibration.rawMaxX <= calibration.rawMinX + 50 ||
+      calibration.rawMaxY <= calibration.rawMinY + 50) {
+    return false;
+  }
+
+  bool ok = true;
+  ok = ok && platform::prefs::putUInt(kTouchPrefsNs, kTouchMinXKey, calibration.rawMinX);
+  ok = ok && platform::prefs::putUInt(kTouchPrefsNs, kTouchMaxXKey, calibration.rawMaxX);
+  ok = ok && platform::prefs::putUInt(kTouchPrefsNs, kTouchMinYKey, calibration.rawMinY);
+  ok = ok && platform::prefs::putUInt(kTouchPrefsNs, kTouchMaxYKey, calibration.rawMaxY);
+  ok = ok && platform::prefs::putBool(kTouchPrefsNs, kTouchSwapXYKey, calibration.swapXY);
+  ok = ok && platform::prefs::putBool(kTouchPrefsNs, kTouchInvXKey, calibration.invertX);
+  ok = ok && platform::prefs::putBool(kTouchPrefsNs, kTouchInvYKey, calibration.invertY);
+  ok = ok && platform::prefs::putInt(kTouchPrefsNs, kTouchXCorrLKey, calibration.xCorrLeft);
+  ok = ok && platform::prefs::putInt(kTouchPrefsNs, kTouchXCorrRKey, calibration.xCorrRight);
+  ok = ok && platform::prefs::putInt(kTouchPrefsNs, kTouchYCorrKey, calibration.yCorr);
+  ok = ok && platform::prefs::putBool(kTouchPrefsNs, kTouchCalValidKey, true);
+  if (!ok) {
+    return false;
+  }
+
+  sCalibration = calibration;
+  sCalibrationPresent = true;
+  return true;
+}
+
+void setCalibration(const Calibration& calibration) {
+  initCalibrationDefaults();
+  if (calibration.rawMaxX <= calibration.rawMinX + 50 ||
+      calibration.rawMaxY <= calibration.rawMinY + 50) {
+    return;
+  }
+  sCalibration = calibration;
+  sCalibrationPresent = true;
+}
+
+void getCalibration(Calibration& out) {
+  initCalibrationDefaults();
+  out = sCalibration;
 }
 
 }  // namespace touch_input

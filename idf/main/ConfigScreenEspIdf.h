@@ -24,6 +24,8 @@ struct ViewState {
 };
 
 void show(const ViewState& state);
+void showWifiScanInterstitial();
+void showWifiStatus(const char* title, const char* subtitle, bool isError);
 Action hitTest(uint16_t x, uint16_t y);
 void showWifiList(const char* const* labels, uint16_t count);
 int hitTestWifiListRow(uint16_t x, uint16_t y, uint16_t count);

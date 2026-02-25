@@ -4,3 +4,6 @@
 .vscode/launch.json
 .vscode/ipch
 api_keys.txt
+idf/build/*
+idf/managed_components/*
+idf/build/esp-idf/*

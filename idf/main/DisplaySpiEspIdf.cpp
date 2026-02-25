@@ -1,6 +1,7 @@
 #include "DisplaySpiEspIdf.h"
 
 #include "AppConfig.h"
+#include "platform/Prefs.h"
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
@@ -35,33 +36,6 @@ uint16_t logicalWidth() {
 
 uint16_t logicalHeight() {
   return (rotation() & 0x01U) ? AppConfig::kPanelWidth : AppConfig::kPanelHeight;
-}
-
-void mapLogicalToPanel(uint16_t x, uint16_t y, uint16_t& outX, uint16_t& outY) {
-  const uint16_t pw = AppConfig::kPanelWidth;
-  const uint16_t ph = AppConfig::kPanelHeight;
-  switch (rotation()) {
-    case 0:  // portrait
-      outX = x;
-      outY = y;
-      return;
-    case 1:  // landscape
-      outX = y;
-      outY = x;
-      return;
-    case 2:  // portrait inverted
-      outX = static_cast<uint16_t>(pw - 1U - x);
-      outY = static_cast<uint16_t>(ph - 1U - y);
-      return;
-    case 3:  // landscape inverted
-      outX = static_cast<uint16_t>(pw - 1U - y);
-      outY = static_cast<uint16_t>(ph - 1U - x);
-      return;
-    default:
-      outX = x;
-      outY = y;
-      return;
-  }
 }
 
 void delayMs(uint32_t ms) { vTaskDelay(pdMS_TO_TICKS(ms)); }
@@ -133,55 +107,40 @@ bool resetPanel() {
 }
 
 bool runIli9341Init() {
+  // Mirror TFT_eSPI ILI9341_2_DRIVER init sequence byte-for-byte.
   static constexpr uint8_t kCf[] = {0x00, 0xC1, 0x30};
   static constexpr uint8_t kEd[] = {0x64, 0x03, 0x12, 0x81};
   static constexpr uint8_t kE8[] = {0x85, 0x00, 0x78};
   static constexpr uint8_t kCb[] = {0x39, 0x2C, 0x00, 0x34, 0x02};
   static constexpr uint8_t kF7[] = {0x20};
   static constexpr uint8_t kEa[] = {0x00, 0x00};
-  static constexpr uint8_t kC0[] = {0x23};
-  static constexpr uint8_t kC1[] = {0x10};
-  static constexpr uint8_t kC5[] = {0x3E, 0x28};
-  static constexpr uint8_t kC7[] = {0x86};
-  auto madctlForRotation = []() -> uint8_t {
-    // ILI9341 MADCTL bits: MY(7) MX(6) MV(5) BGR(3)
-    // Match TFT_eSPI-style rotation semantics.
-    switch (AppConfig::kRotation & 0x03U) {
-      case 0: return 0x48;  // portrait
-      case 1: return 0x28;  // landscape
-      case 2: return 0x88;  // portrait inverted
-      case 3: return 0xE8;  // landscape inverted
-      default: return 0x28;
-    }
-  };
-  const uint8_t k36[] = {madctlForRotation()};
+  static constexpr uint8_t kC0[] = {0x10};
+  static constexpr uint8_t kC1[] = {0x00};
+  static constexpr uint8_t kC5[] = {0x30, 0x30};
+  static constexpr uint8_t kC7[] = {0xB7};
   static constexpr uint8_t k3A[] = {0x55};  // RGB565
-  static constexpr uint8_t kB1[] = {0x00, 0x18};
+  static constexpr uint8_t k36[] = {0x08};  // default MADCTL in TFT_eSPI init table
+  static constexpr uint8_t kB1[] = {0x00, 0x1A};
   static constexpr uint8_t kB6[] = {0x08, 0x82, 0x27};
   static constexpr uint8_t kF2[] = {0x00};
   static constexpr uint8_t k26[] = {0x01};
-  static constexpr uint8_t kE0[] = {0x0F, 0x31, 0x2B, 0x0C, 0x0E, 0x08, 0x4E, 0xF1,
-                                    0x37, 0x07, 0x10, 0x03, 0x0E, 0x09, 0x00};
-  static constexpr uint8_t kE1[] = {0x00, 0x0E, 0x14, 0x03, 0x11, 0x07, 0x31, 0xC1,
-                                    0x48, 0x08, 0x0F, 0x0C, 0x31, 0x36, 0x0F};
-
-  if (!writeCommand(0x01)) {
-    return false;
-  }  // SWRESET
-  delayMs(120);
-  if (!writeCommand(0x28)) {
-    return false;
-  }  // DISPOFF
+  static constexpr uint8_t kE0[] = {0x0F, 0x2A, 0x28, 0x08, 0x0E, 0x08, 0x54, 0xA9,
+                                    0x43, 0x0A, 0x0F, 0x00, 0x00, 0x00, 0x00};
+  static constexpr uint8_t kE1[] = {0x00, 0x15, 0x17, 0x07, 0x11, 0x06, 0x2B, 0x56,
+                                    0x3C, 0x05, 0x10, 0x0F, 0x3F, 0x3F, 0x0F};
+  static constexpr uint8_t k2B[] = {0x00, 0x00, 0x01, 0x3F};
+  static constexpr uint8_t k2A[] = {0x00, 0x00, 0x00, 0xEF};
 
   if (!writeReg(0xCF, kCf, sizeof(kCf)) || !writeReg(0xED, kEd, sizeof(kEd)) ||
       !writeReg(0xE8, kE8, sizeof(kE8)) || !writeReg(0xCB, kCb, sizeof(kCb)) ||
       !writeReg(0xF7, kF7, sizeof(kF7)) || !writeReg(0xEA, kEa, sizeof(kEa)) ||
       !writeReg(0xC0, kC0, sizeof(kC0)) || !writeReg(0xC1, kC1, sizeof(kC1)) ||
       !writeReg(0xC5, kC5, sizeof(kC5)) || !writeReg(0xC7, kC7, sizeof(kC7)) ||
-      !writeReg(0x3A, k3A, sizeof(k3A)) ||
+      !writeReg(0x3A, k3A, sizeof(k3A)) || !writeReg(0x36, k36, sizeof(k36)) ||
       !writeReg(0xB1, kB1, sizeof(kB1)) || !writeReg(0xB6, kB6, sizeof(kB6)) ||
       !writeReg(0xF2, kF2, sizeof(kF2)) || !writeReg(0x26, k26, sizeof(k26)) ||
-      !writeReg(0xE0, kE0, sizeof(kE0)) || !writeReg(0xE1, kE1, sizeof(kE1))) {
+      !writeReg(0xE0, kE0, sizeof(kE0)) || !writeReg(0xE1, kE1, sizeof(kE1)) ||
+      !writeReg(0x2B, k2B, sizeof(k2B)) || !writeReg(0x2A, k2A, sizeof(k2A))) {
     return false;
   }
 
@@ -189,14 +148,52 @@ bool runIli9341Init() {
     return false;
   }  // SLPOUT
   delayMs(120);
-  if (!writeReg(0x36, k36, sizeof(k36))) {
-    return false;
-  }  // MADCTL (apply rotation late, matching Arduino behavior)
   if (!writeCommand(0x29)) {
     return false;
   }  // DISPON
   delayMs(20);
-  ESP_LOGI(kTag, "panel MADCTL=0x%02x rotation=%u", k36[0], static_cast<unsigned>(AppConfig::kRotation));
+  return true;
+}
+
+uint8_t madctlForRotationAndOrder(uint8_t rot, bool bgr) {
+  uint8_t value = 0x20;  // rotation=1
+  switch (rot & 0x03U) {
+    case 0: value = 0x40; break;
+    case 1: value = 0x20; break;
+    case 2: value = 0x80; break;
+    case 3: value = 0xE0; break;
+    default: break;
+  }
+  if (bgr) {
+    value |= 0x08;
+  }
+  return value;
+}
+
+bool applyPanelRuntimeTuning() {
+  constexpr const char* kDisplayPrefsNs = "display";
+  constexpr const char* kColorSetKey = "color_set";
+  constexpr const char* kColorBgrKey = "color_bgr";
+  constexpr const char* kInvertSetKey = "inv_set";
+  constexpr const char* kInvertOnKey = "inv_on";
+
+  const bool hasColorSetting = platform::prefs::getBool(kDisplayPrefsNs, kColorSetKey, false);
+  const bool useBgr = platform::prefs::getBool(kDisplayPrefsNs, kColorBgrKey, false);
+  const bool hasInvertSetting = platform::prefs::getBool(kDisplayPrefsNs, kInvertSetKey, false);
+  const bool useInvert = platform::prefs::getBool(kDisplayPrefsNs, kInvertOnKey, false);
+
+  const uint8_t madctl = madctlForRotationAndOrder(rotation(), useBgr);
+  if (!writeReg(0x36, &madctl, 1U)) {
+    return false;
+  }
+  if (!writeCommand(useInvert ? 0x21 : 0x20)) {
+    return false;
+  }
+
+  ESP_LOGI(kTag,
+           "panel runtime tuning rot=%u madctl=0x%02x color_set=%d bgr=%d inv_set=%d invert=%d",
+           static_cast<unsigned>(rotation()), madctl, hasColorSetting ? 1 : 0, useBgr ? 1 : 0,
+           hasInvertSetting ? 1 : 0, useInvert ? 1 : 0);
   return true;
 }
 
@@ -299,6 +296,10 @@ bool initPanel() {
     ESP_LOGE(kTag, "panel init command sequence failed");
     return false;
   }
+  if (!applyPanelRuntimeTuning()) {
+    ESP_LOGE(kTag, "panel runtime tuning failed");
+    return false;
+  }
   sPanelInitialized = true;
   ESP_LOGI(kTag, "panel init complete (ili9341-style sequence)");
   return true;
@@ -389,6 +390,55 @@ bool fillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color565)
 
 bool clear(uint16_t color565) {
   return fillRect(0, 0, logicalWidth(), logicalHeight(), color565);
+}
+
+bool drawRgb565(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t* pixels) {
+  if (w == 0 || h == 0 || pixels == nullptr) {
+    return false;
+  }
+  if (!sPanelInitialized && !initPanel()) {
+    return false;
+  }
+
+  const uint32_t panelW = logicalWidth();
+  const uint32_t panelH = logicalHeight();
+  if (x >= panelW || y >= panelH) {
+    return false;
+  }
+
+  uint32_t x1 = static_cast<uint32_t>(x) + static_cast<uint32_t>(w) - 1U;
+  uint32_t y1 = static_cast<uint32_t>(y) + static_cast<uint32_t>(h) - 1U;
+  if (x1 >= panelW) {
+    x1 = panelW - 1U;
+  }
+  if (y1 >= panelH) {
+    y1 = panelH - 1U;
+  }
+
+  const uint16_t outW = static_cast<uint16_t>(x1 - x + 1U);
+  const uint16_t outH = static_cast<uint16_t>(y1 - y + 1U);
+  if (!setAddressWindow(x, y, static_cast<uint16_t>(x1), static_cast<uint16_t>(y1))) {
+    return false;
+  }
+
+  // Panel expects RGB565 as big-endian bytes on SPI.
+  static constexpr size_t kChunkPixels = 128;
+  uint8_t chunk[kChunkPixels * 2];
+  const uint32_t total = static_cast<uint32_t>(outW) * static_cast<uint32_t>(outH);
+  uint32_t idx = 0;
+  while (idx < total) {
+    const uint32_t now = std::min<uint32_t>(kChunkPixels, total - idx);
+    for (uint32_t i = 0; i < now; ++i) {
+      const uint16_t c = pixels[idx + i];
+      chunk[i * 2U] = static_cast<uint8_t>(c >> 8);
+      chunk[i * 2U + 1U] = static_cast<uint8_t>(c & 0xFFU);
+    }
+    if (!writeData(chunk, now * 2U)) {
+      return false;
+    }
+    idx += now;
+  }
+  return true;
 }
 
 uint16_t width() { return logicalWidth(); }
