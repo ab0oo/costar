@@ -1,5 +1,0 @@
-Command: make -j 14 all
-/home/johgor/src/costar/idf/main/ConfigScreenEspIdf.cpp: In function 'void config_screen::show(const ViewState&)':
-/home/johgor/src/costar/idf/main/ConfigScreenEspIdf.cpp:142:18: warning: unused variable 'cBtnOk' [-Wunused-variable]
-  142 |   const uint16_t cBtnOk = rgb565(32, 110, 56);
-      |                  ^~~~~~

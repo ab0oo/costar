@@ -1,5 +1,0 @@
-Command: make -j 14 all
-/home/johgor/src/costar/idf/main/ConfigScreenEspIdf.cpp: In function 'void config_screen::show(const ViewState&)':
-/home/johgor/src/costar/idf/main/ConfigScreenEspIdf.cpp:166:18: warning: unused variable 'rightX' [-Wunused-variable]
-  166 |   const uint16_t rightX = static_cast<uint16_t>(w - 108);
-      |                  ^~~~~~
