@@ -50,6 +50,9 @@ constexpr uint32_t kHttpTimeoutMs = 6500U;
 constexpr uint32_t kHttpWorkerQueueLen = 4U;
 constexpr uint32_t kHttpWorkerReplyTimeoutMs = 9000U;
 constexpr uint32_t kHttpWorkerStack = 8192U;
+constexpr uint32_t kHttpResponseMaxBytesDefault = 16384U;
+constexpr uint32_t kHttpResponseMaxBytesMin = 1024U;
+constexpr uint32_t kHttpResponseMaxBytesMax = 32768U;
 constexpr UBaseType_t kHttpWorkerPriority = 4U;
 constexpr BaseType_t kHttpWorkerCore = 0;
 constexpr uint32_t kHaWsConnectTimeoutMs = 15000U;
@@ -206,6 +209,8 @@ struct KeyValue {
 
 struct HttpCapture {
   std::string body;
+  size_t maxBytes = kHttpResponseMaxBytesDefault;
+  bool overflow = false;
 };
 
 struct HttpJob {
@@ -213,6 +218,7 @@ struct HttpJob {
   std::string url;
   std::string body;
   std::vector<KeyValue> headers;
+  uint32_t maxResponseBytes = kHttpResponseMaxBytesDefault;
   QueueHandle_t replyQueue = nullptr;
 };
 
@@ -285,8 +291,10 @@ struct State {
   std::string activeModalId;
   uint32_t modalDismissDueMs = 0;
   std::string sourceJson;
+  bool retainSourceJson = false;
   std::string transformJson;
   uint32_t tapRefreshDueMs = 0;
+  uint32_t httpMaxBytes = kHttpResponseMaxBytesDefault;
 };
 
 State s;
@@ -3201,6 +3209,8 @@ bool loadDslConfig(const std::string& dslJson) {
   s.modals.clear();
   s.touchRegions.clear();
   s.activeModalId.clear();
+  s.httpMaxBytes = kHttpResponseMaxBytesDefault;
+  s.retainSourceJson = false;
 
   std::string_view fieldsObj;
   if (!objectMemberObject(dataObj, "fields", fieldsObj)) {
@@ -3283,6 +3293,20 @@ bool loadDslConfig(const std::string& dslJson) {
   }
   if (s.source == DataSource::kHaWs && s.wsEntityTemplate.empty()) {
     s.wsEntityTemplate = "{{setting.entity_id}}";
+  }
+  if (auto it = s.settingValues.find("http_max_bytes"); it != s.settingValues.end()) {
+    double parsed = 0.0;
+    if (parseStrictDouble(it->second, parsed) && std::isfinite(parsed)) {
+      const uint32_t v = static_cast<uint32_t>(std::lround(parsed));
+      s.httpMaxBytes = std::clamp<uint32_t>(v, kHttpResponseMaxBytesMin, kHttpResponseMaxBytesMax);
+    }
+  }
+
+  for (const Node& n : s.nodes) {
+    if (!n.path.empty()) {
+      s.retainSourceJson = true;
+      break;
+    }
   }
 
   if (s.nodes.empty()) {
@@ -3448,7 +3472,34 @@ esp_err_t httpEventHandler(esp_http_client_event_t* evt) {
     return ESP_OK;
   }
   HttpCapture* cap = static_cast<HttpCapture*>(evt->user_data);
+  if (evt->event_id == HTTP_EVENT_ON_HEADER && evt->header_key != nullptr && evt->header_value != nullptr) {
+    const char* key = static_cast<const char*>(evt->header_key);
+    std::string keyLower = key;
+    std::transform(keyLower.begin(), keyLower.end(), keyLower.begin(), [](unsigned char c) {
+      return static_cast<char>(std::tolower(c));
+    });
+    if (keyLower == "content-length") {
+      const char* val = static_cast<const char*>(evt->header_value);
+      char* end = nullptr;
+      const unsigned long parsed = std::strtoul(val, &end, 10);
+      if (end != val && parsed > 0) {
+        const size_t contentLen = static_cast<size_t>(parsed);
+        if (contentLen > cap->maxBytes) {
+          cap->overflow = true;
+        } else {
+          cap->body.reserve(contentLen);
+        }
+      }
+    }
+  }
   if (evt->event_id == HTTP_EVENT_ON_DATA && evt->data != nullptr && evt->data_len > 0) {
+    if (cap->overflow) {
+      return ESP_OK;
+    }
+    if (cap->body.size() + static_cast<size_t>(evt->data_len) > cap->maxBytes) {
+      cap->overflow = true;
+      return ESP_OK;
+    }
     cap->body.append(static_cast<const char*>(evt->data), static_cast<size_t>(evt->data_len));
   }
   return ESP_OK;
@@ -4185,7 +4236,7 @@ void loadTapActionFromSettings() {
 bool httpRequestDirect(const std::string& method, const std::string& url,
                        const std::vector<KeyValue>& headers, const std::string& reqBody, int& statusCode,
                        std::string& body, std::string& reason, uint32_t& durationMs, std::string& hostOut,
-                       bool& viaProxy) {
+                       bool& viaProxy, uint32_t maxResponseBytes) {
   statusCode = 0;
   body.clear();
   reason.clear();
@@ -4211,6 +4262,7 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
            viaProxy ? 1 : 0, url.c_str());
 
   HttpCapture cap;
+  cap.maxBytes = std::clamp<uint32_t>(maxResponseBytes, kHttpResponseMaxBytesMin, kHttpResponseMaxBytesMax);
   esp_http_client_config_t cfg = {};
   cfg.url = url.c_str();
   cfg.timeout_ms = static_cast<int>(kHttpTimeoutMs);
@@ -4282,7 +4334,7 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
   if (err == ESP_OK) {
     statusCode = esp_http_client_get_status_code(client);
   }
-  body = cap.body;
+  body = std::move(cap.body);
 
   esp_http_client_cleanup(client);
   xSemaphoreGive(sHttpGate);
@@ -4298,6 +4350,13 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
     reason = "no-http-status";
     ESP_LOGW(kTag, "http fail host=%s proxy=%d dur_ms=%u reason=%s", hostOut.c_str(), viaProxy ? 1 : 0,
              static_cast<unsigned>(durationMs), reason.c_str());
+    return false;
+  }
+  if (cap.overflow) {
+    reason = "http body too large";
+    ESP_LOGW(kTag, "http fail host=%s proxy=%d dur_ms=%u reason=%s max_bytes=%u", hostOut.c_str(),
+             viaProxy ? 1 : 0, static_cast<unsigned>(durationMs), reason.c_str(),
+             static_cast<unsigned>(cap.maxBytes));
     return false;
   }
 
@@ -4321,7 +4380,8 @@ void httpWorkerTask(void* /*arg*/) {
     }
     result->ok =
         httpRequestDirect(job->method, job->url, job->headers, job->body, result->statusCode, result->body,
-                          result->reason, result->durationMs, result->host, result->viaProxy);
+                          result->reason, result->durationMs, result->host, result->viaProxy,
+                          job->maxResponseBytes);
     if (job->replyQueue != nullptr) {
       if (xQueueSend(job->replyQueue, &result, pdMS_TO_TICKS(100)) != pdTRUE) {
         delete result;
@@ -4360,7 +4420,8 @@ bool httpGet(const std::string& url, const std::vector<KeyValue>& headers, int& 
     uint32_t durationMs = 0;
     std::string host;
     bool viaProxy = false;
-    return httpRequestDirect("GET", url, headers, "", statusCode, body, reason, durationMs, host, viaProxy);
+    return httpRequestDirect("GET", url, headers, "", statusCode, body, reason, durationMs, host, viaProxy,
+                             s.httpMaxBytes);
   }
 
   QueueHandle_t replyQueue = xQueueCreate(1, sizeof(HttpResult*));
@@ -4378,6 +4439,7 @@ bool httpGet(const std::string& url, const std::vector<KeyValue>& headers, int& 
   job->method = "GET";
   job->body.clear();
   job->headers = headers;
+  job->maxResponseBytes = s.httpMaxBytes;
   job->replyQueue = replyQueue;
 
   if (xQueueSend(sHttpJobQueue, &job, pdMS_TO_TICKS(kHttpGateTimeoutMs)) != pdTRUE) {
@@ -4414,7 +4476,7 @@ bool httpRequest(const std::string& method, const std::string& url, const std::v
     std::string host;
     bool viaProxy = false;
     return httpRequestDirect(method, url, headers, reqBody, statusCode, body, reason, durationMs, host,
-                             viaProxy);
+                             viaProxy, s.httpMaxBytes);
   }
 
   QueueHandle_t replyQueue = xQueueCreate(1, sizeof(HttpResult*));
@@ -4432,6 +4494,7 @@ bool httpRequest(const std::string& method, const std::string& url, const std::v
   job->url = url;
   job->body = reqBody;
   job->headers = headers;
+  job->maxResponseBytes = s.httpMaxBytes;
   job->replyQueue = replyQueue;
 
   if (xQueueSend(sHttpJobQueue, &job, pdMS_TO_TICKS(kHttpGateTimeoutMs)) != pdTRUE) {
@@ -4554,10 +4617,9 @@ bool executeTapAction(std::string& reasonOut) {
   return true;
 }
 
-bool resolveFieldsFromHttp(std::string_view jsonText) {
+bool resolveFieldsFromJsonView(std::string_view jsonText) {
   int resolved = 0;
   int missing = 0;
-  s.sourceJson.assign(jsonText.data(), jsonText.size());
   s.numericValues.clear();
   applyTransforms(jsonText);
 
@@ -4622,6 +4684,15 @@ bool resolveFieldsFromHttp(std::string_view jsonText) {
   }
 
   return resolved > 0;
+}
+
+bool resolveFieldsFromHttp(std::string&& jsonTextOwned) {
+  if (s.retainSourceJson) {
+    s.sourceJson = std::move(jsonTextOwned);
+    return resolveFieldsFromJsonView(std::string_view(s.sourceJson));
+  }
+  s.sourceJson.clear();
+  return resolveFieldsFromJsonView(std::string_view(jsonTextOwned));
 }
 
 bool resolveFieldsFromLocalTime() {
@@ -4711,7 +4782,7 @@ bool fetchAndResolve(uint32_t nowMs) {
       }
       return false;
     }
-    if (!resolveFieldsFromHttp(entityJson)) {
+    if (!resolveFieldsFromHttp(std::move(entityJson))) {
       noteFetchFailure(nowMs, "ha_ws parse unresolved");
       return false;
     }
@@ -4753,7 +4824,7 @@ bool fetchAndResolve(uint32_t nowMs) {
     return false;
   }
 
-  if (!resolveFieldsFromHttp(body)) {
+  if (!resolveFieldsFromHttp(std::move(body))) {
     noteFetchFailure(nowMs, "dsl parse unresolved");
     return false;
   }
@@ -5704,11 +5775,14 @@ bool begin(const char* widgetId, const char* dslPath, uint16_t x, uint16_t y, ui
     return false;
   }
 
-  ESP_LOGI(kTag, "begin widget=%s path=%s source=%d poll_ms=%u fields=%u nodes=%u modals=%u touch_regions=%u settings=%u",
+  ESP_LOGI(kTag,
+           "begin widget=%s path=%s source=%d poll_ms=%u fields=%u nodes=%u modals=%u touch_regions=%u settings=%u "
+           "http_max=%u retain_source=%d",
            s.widgetId.c_str(), s.dslPath.c_str(), static_cast<int>(s.source),
            static_cast<unsigned>(s.pollMs), static_cast<unsigned>(s.fields.size()),
            static_cast<unsigned>(s.nodes.size()), static_cast<unsigned>(s.modals.size()),
-           static_cast<unsigned>(s.touchRegions.size()), static_cast<unsigned>(s.settingValues.size()));
+           static_cast<unsigned>(s.touchRegions.size()), static_cast<unsigned>(s.settingValues.size()),
+           static_cast<unsigned>(s.httpMaxBytes), s.retainSourceJson ? 1 : 0);
 
   render();
   sInstances.push_back(std::move(s));
