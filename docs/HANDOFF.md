@@ -1,5 +1,66 @@
 # Handoff Runbook (Release Prep)
 
+## 0) Session Log - PlatformIO/IDF Stabilization + Geo/Timezone Fixes (2026-02-26, Night)
+
+Summary: Stabilized the PlatformIO ESP-IDF path (tooling + filesystem packaging), fixed multiple runtime crash/memory-pressure behaviors in the DSL/HA card path, and restored geo/timezone auto-resolution in the IDF scaffold boot flow.
+
+### What Was Completed
+
+- PlatformIO/toolchain environment:
+  - Standardized on system PlatformIO at `/opt/homebrew/bin/platformio`.
+  - Removed reliance on `/tmp` PIO path/cache workflow.
+  - Verified repeatable builds with `platformio run`.
+
+- PlatformIO project config and FS packaging:
+  - `platformio.ini` updates:
+    - `board_build.sdkconfig_defaults = idf/sdkconfig.defaults`
+    - `board_build.filesystem = littlefs`
+    - `board_upload.flash_size = 4MB`
+  - `tools/pio_filter_data.py` updated to stop filtering out `dsl_available`.
+  - Result: required assets now included in LittleFS image (`dsl_active`, `dsl_available`, layouts, icons/meteocons).
+
+- IDF runtime stability and behavior fixes (`idf/main/DslWidgetRuntimeEspIdf.cpp`):
+  - Added deferred-fetch backoff/log throttling while HA WS is not ready (eliminates hot spin loop).
+  - Fixed tap action mode conversion ordering so HA card taps use WS service path when configured (not fallback HTTP).
+  - Moved remote icon fetch to prefetch phase; render now cache-first.
+  - Fixed low-heap crash path by avoiding icon pixel vector copy during render (use cache pointer/ref path).
+  - Added HA bootstrap payload support for `last_updated`/`last_changed` so “updated time” fields are populated on first paint.
+  - Added node expansion estimate + reserve/heap guard around apply path to avoid aborts from vector reallocation under pressure.
+
+- IDF timezone/geo bootstrap parity fix (`idf/main/app_main.cpp`):
+  - Added IDF-native online geo refresh after Wi-Fi connect (manual override still respected).
+  - Added fallback providers (`ipwho.is`, `ipapi.co`, `ipinfo.io`, `ip-api.com`) and timezone offset fallback via `worldtimeapi`.
+  - Persists resolved values to NVS (`geo.lat/lon/tz/off_min`, `geo.label`) for future boots.
+  - This addresses symptoms:
+    - clock stuck in GMT/UTC presentation
+    - analog clock location showing `Unknown`
+    - sunrise/sunset appearing UTC-shifted
+
+### Build Verification
+
+- Verified successful build:
+  - `/opt/homebrew/bin/platformio run`
+- Result:
+  - `SUCCESS` (esp32dev_idf)
+
+### Current Open Risks / Validation Needed Tomorrow
+
+- Need on-device validation for new geo/timezone boot path:
+  - confirm log line `geo: online source=... tz=... off_min=...`
+  - confirm analog clock location no longer `Unknown`
+  - confirm sunrise/sunset are local-time plausible values
+- Need regression sweep for layout switching after recent heap-guard changes.
+- Need longer soak on HA card screen (6 cards active) to confirm no recurrent abort/reconnect churn.
+
+### Recommended First Steps Tomorrow
+
+1. Flash and monitor:
+   - `pio run -t upload -t monitor`
+2. Validate boot geo/tz logs and UI time correctness.
+3. Exercise runtime menu layout switching A/B/NYT repeatedly.
+4. Run HA-card soak for at least 20-30 minutes and capture heap-largests + WS reconnect events.
+5. If timezone still wrong, clear NVS once (`pio run -t erase -t upload`) and retest.
+
 ## 0) Session Log - USGS Quake Widget + Transform Extensions (2026-02-26)
 
 Summary: Added a new USGS earthquake widget set (nearest list + mini radar map), extended DSL transforms for range filtering and relative-position plotting, and improved numeric node expression binding for settings-driven scaling.

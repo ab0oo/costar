@@ -18,9 +18,11 @@
 #include "esp_err.h"
 #include "esp_event.h"
 #include "esp_heap_caps.h"
+#include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
+#include "esp_crt_bundle.h"
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
@@ -29,9 +31,11 @@
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
+#include <array>
+#include <cerrno>
+#include <cstdlib>
 #include <string>
 #include <vector>
-#include <cstdlib>
 
 namespace {
 constexpr const char* kTag = "costar-idf";
@@ -115,6 +119,379 @@ struct GeoContext {
   std::string source = "none";
   bool hasLocation = false;
 };
+
+struct HttpTextResponse {
+  int statusCode = 0;
+  std::string body;
+  std::string reason;
+};
+
+bool parseJsonStringLiteral(const std::string& text, size_t startQuote, std::string& out) {
+  if (startQuote >= text.size() || text[startQuote] != '"') {
+    return false;
+  }
+  out.clear();
+  out.reserve(64);
+  bool esc = false;
+  for (size_t i = startQuote + 1; i < text.size(); ++i) {
+    const char c = text[i];
+    if (esc) {
+      out.push_back(c);
+      esc = false;
+      continue;
+    }
+    if (c == '\\') {
+      esc = true;
+      continue;
+    }
+    if (c == '"') {
+      return true;
+    }
+    out.push_back(c);
+  }
+  return false;
+}
+
+bool findJsonKeyValueStart(const std::string& json, const char* key, size_t& valueStart) {
+  if (key == nullptr || *key == '\0') {
+    return false;
+  }
+  const std::string needle = std::string("\"") + key + "\"";
+  size_t pos = json.find(needle);
+  while (pos != std::string::npos) {
+    size_t colon = json.find(':', pos + needle.size());
+    if (colon == std::string::npos) {
+      return false;
+    }
+    size_t value = colon + 1;
+    while (value < json.size() &&
+           (json[value] == ' ' || json[value] == '\t' || json[value] == '\r' || json[value] == '\n')) {
+      ++value;
+    }
+    if (value < json.size()) {
+      valueStart = value;
+      return true;
+    }
+    pos = json.find(needle, pos + needle.size());
+  }
+  return false;
+}
+
+bool extractJsonString(const std::string& json, const char* key, std::string& out) {
+  size_t valueStart = 0;
+  if (!findJsonKeyValueStart(json, key, valueStart)) {
+    return false;
+  }
+  if (valueStart >= json.size() || json[valueStart] != '"') {
+    return false;
+  }
+  return parseJsonStringLiteral(json, valueStart, out);
+}
+
+bool extractJsonNumber(const std::string& json, const char* key, double& out) {
+  size_t valueStart = 0;
+  if (!findJsonKeyValueStart(json, key, valueStart)) {
+    return false;
+  }
+  char* end = nullptr;
+  errno = 0;
+  const double value = std::strtod(json.c_str() + valueStart, &end);
+  if (end == json.c_str() + valueStart || errno != 0) {
+    return false;
+  }
+  out = value;
+  return true;
+}
+
+bool extractNestedObjectValue(const std::string& json, const char* parentKey, const char* childKey,
+                              std::string& out) {
+  size_t valueStart = 0;
+  if (!findJsonKeyValueStart(json, parentKey, valueStart)) {
+    return false;
+  }
+  if (valueStart >= json.size() || json[valueStart] != '{') {
+    return false;
+  }
+  const size_t objEnd = json.find('}', valueStart + 1);
+  if (objEnd == std::string::npos || objEnd <= valueStart) {
+    return false;
+  }
+  const std::string view = json.substr(valueStart, objEnd - valueStart + 1);
+  return extractJsonString(view, childKey, out);
+}
+
+bool extractNestedObjectNumber(const std::string& json, const char* parentKey, const char* childKey,
+                               double& out) {
+  size_t valueStart = 0;
+  if (!findJsonKeyValueStart(json, parentKey, valueStart)) {
+    return false;
+  }
+  if (valueStart >= json.size() || json[valueStart] != '{') {
+    return false;
+  }
+  const size_t objEnd = json.find('}', valueStart + 1);
+  if (objEnd == std::string::npos || objEnd <= valueStart) {
+    return false;
+  }
+  const std::string view = json.substr(valueStart, objEnd - valueStart + 1);
+  return extractJsonNumber(view, childKey, out);
+}
+
+bool parseOffsetText(const std::string& rawText, int& outMinutes) {
+  std::string raw = rawText;
+  raw.erase(std::remove_if(raw.begin(), raw.end(), [](char c) {
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+  }), raw.end());
+  if (raw.empty()) {
+    return false;
+  }
+  if (raw.rfind("UTC", 0) == 0) {
+    raw = raw.substr(3);
+  }
+  if (raw.size() < 2) {
+    return false;
+  }
+  const char sign = raw[0];
+  if (sign != '+' && sign != '-') {
+    return false;
+  }
+  int hh = 0;
+  int mm = 0;
+  if (raw.size() == 6 && raw[3] == ':') {  // +05:30
+    hh = std::atoi(raw.substr(1, 2).c_str());
+    mm = std::atoi(raw.substr(4, 2).c_str());
+  } else if (raw.size() == 5) {  // +0530
+    hh = std::atoi(raw.substr(1, 2).c_str());
+    mm = std::atoi(raw.substr(3, 2).c_str());
+  } else if (raw.size() == 3) {  // +05
+    hh = std::atoi(raw.substr(1, 2).c_str());
+    mm = 0;
+  } else {
+    return false;
+  }
+  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) {
+    return false;
+  }
+  int total = hh * 60 + mm;
+  if (sign == '-') {
+    total = -total;
+  }
+  outMinutes = total;
+  return true;
+}
+
+bool httpGetText(const char* url, HttpTextResponse& out) {
+  out = {};
+  if (url == nullptr || *url == '\0') {
+    out.reason = "url-empty";
+    return false;
+  }
+
+  esp_http_client_config_t cfg = {};
+  cfg.url = url;
+  cfg.method = HTTP_METHOD_GET;
+  cfg.timeout_ms = 8000;
+  cfg.buffer_size = 1024;
+  cfg.crt_bundle_attach = esp_crt_bundle_attach;
+  cfg.user_agent = "CoStar-IDF/1.0";
+
+  esp_http_client_handle_t client = esp_http_client_init(&cfg);
+  if (client == nullptr) {
+    out.reason = "client-init";
+    return false;
+  }
+
+  bool ok = false;
+  esp_err_t err = esp_http_client_open(client, 0);
+  if (err == ESP_OK) {
+    (void)esp_http_client_fetch_headers(client);
+    out.statusCode = esp_http_client_get_status_code(client);
+    out.body.clear();
+    out.body.reserve(1024);
+    char buf[384];
+    for (;;) {
+      const int n = esp_http_client_read(client, buf, sizeof(buf));
+      if (n > 0) {
+        out.body.append(buf, static_cast<size_t>(n));
+        continue;
+      }
+      if (n == 0) {
+        ok = true;
+      } else {
+        out.reason = "read";
+      }
+      break;
+    }
+  } else {
+    out.reason = esp_err_to_name(err);
+  }
+
+  esp_http_client_close(client);
+  esp_http_client_cleanup(client);
+  return ok;
+}
+
+bool parseGeoPayload(const std::string& body, GeoContext& outGeo, std::string& outLabel) {
+  double lat = NAN;
+  double lon = NAN;
+  bool hasLat = extractJsonNumber(body, "latitude", lat);
+  bool hasLon = extractJsonNumber(body, "longitude", lon);
+  if (!hasLat) {
+    hasLat = extractJsonNumber(body, "lat", lat);
+  }
+  if (!hasLon) {
+    hasLon = extractJsonNumber(body, "lon", lon);
+  }
+  if (!hasLat || !hasLon) {
+    return false;
+  }
+
+  std::string tz;
+  if (!extractJsonString(body, "timezone", tz)) {
+    (void)extractNestedObjectValue(body, "timezone", "id", tz);
+  }
+  if (tz.empty()) {
+    return false;
+  }
+
+  int offsetMinutes = 0;
+  bool hasOffset = false;
+  std::string offsetText;
+  if (extractJsonString(body, "utc_offset", offsetText) && parseOffsetText(offsetText, offsetMinutes)) {
+    hasOffset = true;
+  }
+  if (!hasOffset && extractNestedObjectValue(body, "timezone", "utc", offsetText) &&
+      parseOffsetText(offsetText, offsetMinutes)) {
+    hasOffset = true;
+  }
+  if (!hasOffset) {
+    double tzOffsetSeconds = 0;
+    if (extractNestedObjectNumber(body, "timezone", "offset", tzOffsetSeconds)) {
+      offsetMinutes = static_cast<int>(tzOffsetSeconds / 60.0);
+      hasOffset = true;
+    }
+  }
+  if (!hasOffset) {
+    double utcOffsetSeconds = 0;
+    if (extractJsonNumber(body, "utc_offset_seconds", utcOffsetSeconds)) {
+      offsetMinutes = static_cast<int>(utcOffsetSeconds / 60.0);
+      hasOffset = true;
+    }
+  }
+
+  std::string city;
+  std::string region;
+  std::string country;
+  (void)extractJsonString(body, "city", city);
+  (void)extractJsonString(body, "region", region);
+  if (country.empty()) {
+    (void)extractJsonString(body, "country", country);
+  }
+  if (country.empty()) {
+    (void)extractJsonString(body, "country_name", country);
+  }
+  outLabel.clear();
+  if (!city.empty()) {
+    outLabel = city;
+  }
+  if (!region.empty()) {
+    if (!outLabel.empty()) {
+      outLabel += ", ";
+    }
+    outLabel += region;
+  }
+  if (!country.empty()) {
+    if (!outLabel.empty()) {
+      outLabel += ", ";
+    }
+    outLabel += country;
+  }
+
+  outGeo.lat = static_cast<float>(lat);
+  outGeo.lon = static_cast<float>(lon);
+  outGeo.timezone = tz;
+  outGeo.utcOffsetMinutes = offsetMinutes;
+  outGeo.hasUtcOffset = hasOffset;
+  outGeo.hasLocation = true;
+  return true;
+}
+
+bool fetchTimezoneOffsetMinutes(const std::string& timezone, int& outMinutes) {
+  if (timezone.empty()) {
+    return false;
+  }
+  const std::string url = "https://worldtimeapi.org/api/timezone/" + timezone;
+  HttpTextResponse resp;
+  if (!httpGetText(url.c_str(), resp)) {
+    return false;
+  }
+  if (resp.statusCode < 200 || resp.statusCode >= 300) {
+    return false;
+  }
+  std::string offsetText;
+  if (!extractJsonString(resp.body, "utc_offset", offsetText)) {
+    return false;
+  }
+  return parseOffsetText(offsetText, outMinutes);
+}
+
+bool refreshGeoContextFromInternet(GeoContext& geoOut) {
+  static constexpr std::array<const char*, 4> kGeoUrls = {
+      "https://ipwho.is/",
+      "https://ipapi.co/json/",
+      "https://ipinfo.io/json",
+      "http://ip-api.com/json/",
+  };
+
+  for (const char* url : kGeoUrls) {
+    HttpTextResponse resp;
+    if (!httpGetText(url, resp)) {
+      ESP_LOGW("geo", "fetch fail source=%s reason=%s", url, resp.reason.c_str());
+      continue;
+    }
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      ESP_LOGW("geo", "fetch fail source=%s status=%d", url, resp.statusCode);
+      continue;
+    }
+    std::string label;
+    GeoContext parsed;
+    if (!parseGeoPayload(resp.body, parsed, label)) {
+      ESP_LOGW("geo", "parse fail source=%s body_len=%u", url, static_cast<unsigned>(resp.body.size()));
+      continue;
+    }
+    if (!parsed.hasUtcOffset) {
+      int resolvedOffset = 0;
+      if (fetchTimezoneOffsetMinutes(parsed.timezone, resolvedOffset)) {
+        parsed.utcOffsetMinutes = resolvedOffset;
+        parsed.hasUtcOffset = true;
+        ESP_LOGI("geo", "timezone offset resolved from worldtimeapi tz=%s off_min=%d",
+                 parsed.timezone.c_str(), parsed.utcOffsetMinutes);
+      }
+    }
+    parsed.source = url;
+    geoOut = parsed;
+    constexpr const char* kGeoNs = "geo";
+    constexpr const char* kModeKey = "mode";
+    constexpr const char* kCachedLatKey = "lat";
+    constexpr const char* kCachedLonKey = "lon";
+    constexpr const char* kCachedTzKey = "tz";
+    constexpr const char* kCachedOffsetKey = "off_min";
+    constexpr const char* kCachedLabelKey = "label";
+    constexpr int kModeAuto = 0;
+    constexpr int kOffsetUnknown = -32768;
+    (void)platform::prefs::putInt(kGeoNs, kModeKey, kModeAuto);
+    (void)platform::prefs::putFloat(kGeoNs, kCachedLatKey, geoOut.lat);
+    (void)platform::prefs::putFloat(kGeoNs, kCachedLonKey, geoOut.lon);
+    (void)platform::prefs::putString(kGeoNs, kCachedTzKey, geoOut.timezone.c_str());
+    (void)platform::prefs::putInt(kGeoNs, kCachedOffsetKey,
+                                  geoOut.hasUtcOffset ? geoOut.utcOffsetMinutes : kOffsetUnknown);
+    if (!label.empty()) {
+      (void)platform::prefs::putString(kGeoNs, kCachedLabelKey, label.c_str());
+    }
+    return true;
+  }
+  return false;
+}
 
 void initNvs() {
   esp_err_t err = nvs_flash_init();
@@ -1461,7 +1838,7 @@ extern "C" void app_main() {
     (void)runConfigInteraction(kConfigPostConnectMs, true, true, false);
   }
 
-  const GeoContext geo = loadGeoContextFromPrefs();
+  GeoContext geo = loadGeoContextFromPrefs();
   if (geo.hasLocation) {
     ESP_LOGI("geo", "source=%s lat=%.4f lon=%.4f tz=%s off_min=%d known=%d", geo.source.c_str(),
              geo.lat, geo.lon, geo.timezone.c_str(), geo.utcOffsetMinutes,
@@ -1473,6 +1850,18 @@ extern "C" void app_main() {
   std::string ipText;
   if (wifiReady && platform::net::getLocalIp(ipText) && !ipText.empty()) {
     ESP_LOGI(kWifiTag, "connected ip=%s", ipText.c_str());
+  }
+
+  if (wifiReady && geo.source != "manual") {
+    GeoContext refreshedGeo;
+    if (refreshGeoContextFromInternet(refreshedGeo)) {
+      geo = refreshedGeo;
+      ESP_LOGI("geo", "online source=%s lat=%.4f lon=%.4f tz=%s off_min=%d known=%d",
+               geo.source.c_str(), geo.lat, geo.lon, geo.timezone.c_str(), geo.utcOffsetMinutes,
+               geo.hasUtcOffset ? 1 : 0);
+    } else {
+      ESP_LOGW("geo", "online fetch failed; using cached timezone context");
+    }
   }
 
   (void)timesync::ensureUtcTime();

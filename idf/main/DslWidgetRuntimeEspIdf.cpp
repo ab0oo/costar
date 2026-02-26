@@ -269,6 +269,7 @@ struct State {
   uint32_t pollMs = kDefaultPollMs;
   uint32_t lastFetchMs = 0;
   uint32_t backoffUntilMs = 0;
+  uint32_t lastDeferredLogMs = 0;
   uint8_t failureStreak = 0;
   TapActionType tapAction = TapActionType::kNone;
   std::string tapUrlTemplate;
@@ -2536,6 +2537,58 @@ TextDatum parseDatum(const std::string& align, const std::string& valign) {
 
 void applyNode(std::string_view nodeObj, const VarContext* vars, std::vector<Node>& outNodes);
 
+size_t estimateNodesCount(std::string_view nodesArray, const VarContext* vars, int depth = 0) {
+  if (depth > 8) {
+    return 0;
+  }
+  size_t total = 0;
+  forEachArrayElement(nodesArray, [&](int /*idx*/, std::string_view nodeValue) {
+    nodeValue = trimView(nodeValue);
+    if (nodeValue.empty() || nodeValue.front() != '{') {
+      return;
+    }
+    std::string type;
+    if (!objectMemberString(nodeValue, "type", type)) {
+      ++total;
+      return;
+    }
+    std::transform(type.begin(), type.end(), type.begin(), [](unsigned char c) {
+      return static_cast<char>(std::tolower(c));
+    });
+    if (type != "repeat") {
+      ++total;
+      return;
+    }
+
+    int count = 0;
+    (void)readIntValue(nodeValue, "count", vars, count);
+    int times = 0;
+    if (readIntValue(nodeValue, "times", vars, times)) {
+      count = times;
+    }
+    count = std::clamp(count, 0, 512);
+    if (count <= 0) {
+      return;
+    }
+
+    std::string_view childNodes;
+    std::string_view singleNode;
+    const bool hasNodes = objectMemberArray(nodeValue, "nodes", childNodes);
+    const bool hasNode = objectMemberObject(nodeValue, "node", singleNode);
+    size_t childCount = 0;
+    if (hasNodes) {
+      childCount = estimateNodesCount(childNodes, vars, depth + 1);
+    } else if (hasNode) {
+      childCount = 1;
+    }
+    total += childCount * static_cast<size_t>(count);
+    if (total > 512) {
+      total = 512;
+    }
+  });
+  return total;
+}
+
 void applyNodes(std::string_view nodesArray, const VarContext* vars, std::vector<Node>& outNodes) {
   forEachArrayElement(nodesArray, [&](int /*idx*/, std::string_view nodeValue) {
     nodeValue = trimView(nodeValue);
@@ -3348,6 +3401,18 @@ bool loadDslConfig(const std::string& dslJson) {
     }
     std::string_view nodesArray;
     if (objectMemberArray(uiObj, "nodes", nodesArray)) {
+      const size_t estimatedNodes = estimateNodesCount(nodesArray, nullptr);
+      if (estimatedNodes > 0) {
+        const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+        const size_t reserveBytes = estimatedNodes * sizeof(Node);
+        if (largest < reserveBytes + 4096U) {
+          ESP_LOGW(kTag, "dsl nodes reserve skipped widget=%s est_nodes=%u need=%u largest=%u",
+                   s.widgetId.c_str(), static_cast<unsigned>(estimatedNodes),
+                   static_cast<unsigned>(reserveBytes), static_cast<unsigned>(largest));
+          return false;
+        }
+        s.nodes.reserve(estimatedNodes);
+      }
       applyNodes(nodesArray, nullptr, s.nodes);
     }
 
@@ -4229,6 +4294,8 @@ bool requestHaWsEntityBootstrap(const std::string& entityId, std::string& reason
       "{% set s = states[entity_id] %}"
       "{{ {'entity_id': entity_id,"
       "'state': (s.state if s else ''),"
+      "'last_updated': (s.last_updated.isoformat() if s and s.last_updated else ''),"
+      "'last_changed': (s.last_changed.isoformat() if s and s.last_changed else ''),"
       "'attributes': (s.attributes if s else {})} | tojson }}";
   char prefix[160];
   std::snprintf(prefix, sizeof(prefix),
@@ -4624,17 +4691,22 @@ void noteFetchFailure(uint32_t nowMs, const char* reason) {
            reason != nullptr ? reason : "unknown");
 }
 
-void noteFetchDeferred(const char* reason) {
-  const uint32_t nowMs = platform::millisMs();
-  if (s.backoffUntilMs == 0 || static_cast<int32_t>(s.backoffUntilMs - nowMs) > 250) {
-    s.backoffUntilMs = nowMs + 250;
+void noteFetchDeferred(uint32_t nowMs, const char* reason) {
+  const uint32_t desiredDelayMs = std::clamp<uint32_t>(s.pollMs / 3U, 1000U, 5000U);
+  if (s.backoffUntilMs == 0 || static_cast<int32_t>(s.backoffUntilMs - nowMs) < static_cast<int32_t>(desiredDelayMs)) {
+    s.backoffUntilMs = nowMs + desiredDelayMs;
   }
-  ESP_LOGI(kTag, "fetch deferred widget=%s reason=%s", s.widgetId.c_str(), reason != nullptr ? reason : "unknown");
+  if (s.lastDeferredLogMs == 0 || static_cast<int32_t>(nowMs - s.lastDeferredLogMs) >= 2000) {
+    ESP_LOGI(kTag, "fetch deferred widget=%s backoff_ms=%u reason=%s", s.widgetId.c_str(),
+             static_cast<unsigned>(desiredDelayMs), reason != nullptr ? reason : "unknown");
+    s.lastDeferredLogMs = nowMs;
+  }
 }
 
 void noteFetchSuccess() {
   s.failureStreak = 0;
   s.backoffUntilMs = 0;
+  s.lastDeferredLogMs = 0;
 }
 
 bool executeTapAction(std::string& reasonOut) {
@@ -4837,12 +4909,15 @@ bool resolveFieldsFromLocalTime() {
   return resolved > 0;
 }
 
+void prefetchRemoteIconsForCurrentState();
+
 bool fetchAndResolve(uint32_t nowMs) {
   if (s.source == DataSource::kLocalTime) {
     if (!resolveFieldsFromLocalTime()) {
       noteFetchFailure(nowMs, "local_time unavailable");
       return false;
     }
+    prefetchRemoteIconsForCurrentState();
     noteFetchSuccess();
     return true;
   }
@@ -4865,13 +4940,13 @@ bool fetchAndResolve(uint32_t nowMs) {
     std::string entityJson;
     if (!readHaWsEntityJson(entityId, entityJson)) {
       if (!wsReady) {
-        noteFetchDeferred(wsReason.c_str());
+        noteFetchDeferred(nowMs, wsReason.c_str());
       } else {
         std::string ignoredTriggerReason;
         (void)requestHaWsEntitySubscription(entityId, ignoredTriggerReason);
         std::string bootstrapReason;
         (void)requestHaWsEntityBootstrap(entityId, bootstrapReason);
-        noteFetchDeferred(bootstrapReason.c_str());
+        noteFetchDeferred(nowMs, bootstrapReason.c_str());
       }
       return false;
     }
@@ -4879,6 +4954,7 @@ bool fetchAndResolve(uint32_t nowMs) {
       noteFetchFailure(nowMs, "ha_ws parse unresolved");
       return false;
     }
+    prefetchRemoteIconsForCurrentState();
     noteFetchSuccess();
     return true;
   }
@@ -4922,6 +4998,7 @@ bool fetchAndResolve(uint32_t nowMs) {
     return false;
   }
 
+  prefetchRemoteIconsForCurrentState();
   noteFetchSuccess();
   return true;
 }
@@ -5237,6 +5314,17 @@ bool iconMemCacheGet(const std::string& key, std::vector<uint16_t>& outPixels) {
   return true;
 }
 
+bool iconMemCacheGetPtr(const std::string& key, const std::vector<uint16_t>*& outPixels) {
+  outPixels = nullptr;
+  auto it = sIconMemCache.find(key);
+  if (it == sIconMemCache.end()) {
+    return false;
+  }
+  it->second.lastUsedMs = platform::millisMs();
+  outPixels = &it->second.pixels;
+  return true;
+}
+
 void iconMemCachePut(const std::string& key, const std::vector<uint16_t>& pixels) {
   const size_t bytes = pixels.size() * sizeof(uint16_t);
   if (bytes > kIconMemCacheBudgetBytes) {
@@ -5296,7 +5384,8 @@ void iconFileCachePut(const std::string& key, const std::vector<uint16_t>& pixel
   std::fclose(fp);
 }
 
-bool loadIconRemote(const std::string& url, int w, int h, std::vector<uint16_t>& outPixels) {
+bool loadIconRemote(const std::string& url, int w, int h, std::vector<uint16_t>& outPixels,
+                    bool allowNetwork = true) {
   if (url.empty() || w <= 0 || h <= 0) {
     return false;
   }
@@ -5314,6 +5403,9 @@ bool loadIconRemote(const std::string& url, int w, int h, std::vector<uint16_t>&
     iconMemCachePut(key, outPixels);
     sIconRetryAfterMs.erase(key);
     return true;
+  }
+  if (!allowNetwork) {
+    return false;
   }
 
   int status = 0;
@@ -5349,6 +5441,21 @@ bool loadIconRemote(const std::string& url, int w, int h, std::vector<uint16_t>&
   iconFileCachePut(key, outPixels);
   sIconRetryAfterMs.erase(key);
   return true;
+}
+
+void prefetchRemoteIconsForCurrentState() {
+  for (const Node& node : s.nodes) {
+    if (node.type != NodeType::kIcon || node.w <= 0 || node.h <= 0) {
+      continue;
+    }
+    const std::string rawPath = node.path.empty() ? node.text : node.path;
+    const std::string iconPath = bindRuntimeTemplate(rawPath);
+    if (!isHttpUrl(iconPath)) {
+      continue;
+    }
+    std::vector<uint16_t> ignoredPixels;
+    (void)loadIconRemote(iconPath, node.w, node.h, ignoredPixels, true);
+  }
 }
 
 bool getNumeric(const std::string& key, float& out) {
@@ -5622,22 +5729,31 @@ void renderNodes() {
         continue;
       }
       std::vector<uint16_t> pixels;
-      const bool ok = isHttpUrl(iconPath) ? loadIconRemote(iconPath, node.w, node.h, pixels)
-                                          : loadIcon(iconPath, node.w, node.h, pixels);
-      if (!ok) {
-        continue;
+      const std::vector<uint16_t>* pixelsRef = nullptr;
+      if (isHttpUrl(iconPath)) {
+        const std::string cacheKey = iconCacheKey(iconPath, node.w, node.h);
+        if (!iconMemCacheGetPtr(cacheKey, pixelsRef) || pixelsRef == nullptr) {
+          continue;
+        }
+      } else {
+        const bool ok = loadIcon(iconPath, node.w, node.h, pixels);
+        if (!ok) {
+          continue;
+        }
+        pixelsRef = &pixels;
       }
       if (canvasActive()) {
         for (int iy = 0; iy < node.h; ++iy) {
           for (int ix = 0; ix < node.w; ++ix) {
             drawPixel(x + ix, y + iy,
-                      pixels[static_cast<size_t>(iy) * static_cast<size_t>(node.w) + static_cast<size_t>(ix)]);
+                      (*pixelsRef)[static_cast<size_t>(iy) * static_cast<size_t>(node.w) +
+                                   static_cast<size_t>(ix)]);
           }
         }
       } else {
         (void)display_spi::drawRgb565(static_cast<uint16_t>(x), static_cast<uint16_t>(y),
                                       static_cast<uint16_t>(node.w), static_cast<uint16_t>(node.h),
-                                      pixels.data());
+                                      pixelsRef->data());
       }
       continue;
     }
@@ -5858,7 +5974,6 @@ bool begin(const char* widgetId, const char* dslPath, uint16_t x, uint16_t y, ui
   s.w = w;
   s.h = h;
   loadWidgetSettings(settingsJson, sharedSettingsJson);
-  loadTapActionFromSettings();
 
   const std::string dslJson = readFile(s.dslPath.c_str());
   if (dslJson.empty() || !loadDslConfig(dslJson)) {
@@ -5867,6 +5982,7 @@ bool begin(const char* widgetId, const char* dslPath, uint16_t x, uint16_t y, ui
     s = std::move(previous);
     return false;
   }
+  loadTapActionFromSettings();
 
   ESP_LOGI(kTag,
            "begin widget=%s path=%s source=%d poll_ms=%u fields=%u nodes=%u modals=%u touch_regions=%u settings=%u "
@@ -5918,9 +6034,9 @@ bool tick(uint32_t nowMs) {
         s.hasData = true;
         s.lastFetchMs = nowMs;
         ESP_LOGI(kTag, "update ok widget=%s", s.widgetId.c_str());
+        render();
+        drew = true;
       }
-      render();
-      drew = true;
     }
     instance = std::move(s);
   }

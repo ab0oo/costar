@@ -13,12 +13,8 @@ def _prepare_filtered_data_dir(source, target, env):
     if filtered_dir.exists():
         shutil.rmtree(filtered_dir)
 
-    def _ignore(path, names):
-        if Path(path).resolve() == data_dir.resolve():
-            return {"dsl_available"} if "dsl_available" in names else set()
-        return set()
-
-    shutil.copytree(data_dir, filtered_dir, ignore=_ignore)
+    # Keep FS payload identical to data/ so required boot/runtime assets are present.
+    shutil.copytree(data_dir, filtered_dir)
     env.Replace(PROJECT_DATA_DIR=str(filtered_dir))
 
 
