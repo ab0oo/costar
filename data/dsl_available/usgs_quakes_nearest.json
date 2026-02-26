@@ -1,0 +1,125 @@
+{
+  "version": 1,
+  "data": {
+    "source": "http",
+    "url": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/1.0_hour.geojson",
+    "poll_ms": 60000,
+    "debug": true,
+    "transforms": [
+      {
+        "op": "map",
+        "from": "features",
+        "to": "rows",
+        "fields": {
+          "mag": "properties.mag",
+          "place": "properties.place",
+          "lat": "geometry.coordinates[1]",
+          "lon": "geometry.coordinates[0]",
+          "depth_km": "geometry.coordinates[2]",
+          "event_id": "id"
+        }
+      },
+      {
+        "op": "compute_distance",
+        "from": "rows",
+        "to_field": "km",
+        "lat_path": "lat",
+        "lon_path": "lon",
+        "origin_lat": "{{geo.lat}}",
+        "origin_lon": "{{geo.lon}}"
+      },
+      {
+        "op": "sort",
+        "from": "rows",
+        "by": "km",
+        "numeric": true,
+        "order": "asc"
+      },
+      {
+        "op": "take",
+        "from": "rows",
+        "count": 5
+      },
+      {
+        "op": "index_rows",
+        "from": "rows",
+        "count": 5,
+        "count_key": "q_count",
+        "fields": ["mag", "place", "km", "depth_km", "event_id"],
+        "prefix_map": {
+          "mag": "qmag",
+          "place": "qplace",
+          "km": "qkm",
+          "depth_km": "qdepth",
+          "event_id": "qid"
+        },
+        "fill_empty": true
+      }
+    ],
+    "fields": {
+      "count": "q_count"
+    }
+  },
+  "ui": {
+    "title": "USGS Quakes Nearby",
+    "nodes": [
+      {
+        "type": "label",
+        "x": 4,
+        "y": 2,
+        "font": 1,
+        "color": "#9FD3FF",
+        "text": "USGS M1.0+ (1h): {{count}} nearest"
+      },
+      {
+        "type": "line",
+        "x": 4,
+        "y": 12,
+        "x2": 154,
+        "y2": 12,
+        "thickness": 1,
+        "color": "#1E2B3D"
+      },
+      {
+        "type": "repeat",
+        "count": 5,
+        "start": 1,
+        "step": 1,
+        "var": "i",
+        "nodes": [
+          {
+            "type": "label",
+            "x": 4,
+            "y": "16 + (i-1)*22",
+            "font": 1,
+            "color": "#FFD56B",
+            "text": "M{{value}}",
+            "path": "qmag{{i}}"
+          },
+          {
+            "type": "label",
+            "x": 48,
+            "y": "16 + (i-1)*22",
+            "font": 1,
+            "color": "#7CE2FF",
+            "text": "{{value}}km",
+            "path": "qkm{{i}}"
+          },
+          {
+            "type": "label",
+            "x": 4,
+            "y": "24 + (i-1)*22",
+            "w": 150,
+            "h": 10,
+            "wrap": true,
+            "max_lines": 1,
+            "overflow": "ellipsis",
+            "font": 1,
+            "color": "#FFFFFF",
+            "path": "qplace{{i}}"
+          }
+        ]
+      }
+    ]
+  }
+}
