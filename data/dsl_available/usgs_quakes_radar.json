@@ -1,0 +1,212 @@
+{
+  "version": 1,
+  "data": {
+    "source": "http",
+    "url": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/1.0_hour.geojson",
+    "poll_ms": 60000,
+    "debug": true,
+    "transforms": [
+      {
+        "op": "map",
+        "from": "features",
+        "to": "rows",
+        "fields": {
+          "mag": "properties.mag",
+          "place": "properties.place",
+          "lat": "geometry.coordinates[1]",
+          "lon": "geometry.coordinates[0]",
+          "depth_km": "geometry.coordinates[2]",
+          "event_id": "id"
+        }
+      },
+      {
+        "op": "compute_distance",
+        "from": "rows",
+        "to_field": "km",
+        "lat_path": "lat",
+        "lon_path": "lon",
+        "origin_lat": "{{geo.lat}}",
+        "origin_lon": "{{geo.lon}}"
+      },
+      {
+        "op": "compute_offset",
+        "from": "rows",
+        "x_field": "dx_km",
+        "y_field": "dy_km",
+        "lat_path": "lat",
+        "lon_path": "lon",
+        "origin_lat": "{{geo.lat}}",
+        "origin_lon": "{{geo.lon}}"
+      },
+      {
+        "op": "filter_lte",
+        "from": "rows",
+        "by": "km",
+        "max": "{{setting.range_mi}}",
+        "unit": "mi"
+      },
+      {
+        "op": "sort",
+        "from": "rows",
+        "by": "km",
+        "numeric": true,
+        "order": "asc"
+      },
+      {
+        "op": "take",
+        "from": "rows",
+        "count": 5
+      },
+      {
+        "op": "index_rows",
+        "from": "rows",
+        "count": 5,
+        "count_key": "q_count",
+        "fields": ["mag", "place", "km", "dx_km", "dy_km", "depth_km", "event_id"],
+        "prefix_map": {
+          "mag": "qmag",
+          "place": "qplace",
+          "km": "qkm",
+          "dx_km": "qdx",
+          "dy_km": "qdy",
+          "depth_km": "qdepth",
+          "event_id": "qid"
+        },
+        "fill_empty": true
+      }
+    ],
+    "fields": {
+      "count": "q_count"
+    }
+  },
+  "ui": {
+    "title": "USGS Quake Radar",
+    "nodes": [
+      {
+        "type": "label",
+        "x": 4,
+        "y": 2,
+        "font": 1,
+        "color": "#9FD3FF",
+        "text": "Quakes {{count}} / {{setting.range_mi}}mi"
+      },
+      {
+        "type": "line",
+        "x": 4,
+        "y": 12,
+        "x2": 154,
+        "y2": 12,
+        "thickness": 1,
+        "color": "#1E2B3D"
+      },
+      {
+        "type": "arc",
+        "x": 118,
+        "y": 66,
+        "r": 34,
+        "thickness": 1,
+        "start_deg": 0,
+        "end_deg": 360,
+        "color": "#2A5278"
+      },
+      {
+        "type": "line",
+        "x": 118,
+        "y": 32,
+        "x2": 118,
+        "y2": 100,
+        "thickness": 1,
+        "color": "#1E2B3D"
+      },
+      {
+        "type": "line",
+        "x": 84,
+        "y": 66,
+        "x2": 152,
+        "y2": 66,
+        "thickness": 1,
+        "color": "#1E2B3D"
+      },
+      {
+        "type": "circle",
+        "x": "118 + (qdx1 / ({{setting.range_mi}} * 1.609344)) * 32",
+        "y": "66 - (qdy1 / ({{setting.range_mi}} * 1.609344)) * 32",
+        "r": 2,
+        "thickness": 1,
+        "color": "#FFD56B"
+      },
+      {
+        "type": "circle",
+        "x": "118 + (qdx2 / ({{setting.range_mi}} * 1.609344)) * 32",
+        "y": "66 - (qdy2 / ({{setting.range_mi}} * 1.609344)) * 32",
+        "r": 2,
+        "thickness": 1,
+        "color": "#FFD56B"
+      },
+      {
+        "type": "circle",
+        "x": "118 + (qdx3 / ({{setting.range_mi}} * 1.609344)) * 32",
+        "y": "66 - (qdy3 / ({{setting.range_mi}} * 1.609344)) * 32",
+        "r": 2,
+        "thickness": 1,
+        "color": "#FFD56B"
+      },
+      {
+        "type": "circle",
+        "x": "118 + (qdx4 / ({{setting.range_mi}} * 1.609344)) * 32",
+        "y": "66 - (qdy4 / ({{setting.range_mi}} * 1.609344)) * 32",
+        "r": 2,
+        "thickness": 1,
+        "color": "#FFD56B"
+      },
+      {
+        "type": "circle",
+        "x": "118 + (qdx5 / ({{setting.range_mi}} * 1.609344)) * 32",
+        "y": "66 - (qdy5 / ({{setting.range_mi}} * 1.609344)) * 32",
+        "r": 2,
+        "thickness": 1,
+        "color": "#FFD56B"
+      },
+      {
+        "type": "repeat",
+        "count": 3,
+        "start": 1,
+        "step": 1,
+        "var": "i",
+        "nodes": [
+          {
+            "type": "label",
+            "x": 4,
+            "y": "18 + (i-1)*12",
+            "font": 1,
+            "color": "#FFD56B",
+            "text": "M{{value}}",
+            "path": "qmag{{i}}"
+          },
+          {
+            "type": "label",
+            "x": 38,
+            "y": "18 + (i-1)*12",
+            "font": 1,
+            "color": "#7CE2FF",
+            "text": "{{value}}km",
+            "path": "qkm{{i}}"
+          },
+          {
+            "type": "label",
+            "x": 4,
+            "y": "24 + (i-1)*12",
+            "w": 76,
+            "h": 8,
+            "wrap": true,
+            "max_lines": 1,
+            "overflow": "ellipsis",
+            "font": 1,
+            "color": "#FFFFFF",
+            "path": "qplace{{i}}"
+          }
+        ]
+      }
+    ]
+  }
+}

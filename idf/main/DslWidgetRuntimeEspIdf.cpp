@@ -2438,6 +2438,7 @@ bool readFloatValue(std::string_view obj, const char* key, const VarContext* var
       return false;
     }
     expr = substituteTemplateVars(expr, vars);
+    expr = bindRuntimeTemplate(expr);
     return evalNumericExpr(expr, vars, out);
   }
   double raw = 0.0;
@@ -2919,6 +2920,94 @@ bool transformComputeDistance(std::string_view trObj, std::map<std::string, std:
   return true;
 }
 
+bool transformComputeOffset(std::string_view trObj, std::map<std::string, std::vector<TransformRow>>& arrays) {
+  const std::string from = readStringValue(trObj, "from", nullptr, "");
+  const std::string xField = readStringValue(trObj, "x_field", nullptr, "");
+  const std::string yField = readStringValue(trObj, "y_field", nullptr, "");
+  if (from.empty() || xField.empty() || yField.empty()) {
+    return false;
+  }
+  auto it = arrays.find(from);
+  if (it == arrays.end()) {
+    return false;
+  }
+
+  const std::string latPath = readStringValue(trObj, "lat_path", nullptr, "lat");
+  const std::string lonPath = readStringValue(trObj, "lon_path", nullptr, "lon");
+  std::string latArg = readStringValue(trObj, "origin_lat", nullptr, "");
+  std::string lonArg = readStringValue(trObj, "origin_lon", nullptr, "");
+  latArg = bindRuntimeTemplate(latArg);
+  lonArg = bindRuntimeTemplate(lonArg);
+  double originLat = loadGeoLat();
+  double originLon = loadGeoLon();
+  (void)parseStrictDouble(latArg, originLat);
+  (void)parseStrictDouble(lonArg, originLon);
+
+  for (TransformRow& row : it->second) {
+    double lat = 0.0;
+    double lon = 0.0;
+    if (!rowNumeric(row, latPath, lat) || !rowNumeric(row, lonPath, lon)) {
+      continue;
+    }
+    const double avgLatRad = ((originLat + lat) * 0.5) * (M_PI / 180.0);
+    const double dxKm = (lon - originLon) * 111.320 * std::cos(avgLatRad);
+    const double dyKm = (lat - originLat) * 110.574;
+    char xb[32];
+    char yb[32];
+    std::snprintf(xb, sizeof(xb), "%.3f", dxKm);
+    std::snprintf(yb, sizeof(yb), "%.3f", dyKm);
+    row.fields[xField] = xb;
+    row.fields[yField] = yb;
+  }
+  return true;
+}
+
+bool transformFilterLte(std::string_view trObj, std::map<std::string, std::vector<TransformRow>>& arrays) {
+  const std::string from = readStringValue(trObj, "from", nullptr, "");
+  const std::string by = readStringValue(trObj, "by", nullptr, "");
+  if (from.empty() || by.empty()) {
+    return false;
+  }
+  auto it = arrays.find(from);
+  if (it == arrays.end()) {
+    return false;
+  }
+
+  std::string maxText = readStringValue(trObj, "max", nullptr, "");
+  maxText = bindRuntimeTemplate(maxText);
+  if (maxText.empty()) {
+    return false;
+  }
+  double maxValue = 0.0;
+  if (!parseStrictDouble(maxText, maxValue)) {
+    return false;
+  }
+
+  std::string unit = readStringValue(trObj, "unit", nullptr, "km");
+  std::transform(unit.begin(), unit.end(), unit.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+  if (unit == "mi" || unit == "mile" || unit == "miles") {
+    maxValue *= 1.609344;
+  } else if (unit == "nm") {
+    maxValue *= 1.852;
+  }
+
+  std::vector<TransformRow> filtered;
+  filtered.reserve(it->second.size());
+  for (const TransformRow& row : it->second) {
+    double value = 0.0;
+    if (!rowNumeric(row, by, value)) {
+      continue;
+    }
+    if (value <= maxValue) {
+      filtered.push_back(row);
+    }
+  }
+  it->second = std::move(filtered);
+  return true;
+}
+
 bool transformSort(std::string_view trObj, std::map<std::string, std::vector<TransformRow>>& arrays) {
   const std::string from = readStringValue(trObj, "from", nullptr, "");
   const std::string by = readStringValue(trObj, "by", nullptr, "");
@@ -3098,6 +3187,10 @@ void applyTransforms(std::string_view rootJson) {
       ok = transformMap(rootJson, trObj, arrays);
     } else if (op == "compute_distance") {
       ok = transformComputeDistance(trObj, arrays);
+    } else if (op == "compute_offset") {
+      ok = transformComputeOffset(trObj, arrays);
+    } else if (op == "filter_lte") {
+      ok = transformFilterLte(trObj, arrays);
     } else if (op == "sort") {
       ok = transformSort(trObj, arrays);
     } else if (op == "take") {

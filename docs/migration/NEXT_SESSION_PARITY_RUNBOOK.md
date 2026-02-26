@@ -181,6 +181,21 @@ Pass evidence:
 rg -n "layout-runtime: loaded regions=|layout-runtime: dsl widgets started=|dsl-widget: begin widget=|dsl-widget: update ok widget=" "$LOG"
 ```
 
+## 9b) USGS Quake Widget Gate
+
+Exercise:
+1. Load `usgs_quakes_nearest.json` and confirm nearest list populates.
+2. Load `usgs_quakes_radar.json` with `setting.range_mi` configured (example: `150`).
+3. Confirm:
+   - range filter is applied
+   - mini radar points render
+   - no parse/fetch backoff loops
+
+Pass evidence:
+```bash
+rg -n "usgs|fetch fail widget=|update ok widget=|parse summary resolved=" "$LOG"
+```
+
 ## 10) Soak Gate (2-4 hours)
 
 Keep runtime active for 2-4 hours with periodic interaction:

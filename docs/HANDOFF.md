@@ -1,5 +1,55 @@
 # Handoff Runbook (Release Prep)
 
+## 0) Session Log - USGS Quake Widget + Transform Extensions (2026-02-26)
+
+Summary: Added a new USGS earthquake widget set (nearest list + mini radar map), extended DSL transforms for range filtering and relative-position plotting, and improved numeric node expression binding for settings-driven scaling.
+
+### What Was Completed
+
+- New DSL widgets:
+  - `data/dsl_available/usgs_quakes_nearest.json`
+    - Fetches USGS `M1.0+ past hour` GeoJSON feed
+    - Computes distance from `geo.lat/lon`
+    - Sorts nearest-first and renders top 5 list
+  - `data/dsl_available/usgs_quakes_radar.json`
+    - Same feed + nearest processing
+    - Adds range filter and mini radar plot
+    - Uses `setting.range_mi` to set query radius and map scaling
+
+- Runtime transform engine additions in:
+  - `idf/main/DslWidgetRuntimeEspIdf.cpp`
+  - Added `compute_offset` transform op:
+    - computes `dx_km` / `dy_km` (east/north offsets from origin lat/lon)
+  - Added `filter_lte` transform op:
+    - numeric threshold filter with optional unit conversion (`km`, `mi`, `nm`)
+  - `applyTransforms()` dispatcher updated for both ops.
+
+- Numeric-expression binding improvement:
+  - `readFloatValue(...)` now runs `bindRuntimeTemplate(...)` before expression eval.
+  - This enables `{{setting.*}}` values directly inside numeric DSL fields (`x`, `y`, `r`, etc.).
+
+- HTTP/JSON memory efficiency hardening (same pass):
+  - Reduced avoidable JSON body copies with move semantics.
+  - Added per-widget HTTP response cap (`http_max_bytes`, clamped).
+  - Conditional source JSON retention only when node path fallback needs it.
+
+### Build Verification
+
+- Verified successful build:
+  - `/home/johgor/.venv/bin/pio run`
+- Result:
+  - `SUCCESS`
+  - Flash use remains within 2MB app partition envelope.
+
+### Operational Notes for Quake Radar Widget
+
+- Required settings for practical use:
+  - `range_mi` (example: `150` or `250`)
+- Data feed:
+  - `https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/1.0_hour.geojson`
+- Update cadence:
+  - currently `poll_ms = 60000` (1 minute)
+
 ## 0) Session Log - PlatformIO IDF Default Cutover (2026-02-25, Night)
 
 Summary: We cut PlatformIO over to ESP-IDF as the default environment, preserved Arduino as a legacy env, and fixed the build routing so `pio run` now compiles the IDF app path instead of Arduino `src/` sources.

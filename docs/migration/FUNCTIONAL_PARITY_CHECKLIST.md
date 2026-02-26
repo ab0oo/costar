@@ -25,10 +25,14 @@ Legend:
 - `[x]` retry backoff with failure streak
 - `[x]` HTTP status/transport logging
 - `[x]` `data.headers` support in HTTP fetch path
+- `[x]` HTTP response size guard + reduced body-copy overhead in IDF runtime
 - `[~]` `adsb_nearest` migration in progress:
   - transform engine (`map`, `compute_distance`, `sort`, `take`, `index_rows`) added in IDF runtime
   - pilot JSON conversion done for `data/dsl_available/adsb_nearest.json`
   - hardware/runtime behavior validation still pending
+- `[x]` transform engine extension for geo widgets:
+  - `compute_offset`
+  - `filter_lte`
 
 ## 3. Layout + Activation Parity
 
@@ -48,6 +52,9 @@ Legend:
   - `weather_now`
   - `forecast`
   - `clock_analog_full`
+- `[ ]` hardware validation of new USGS quake widgets:
+  - `data/dsl_available/usgs_quakes_nearest.json`
+  - `data/dsl_available/usgs_quakes_radar.json`
 - `[ ]` HA authenticated widget end-to-end validation
 - `[ ]` multi-hour soak run (no crashes/regressions)
 
