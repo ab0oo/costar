@@ -65,6 +65,7 @@ constexpr const char* kIconCacheDir = "/littlefs/icon_cache";
 constexpr uint32_t kIconFetchRetryMs = 30000U;
 constexpr size_t kUiCriticalLargest8Bit = 12288U;
 constexpr size_t kUiCriticalFree8Bit = 24576U;
+constexpr time_t kTlsClockMinUnix = 1704067200;  // 2024-01-01T00:00:00Z
 
 enum class DataSource : uint8_t {
   kHttp,
@@ -208,9 +209,11 @@ struct KeyValue {
 };
 
 struct HttpCapture {
-  std::string body;
+  char* data = nullptr;
+  size_t size = 0;
   size_t maxBytes = kHttpResponseMaxBytesDefault;
   bool overflow = false;
+  bool oom = false;
 };
 
 struct HttpJob {
@@ -326,6 +329,7 @@ struct HaWsState {
   bool authOk = false;
   bool ready = false;
   bool started = false;
+  bool bootstrapTriggerPending = false;
   uint32_t nextReqId = 1;
   uint32_t reconnectDueMs = 0;
   uint8_t failureStreak = 0;
@@ -3644,21 +3648,24 @@ esp_err_t httpEventHandler(esp_http_client_event_t* evt) {
         const size_t contentLen = static_cast<size_t>(parsed);
         if (contentLen > cap->maxBytes) {
           cap->overflow = true;
-        } else {
-          cap->body.reserve(contentLen);
         }
       }
     }
   }
   if (evt->event_id == HTTP_EVENT_ON_DATA && evt->data != nullptr && evt->data_len > 0) {
-    if (cap->overflow) {
+    if (cap->overflow || cap->oom || cap->data == nullptr) {
+      if (cap->data == nullptr) {
+        cap->oom = true;
+      }
       return ESP_OK;
     }
-    if (cap->body.size() + static_cast<size_t>(evt->data_len) > cap->maxBytes) {
+    if (cap->size + static_cast<size_t>(evt->data_len) > cap->maxBytes) {
       cap->overflow = true;
       return ESP_OK;
     }
-    cap->body.append(static_cast<const char*>(evt->data), static_cast<size_t>(evt->data_len));
+    std::memcpy(cap->data + cap->size, evt->data, static_cast<size_t>(evt->data_len));
+    cap->size += static_cast<size_t>(evt->data_len);
+    cap->data[cap->size] = '\0';
   }
   return ESP_OK;
 }
@@ -3678,6 +3685,28 @@ bool isProxyUrl(const std::string& url, const std::string& host) {
     return true;
   }
   return url.find("/cmh?") != std::string::npos || url.find("/rss") != std::string::npos;
+}
+
+bool urlUsesTls(const std::string& url) {
+  return url.rfind("https://", 0) == 0 || url.rfind("wss://", 0) == 0;
+}
+
+bool tlsClockReady() {
+  return std::time(nullptr) >= kTlsClockMinUnix;
+}
+
+void logTlsFailureEpoch(const std::string& url, esp_err_t err) {
+  if (!urlUsesTls(url)) {
+    return;
+  }
+  const time_t nowUtc = std::time(nullptr);
+  const uint32_t heapFree = static_cast<uint32_t>(esp_get_free_heap_size());
+  const uint32_t heapLargest =
+      static_cast<uint32_t>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+  ESP_LOGW(kTag,
+           "tls diag epoch=%lld clock_ready=%d err=%s heap_free=%u heap_largest=%u url=%s",
+           static_cast<long long>(nowUtc), tlsClockReady() ? 1 : 0, esp_err_to_name(err),
+           static_cast<unsigned>(heapFree), static_cast<unsigned>(heapLargest), url.c_str());
 }
 
 void parseSettingsJsonIntoMap(const char* settingsJson, std::map<std::string, std::string>& outMap) {
@@ -3727,6 +3756,36 @@ bool takeHaWsLock(uint32_t timeoutMs) {
 void giveHaWsLock() {
   if (sHaWs.lock != nullptr) {
     xSemaphoreGive(sHaWs.lock);
+  }
+}
+
+void teardownHaWsClient() {
+  esp_websocket_client_handle_t clientToDestroy = nullptr;
+  if (takeHaWsLock(200)) {
+    clientToDestroy = sHaWs.client;
+    sHaWs.client = nullptr;
+    sHaWs.wsUrl.clear();
+    sHaWs.token.clear();
+    sHaWs.authOk = false;
+    sHaWs.ready = false;
+    sHaWs.started = false;
+    sHaWs.bootstrapTriggerPending = false;
+    sHaWs.nextReqId = 1;
+    sHaWs.reconnectDueMs = 0;
+    sHaWs.failureStreak = 0;
+    sHaWs.rxFrame.clear();
+    sHaWs.entityStateJson.clear();
+    sHaWs.renderReqToEntityId.clear();
+    sHaWs.entityIdToRenderReq.clear();
+    sHaWs.triggerReqToEntityId.clear();
+    sHaWs.entityIdToTriggerReq.clear();
+    sHaWs.triggerSubIdToEntityId.clear();
+    sHaWs.entityIdToTriggerSubId.clear();
+    giveHaWsLock();
+  }
+  if (clientToDestroy != nullptr) {
+    esp_websocket_client_stop(clientToDestroy);
+    esp_websocket_client_destroy(clientToDestroy);
   }
 }
 
@@ -3891,17 +3950,8 @@ void processHaWsMessageLocked(std::string_view msg) {
   if (type == "auth_ok") {
     sHaWs.authOk = true;
     sHaWs.ready = true;
+    sHaWs.bootstrapTriggerPending = true;
     ESP_LOGI(kTag, "ha_ws auth_ok ready");
-    int triggered = 0;
-    for (State& inst : sInstances) {
-      if (!inst.active || inst.source != DataSource::kHaWs) {
-        continue;
-      }
-      inst.lastFetchMs = 0;
-      inst.backoffUntilMs = 0;
-      ++triggered;
-    }
-    ESP_LOGI(kTag, "ha_ws bootstrap trigger widgets=%d", triggered);
     return;
   }
   if (type == "auth_invalid") {
@@ -4050,6 +4100,7 @@ void haWsEventHandler(void* /*handler_args*/, esp_event_base_t base, int32_t eve
       sHaWs.started = false;
       sHaWs.authOk = false;
       sHaWs.ready = false;
+      sHaWs.bootstrapTriggerPending = false;
       sHaWs.rxFrame.clear();
       sHaWs.renderReqToEntityId.clear();
       sHaWs.entityIdToRenderReq.clear();
@@ -4117,6 +4168,10 @@ bool ensureHaWsConnected(const std::string& wsUrl, const std::string& token, con
     reasonOut = "ws url/token empty";
     return false;
   }
+  if (urlUsesTls(wsUrl) && !tlsClockReady()) {
+    reasonOut = "clock not synced";
+    return false;
+  }
 
   if (!takeHaWsLock(300)) {
     reasonOut = "ws lock timeout";
@@ -4136,6 +4191,7 @@ bool ensureHaWsConnected(const std::string& wsUrl, const std::string& token, con
     sHaWs.authOk = false;
     sHaWs.ready = false;
     sHaWs.started = false;
+    sHaWs.bootstrapTriggerPending = false;
     sHaWs.entityStateJson.clear();
     sHaWs.renderReqToEntityId.clear();
     sHaWs.entityIdToRenderReq.clear();
@@ -4403,6 +4459,10 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
   durationMs = 0;
   hostOut = hostFromUrl(url);
   viaProxy = isProxyUrl(url, hostOut);
+  if (urlUsesTls(url) && !tlsClockReady()) {
+    reason = "clock not synced";
+    return false;
+  }
 
   if (sHttpGate == nullptr) {
     sHttpGate = xSemaphoreCreateMutex();
@@ -4423,6 +4483,13 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
 
   HttpCapture cap;
   cap.maxBytes = std::clamp<uint32_t>(maxResponseBytes, kHttpResponseMaxBytesMin, kHttpResponseMaxBytesMax);
+  cap.data = static_cast<char*>(heap_caps_malloc(cap.maxBytes + 1U, MALLOC_CAP_8BIT));
+  if (cap.data == nullptr) {
+    xSemaphoreGive(sHttpGate);
+    reason = "http capture alloc failed";
+    return false;
+  }
+  cap.data[0] = '\0';
   esp_http_client_config_t cfg = {};
   cfg.url = url.c_str();
   cfg.timeout_ms = static_cast<int>(kHttpTimeoutMs);
@@ -4494,13 +4561,20 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
   if (err == ESP_OK) {
     statusCode = esp_http_client_get_status_code(client);
   }
-  body = std::move(cap.body);
+  if (!cap.overflow && !cap.oom && cap.size > 0 && cap.data != nullptr) {
+    body.assign(cap.data, cap.size);
+  }
 
   esp_http_client_cleanup(client);
+  if (cap.data != nullptr) {
+    heap_caps_free(cap.data);
+    cap.data = nullptr;
+  }
   xSemaphoreGive(sHttpGate);
   durationMs = platform::millisMs() - startMs;
 
   if (err != ESP_OK) {
+    logTlsFailureEpoch(url, err);
     reason = esp_err_to_name(err);
     ESP_LOGW(kTag, "http fail host=%s proxy=%d dur_ms=%u reason=%s", hostOut.c_str(), viaProxy ? 1 : 0,
              static_cast<unsigned>(durationMs), reason.c_str());
@@ -4514,6 +4588,13 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
   }
   if (cap.overflow) {
     reason = "http body too large";
+    ESP_LOGW(kTag, "http fail host=%s proxy=%d dur_ms=%u reason=%s max_bytes=%u", hostOut.c_str(),
+             viaProxy ? 1 : 0, static_cast<unsigned>(durationMs), reason.c_str(),
+             static_cast<unsigned>(cap.maxBytes));
+    return false;
+  }
+  if (cap.oom) {
+    reason = "http body capture oom";
     ESP_LOGW(kTag, "http fail host=%s proxy=%d dur_ms=%u reason=%s max_bytes=%u", hostOut.c_str(),
              viaProxy ? 1 : 0, static_cast<unsigned>(durationMs), reason.c_str(),
              static_cast<unsigned>(cap.maxBytes));
@@ -4977,6 +5058,7 @@ bool fetchAndResolve(uint32_t nowMs) {
   int statusCode = 0;
   std::string body;
   std::string reason;
+  ESP_LOGI(kTag, "fetch http widget=%s url=%s", s.widgetId.c_str(), url.c_str());
   if (!httpGet(url, resolvedHeaders, statusCode, body, reason)) {
     noteFetchFailure(nowMs, reason.c_str());
     return false;
@@ -5958,8 +6040,18 @@ void render() {
 namespace dsl_widget_runtime {
 
 void reset() {
+  const size_t iconEntries = sIconMemCache.size();
+  const size_t iconBytes = sIconMemCacheBytes;
+  sIconMemCache.clear();
+  sIconMemCacheBytes = 0;
+  sIconRetryAfterMs.clear();
+  teardownHaWsClient();
   s = {};
   sInstances.clear();
+  if (iconEntries > 0 || iconBytes > 0) {
+    ESP_LOGI(kTag, "reset cleared ws+icons icon_entries=%u icon_bytes=%u",
+             static_cast<unsigned>(iconEntries), static_cast<unsigned>(iconBytes));
+  }
 }
 
 bool begin(const char* widgetId, const char* dslPath, uint16_t x, uint16_t y, uint16_t w, uint16_t h,
@@ -6001,6 +6093,26 @@ bool begin(const char* widgetId, const char* dslPath, uint16_t x, uint16_t y, ui
 
 bool tick(uint32_t nowMs) {
   bool drew = false;
+  bool triggerHaWsBootstrap = false;
+  if (takeHaWsLock(20)) {
+    if (sHaWs.bootstrapTriggerPending) {
+      triggerHaWsBootstrap = true;
+      sHaWs.bootstrapTriggerPending = false;
+    }
+    giveHaWsLock();
+  }
+  if (triggerHaWsBootstrap) {
+    int triggered = 0;
+    for (State& inst : sInstances) {
+      if (!inst.active || inst.source != DataSource::kHaWs) {
+        continue;
+      }
+      inst.lastFetchMs = 0;
+      inst.backoffUntilMs = 0;
+      ++triggered;
+    }
+    ESP_LOGI(kTag, "ha_ws bootstrap trigger widgets=%d", triggered);
+  }
   for (State& instance : sInstances) {
     s = std::move(instance);
     if (!s.active) {
@@ -6033,7 +6145,6 @@ bool tick(uint32_t nowMs) {
       if (updated) {
         s.hasData = true;
         s.lastFetchMs = nowMs;
-        ESP_LOGI(kTag, "update ok widget=%s", s.widgetId.c_str());
         render();
         drew = true;
       }

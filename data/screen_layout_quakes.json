@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "screen": {
+    "id": "quakes-radar-nearest",
+    "orientation": "landscape",
+    "width": 320,
+    "height": 240,
+    "regions": [
+      {
+        "id": "quakes-radar",
+        "widget": "quakes-radar",
+        "x": 0,
+        "y": 0,
+        "w": 160,
+        "h": 120,
+        "draw_border": false
+      },
+      {
+        "id": "quakes-nearest",
+        "widget": "quakes-nearest",
+        "x": 0,
+        "y": 120,
+        "w": 160,
+        "h": 120,
+        "draw_border": false
+      },
+      {
+        "id": "clock-quarter",
+        "widget": "clock-quarter",
+        "x": 160,
+        "y": 0,
+        "w": 160,
+        "h": 240,
+        "draw_border": false
+      }
+    ]
+  },
+  "shared_settings": {
+    "range_mi": "300"
+  },
+  "widget_defs": {
+    "quakes-radar": {
+      "type": "dsl",
+      "update_ms": 1000,
+      "settings": {
+        "dsl_path": "/dsl_available/usgs_quakes_radar.json"
+      }
+    },
+    "quakes-nearest": {
+      "type": "dsl",
+      "update_ms": 1000,
+      "settings": {
+        "dsl_path": "/dsl_available/usgs_quakes_nearest.json"
+      }
+    },
+    "clock-quarter": {
+      "type": "dsl",
+      "update_ms": 1000,
+      "settings": {
+        "dsl_path": "/dsl_available/clock_analog_quarter.json"
+      }
+    }
+  }
+}

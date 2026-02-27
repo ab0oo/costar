@@ -55,6 +55,7 @@ constexpr const char* kLayoutPrefsKey = "layout";
 constexpr const char* kLayoutAPath = "/littlefs/screen_layout_a.json";
 constexpr const char* kLayoutBPath = "/littlefs/screen_layout_b.json";
 constexpr const char* kLayoutNytPath = "/littlefs/screen_layout_nyt.json";
+constexpr const char* kLayoutQuakesPath = "/littlefs/screen_layout_quakes.json";
 constexpr EventBits_t kWifiConnectedBit = BIT0;
 constexpr EventBits_t kWifiFailedBit = BIT1;
 
@@ -82,6 +83,7 @@ struct RuntimeMenuRects {
   UiRect rowLayoutA;
   UiRect rowLayoutB;
   UiRect rowLayoutNyt;
+  UiRect rowLayoutQuakes;
   UiRect rowConfig;
   UiRect rowTouchCal;
 };
@@ -92,6 +94,7 @@ enum class RuntimeMenuAction : uint8_t {
   SelectLayoutA,
   SelectLayoutB,
   SelectLayoutNyt,
+  SelectLayoutQuakes,
   OpenConfig,
   OpenTouchCalibration,
   Dismiss,
@@ -731,16 +734,18 @@ RuntimeMenuRects calcRuntimeMenuRects() {
   const uint16_t panelW = 160;
   const uint16_t rowH = 18;
   out.panel = {static_cast<uint16_t>(w - panelW - margin), static_cast<uint16_t>(out.button.y + out.button.h + 4),
-               panelW, static_cast<uint16_t>(rowH * 5 + 6)};
+               panelW, static_cast<uint16_t>(rowH * 6 + 6)};
   out.rowLayoutA = {static_cast<uint16_t>(out.panel.x + 3), static_cast<uint16_t>(out.panel.y + 3),
                     static_cast<uint16_t>(panelW - 6), rowH};
   out.rowLayoutB = {static_cast<uint16_t>(out.panel.x + 3), static_cast<uint16_t>(out.panel.y + 3 + rowH),
                     static_cast<uint16_t>(panelW - 6), rowH};
   out.rowLayoutNyt = {static_cast<uint16_t>(out.panel.x + 3), static_cast<uint16_t>(out.panel.y + 3 + rowH * 2),
                       static_cast<uint16_t>(panelW - 6), rowH};
-  out.rowConfig = {static_cast<uint16_t>(out.panel.x + 3), static_cast<uint16_t>(out.panel.y + 3 + rowH * 3),
+  out.rowLayoutQuakes = {static_cast<uint16_t>(out.panel.x + 3), static_cast<uint16_t>(out.panel.y + 3 + rowH * 3),
+                         static_cast<uint16_t>(panelW - 6), rowH};
+  out.rowConfig = {static_cast<uint16_t>(out.panel.x + 3), static_cast<uint16_t>(out.panel.y + 3 + rowH * 4),
                    static_cast<uint16_t>(panelW - 6), rowH};
-  out.rowTouchCal = {static_cast<uint16_t>(out.panel.x + 3), static_cast<uint16_t>(out.panel.y + 3 + rowH * 4),
+  out.rowTouchCal = {static_cast<uint16_t>(out.panel.x + 3), static_cast<uint16_t>(out.panel.y + 3 + rowH * 5),
                      static_cast<uint16_t>(panelW - 6), rowH};
   return out;
 }
@@ -778,12 +783,15 @@ void drawRuntimeMenuOverlay(const std::string& activeLayoutPath) {
   const bool layoutAActive = activeLayoutPath == kLayoutAPath;
   const bool layoutBActive = activeLayoutPath == kLayoutBPath;
   const bool layoutNytActive = activeLayoutPath == kLayoutNytPath;
+  const bool layoutQuakesActive = activeLayoutPath == kLayoutQuakesPath;
   (void)display_spi::fillRect(r.rowLayoutA.x, r.rowLayoutA.y, r.rowLayoutA.w, r.rowLayoutA.h,
                               layoutAActive ? rowActive : rowBg);
   (void)display_spi::fillRect(r.rowLayoutB.x, r.rowLayoutB.y, r.rowLayoutB.w, r.rowLayoutB.h,
                               layoutBActive ? rowActive : rowBg);
   (void)display_spi::fillRect(r.rowLayoutNyt.x, r.rowLayoutNyt.y, r.rowLayoutNyt.w, r.rowLayoutNyt.h,
                               layoutNytActive ? rowActive : rowBg);
+  (void)display_spi::fillRect(r.rowLayoutQuakes.x, r.rowLayoutQuakes.y, r.rowLayoutQuakes.w, r.rowLayoutQuakes.h,
+                              layoutQuakesActive ? rowActive : rowBg);
   (void)display_spi::fillRect(r.rowConfig.x, r.rowConfig.y, r.rowConfig.w, r.rowConfig.h, rowBg);
   (void)display_spi::fillRect(r.rowTouchCal.x, r.rowTouchCal.y, r.rowTouchCal.w, r.rowTouchCal.h, rowBg);
 
@@ -793,6 +801,8 @@ void drawRuntimeMenuOverlay(const std::string& activeLayoutPath) {
                layoutBActive ? rowActive : rowBg, 1);
   drawTinyText(r.rowLayoutNyt.x + 4, r.rowLayoutNyt.y + 5, "Layout C (NYT)", rowText,
                layoutNytActive ? rowActive : rowBg, 1);
+  drawTinyText(r.rowLayoutQuakes.x + 4, r.rowLayoutQuakes.y + 5, "Layout D (QK)", rowText,
+               layoutQuakesActive ? rowActive : rowBg, 1);
   drawTinyText(r.rowConfig.x + 4, r.rowConfig.y + 5, "WiFi / Units", rowText, rowBg, 1);
   drawTinyText(r.rowTouchCal.x + 4, r.rowTouchCal.y + 5, "Touch Calibrate", rowText, rowBg, 1);
 }
@@ -814,6 +824,9 @@ RuntimeMenuAction hitTestRuntimeMenu(uint16_t x, uint16_t y, bool menuOpen) {
   if (rectContains(r.rowLayoutNyt, x, y)) {
     return RuntimeMenuAction::SelectLayoutNyt;
   }
+  if (rectContains(r.rowLayoutQuakes, x, y)) {
+    return RuntimeMenuAction::SelectLayoutQuakes;
+  }
   if (rectContains(r.rowConfig, x, y)) {
     return RuntimeMenuAction::OpenConfig;
   }
@@ -831,14 +844,16 @@ std::string loadPreferredLayoutPath() {
   if (path.empty()) {
     return kLayoutAPath;
   }
-  if (path != kLayoutAPath && path != kLayoutBPath && path != kLayoutNytPath) {
+  if (path != kLayoutAPath && path != kLayoutBPath && path != kLayoutNytPath &&
+      path != kLayoutQuakesPath) {
     return kLayoutAPath;
   }
   return path;
 }
 
 void savePreferredLayoutPath(const std::string& path) {
-  if (path != kLayoutAPath && path != kLayoutBPath && path != kLayoutNytPath) {
+  if (path != kLayoutAPath && path != kLayoutBPath && path != kLayoutNytPath &&
+      path != kLayoutQuakesPath) {
     return;
   }
   (void)platform::prefs::putString(kLayoutPrefsNs, kLayoutPrefsKey, path.c_str());
@@ -1513,6 +1528,7 @@ void verifyLittlefsAssets() {
       {"layout_a", "/littlefs/screen_layout_a.json"},
       {"layout_b", "/littlefs/screen_layout_b.json"},
       {"layout_nyt", "/littlefs/screen_layout_nyt.json"},
+      {"layout_quakes", "/littlefs/screen_layout_quakes.json"},
       {"dsl_weather_now", "/littlefs/dsl_active/weather_now.json"},
       {"dsl_forecast", "/littlefs/dsl_active/forecast.json"},
       {"dsl_clock_analog_full", "/littlefs/dsl_active/clock_analog_full.json"},
@@ -1597,6 +1613,35 @@ GeoContext loadGeoContextFromPrefs() {
     return geo;
   }
 
+  return geo;
+}
+
+GeoContext fallbackGeoContextGoogleHq() {
+  constexpr const char* kGeoNs = "geo";
+  constexpr const char* kModeKey = "mode";
+  constexpr const char* kCachedLatKey = "lat";
+  constexpr const char* kCachedLonKey = "lon";
+  constexpr const char* kCachedTzKey = "tz";
+  constexpr const char* kCachedOffsetKey = "off_min";
+  constexpr const char* kCachedLabelKey = "label";
+  constexpr int kModeAuto = 0;
+  constexpr int kOffsetUnknown = -32768;
+
+  GeoContext geo;
+  geo.lat = 37.4220f;
+  geo.lon = -122.0841f;
+  geo.timezone = "America/Los_Angeles";
+  geo.hasUtcOffset = false;
+  geo.utcOffsetMinutes = 0;
+  geo.source = "fallback-google-hq";
+  geo.hasLocation = true;
+
+  (void)platform::prefs::putInt(kGeoNs, kModeKey, kModeAuto);
+  (void)platform::prefs::putFloat(kGeoNs, kCachedLatKey, geo.lat);
+  (void)platform::prefs::putFloat(kGeoNs, kCachedLonKey, geo.lon);
+  (void)platform::prefs::putString(kGeoNs, kCachedTzKey, geo.timezone.c_str());
+  (void)platform::prefs::putInt(kGeoNs, kCachedOffsetKey, kOffsetUnknown);
+  (void)platform::prefs::putString(kGeoNs, kCachedLabelKey, "Mountain View, CA, US");
   return geo;
 }
 
@@ -1708,6 +1753,10 @@ void runtimeLoopTask(void* arg) {
               sRuntimeMenu.open = false;
               sRuntimeMenu.dirty = true;
               switchLayout(ctx, kLayoutNytPath);
+            } else if (menuAction == RuntimeMenuAction::SelectLayoutQuakes) {
+              sRuntimeMenu.open = false;
+              sRuntimeMenu.dirty = true;
+              switchLayout(ctx, kLayoutQuakesPath);
             } else if (menuAction == RuntimeMenuAction::OpenConfig) {
               sRuntimeMenu.open = false;
               sRuntimeMenu.dirty = true;
@@ -1844,7 +1893,9 @@ extern "C" void app_main() {
              geo.lat, geo.lon, geo.timezone.c_str(), geo.utcOffsetMinutes,
              geo.hasUtcOffset ? 1 : 0);
   } else {
-    ESP_LOGW("geo", "cache/override missing; timezone context unavailable");
+    geo = fallbackGeoContextGoogleHq();
+    ESP_LOGW("geo", "cache/override missing; using fallback source=%s lat=%.4f lon=%.4f tz=%s",
+             geo.source.c_str(), geo.lat, geo.lon, geo.timezone.c_str());
   }
 
   std::string ipText;

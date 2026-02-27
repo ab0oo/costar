@@ -1,5 +1,56 @@
 # Handoff Runbook (Release Prep)
 
+## 0) Session Log - Quake Layout Live + TLS Clock Diagnostics (2026-02-27)
+
+Summary: Added the quake-focused runtime layout/menu path, tuned USGS poll cadence to 75s, and added explicit TLS-failure diagnostics (epoch + clock readiness + heap) to confirm first-boot clock-related handshake failures.
+
+### What Was Completed
+
+- Quake page/layout integration:
+  - Added `data/screen_layout_quakes.json` as a dedicated layout with:
+    - `quakes-radar` (top-left)
+    - `quakes-nearest` (bottom-left)
+    - `clock-quarter` (right side)
+  - Added runtime menu entry `Layout D (QK)` and switch handling in:
+    - `idf/main/app_main.cpp`
+  - Added LittleFS required-asset verification for:
+    - `/littlefs/screen_layout_quakes.json`
+  - Added persisted-layout allowlist support for the new layout path.
+
+- Geo fallback behavior for quake use-case:
+  - Added fallback geo context when no cached/override geo exists:
+    - lat/lon = Google HQ (37.4220, -122.0841)
+    - tz = `America/Los_Angeles`
+  - Persists fallback geo values to prefs to avoid null geo context on subsequent boots.
+
+- USGS cadence update:
+  - Updated quake widgets to poll no more than once every 75s:
+    - `data/dsl_available/usgs_quakes_nearest.json`
+    - `data/dsl_available/usgs_quakes_radar.json`
+  - `poll_ms` set to `75000`.
+
+- TLS diagnostics and fetch observability:
+  - Added per-fetch INFO log for widget HTTP pulls:
+    - `dsl-widget: fetch http widget=<id> url=<url>`
+  - Added TLS failure diagnostic log when HTTPS/WSS transport fails:
+    - `tls diag epoch=<unix> clock_ready=<0|1> err=<...> heap_free=<...> heap_largest=<...> url=<...>`
+  - Added TLS clock gate (`clock not synced`) checks before HTTPS/WSS connection attempts.
+
+### Why This Matters
+
+- Quake layout is now first-class and selectable from runtime UI.
+- We can now definitively separate clock-related TLS failures from heap-related failures in field logs.
+- Quake polling is rate-limited to target cadence to reduce TLS churn and network load.
+
+### Recommended Validation
+
+1. Boot after NVS erase and watch for early TLS failures:
+   - confirm `tls diag epoch=... clock_ready=0` on first attempts (if before NTP sync)
+2. After NTP sync:
+   - confirm successful USGS fetch with `fetch http widget=quakes-* ...`
+3. Switch layouts repeatedly:
+   - confirm `Layout D (QK)` selection and stable render behavior.
+
 ## 0) Session Log - PlatformIO/IDF Stabilization + Geo/Timezone Fixes (2026-02-26, Night)
 
 Summary: Stabilized the PlatformIO ESP-IDF path (tooling + filesystem packaging), fixed multiple runtime crash/memory-pressure behaviors in the DSL/HA card path, and restored geo/timezone auto-resolution in the IDF scaffold boot flow.

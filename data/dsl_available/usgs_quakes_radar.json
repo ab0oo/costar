@@ -3,7 +3,7 @@
   "data": {
     "source": "http",
     "url": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/1.0_hour.geojson",
-    "poll_ms": 60000,
+    "poll_ms": 75000,
     "debug": true,
     "transforms": [
       {
