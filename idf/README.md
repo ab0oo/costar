@@ -1,12 +1,12 @@
 # ESP-IDF Scaffold
 
-This directory is the standalone ESP-IDF target used for migration off Arduino.
+This directory contains the ESP-IDF application target for CoStar.
 
 ## Current scope
 
-- Brings up a minimal IDF app (`app_main`) with baseline-style boot/loop logs.
-- Uses the shared platform abstraction header: `include/platform/Platform.h`
-- Provides IDF backend implementation in `idf/main/PlatformEspIdf.cpp`.
+- Contains the active `app_main` runtime and UI/widget stack.
+- Uses shared platform headers in `include/platform/*`.
+- Provides IDF backend implementations in `idf/main/*EspIdf.cpp`.
 
 ## Build and flash
 
@@ -20,5 +20,4 @@ idf.py -p <PORT> flash monitor
 
 ## Notes
 
-- This scaffold does not yet run full CoStar widgets/layout runtime.
-- Next step is wiring core app modules onto this target incrementally (filesystem, prefs, network, display, touch).
+- Build from repository root with PlatformIO (`esp32dev_idf`) for the default workflow.

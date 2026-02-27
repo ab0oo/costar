@@ -67,6 +67,27 @@ void touchReadCb(lv_indev_t* indev, lv_indev_data_t* data) {
   }
 }
 
+void releaseLvglResources() {
+  if (sTouchInput != nullptr) {
+    lv_indev_delete(sTouchInput);
+    sTouchInput = nullptr;
+  }
+  if (sDisplay != nullptr) {
+    lv_display_delete(sDisplay);
+    sDisplay = nullptr;
+  }
+  if (sBuf1 != nullptr) {
+    heap_caps_free(sBuf1);
+    sBuf1 = nullptr;
+  }
+  if (sBuf2 != nullptr) {
+    heap_caps_free(sBuf2);
+    sBuf2 = nullptr;
+  }
+  sBufSize = 0;
+  sLvglReady = false;
+}
+
 void keyboardEventCb(lv_event_t* e) {
   PromptState* state = static_cast<PromptState*>(lv_event_get_user_data(e));
   if (state == nullptr) {
@@ -98,12 +119,14 @@ bool ensureLvglReady() {
   sBuf2 = heap_caps_malloc(sBufSize, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
   if (sBuf1 == nullptr || sBuf2 == nullptr) {
     ESP_LOGE(kTag, "lvgl draw buffer alloc failed size=%u", static_cast<unsigned>(sBufSize));
+    releaseLvglResources();
     return false;
   }
 
   sDisplay = lv_display_create(w, h);
   if (sDisplay == nullptr) {
     ESP_LOGE(kTag, "lvgl display create failed");
+    releaseLvglResources();
     return false;
   }
   lv_display_set_buffers(sDisplay, sBuf1, sBuf2, sBufSize, LV_DISPLAY_RENDER_MODE_PARTIAL);
@@ -113,6 +136,7 @@ bool ensureLvglReady() {
   sTouchInput = lv_indev_create();
   if (sTouchInput == nullptr) {
     ESP_LOGE(kTag, "lvgl input create failed");
+    releaseLvglResources();
     return false;
   }
   lv_indev_set_type(sTouchInput, LV_INDEV_TYPE_POINTER);

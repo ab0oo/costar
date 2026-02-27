@@ -24,15 +24,16 @@ For example, see the structure of the following example libraries `Foo` and `Bar
 |  |- README --> THIS FILE
 |
 |- platformio.ini
-|--src
-   |- main.c
+|--idf
+   |--main
+      |- app_main.cpp
 
-Example contents of `src/main.c` using Foo and Bar:
-```
+Example contents of `idf/main/app_main.cpp` using Foo and Bar:
+```cpp
 #include <Foo.h>
 #include <Bar.h>
 
-int main (void)
+extern "C" void app_main()
 {
   ...
 }

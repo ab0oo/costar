@@ -107,7 +107,7 @@ bool resetPanel() {
 }
 
 bool runIli9341Init() {
-  // Mirror TFT_eSPI ILI9341_2_DRIVER init sequence byte-for-byte.
+  // Use a proven ILI9341 init sequence for this panel.
   static constexpr uint8_t kCf[] = {0x00, 0xC1, 0x30};
   static constexpr uint8_t kEd[] = {0x64, 0x03, 0x12, 0x81};
   static constexpr uint8_t kE8[] = {0x85, 0x00, 0x78};
@@ -119,7 +119,7 @@ bool runIli9341Init() {
   static constexpr uint8_t kC5[] = {0x30, 0x30};
   static constexpr uint8_t kC7[] = {0xB7};
   static constexpr uint8_t k3A[] = {0x55};  // RGB565
-  static constexpr uint8_t k36[] = {0x08};  // default MADCTL in TFT_eSPI init table
+  static constexpr uint8_t k36[] = {0x08};  // default MADCTL in the reference init table
   static constexpr uint8_t kB1[] = {0x00, 0x1A};
   static constexpr uint8_t kB6[] = {0x08, 0x82, 0x27};
   static constexpr uint8_t kF2[] = {0x00};

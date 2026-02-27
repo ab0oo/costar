@@ -2,11 +2,7 @@
 
 #include <ctime>
 
-#ifdef ARDUINO
-#include <Arduino.h>
-#else
 #include "esp_sntp.h"
-#endif
 
 #include "platform/Platform.h"
 
@@ -17,9 +13,6 @@ constexpr time_t kUnixYear2000 = 946684800;
 namespace timesync {
 
 void configureUtcNtp() {
-#ifdef ARDUINO
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-#else
   if (esp_sntp_enabled()) {
     return;
   }
@@ -27,7 +20,6 @@ void configureUtcNtp() {
   esp_sntp_setservername(0, "pool.ntp.org");
   esp_sntp_setservername(1, "time.nist.gov");
   esp_sntp_init();
-#endif
 }
 
 bool ensureUtcTime(uint32_t timeoutMs) {

@@ -1,2 +1,0 @@
-date,firmware_commit,run_id,stage_setup_start_ms,stage_littlefs_ready_ms,stage_tft_ready_ms,stage_wifi_ready_ms,stage_geo_time_ready_ms,stage_display_ready_ms,stage_setup_complete_ms,heap_free_setup_complete,heap_min_setup_complete,wifi_connected,wifi_rssi,notes
-2026-02-23,,run-01,,,,828,865,1563,1564,208556,206056,1,,"manual geo override active; LittleFS open noise fixed for missing /geo_manual_by_ssid.json; remote icon path open noise fixed; HA cards returned HTTP 403"

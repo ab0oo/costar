@@ -3,6 +3,7 @@
 #include "ConfigScreenEspIdf.h"
 #include "DisplayBootstrapEspIdf.h"
 #include "DisplaySpiEspIdf.h"
+#include "HttpTransportGate.h"
 #include "LayoutRuntimeEspIdf.h"
 #include "TouchInputEspIdf.h"
 #include "TextEntryEspIdf.h"
@@ -58,6 +59,8 @@ constexpr const char* kLayoutNytPath = "/littlefs/screen_layout_nyt.json";
 constexpr const char* kLayoutQuakesPath = "/littlefs/screen_layout_quakes.json";
 constexpr EventBits_t kWifiConnectedBit = BIT0;
 constexpr EventBits_t kWifiFailedBit = BIT1;
+constexpr uint32_t kHttpTransportGateTimeoutMs = 7000U;
+constexpr size_t kHttpTextMaxBytes = 8192U;
 
 EventGroupHandle_t sWifiEventGroup = nullptr;
 bool sWifiStackReady = false;
@@ -289,6 +292,10 @@ bool httpGetText(const char* url, HttpTextResponse& out) {
     out.reason = "url-empty";
     return false;
   }
+  if (!http_transport_gate::take(kHttpTransportGateTimeoutMs)) {
+    out.reason = "transport-gate-timeout";
+    return false;
+  }
 
   esp_http_client_config_t cfg = {};
   cfg.url = url;
@@ -300,6 +307,7 @@ bool httpGetText(const char* url, HttpTextResponse& out) {
 
   esp_http_client_handle_t client = esp_http_client_init(&cfg);
   if (client == nullptr) {
+    http_transport_gate::give();
     out.reason = "client-init";
     return false;
   }
@@ -307,23 +315,37 @@ bool httpGetText(const char* url, HttpTextResponse& out) {
   bool ok = false;
   esp_err_t err = esp_http_client_open(client, 0);
   if (err == ESP_OK) {
-    (void)esp_http_client_fetch_headers(client);
+    const int64_t contentLength = esp_http_client_fetch_headers(client);
     out.statusCode = esp_http_client_get_status_code(client);
     out.body.clear();
-    out.body.reserve(1024);
-    char buf[384];
-    for (;;) {
-      const int n = esp_http_client_read(client, buf, sizeof(buf));
-      if (n > 0) {
-        out.body.append(buf, static_cast<size_t>(n));
-        continue;
-      }
-      if (n == 0) {
-        ok = true;
+    if (contentLength > 0) {
+      if (static_cast<size_t>(contentLength) > kHttpTextMaxBytes) {
+        out.reason = "body-too-large";
       } else {
-        out.reason = "read";
+        out.body.reserve(static_cast<size_t>(contentLength) + 1U);
       }
-      break;
+    } else {
+      out.body.reserve(1024);
+    }
+    if (out.reason.empty()) {
+      char buf[384];
+      for (;;) {
+        const int n = esp_http_client_read(client, buf, sizeof(buf));
+        if (n > 0) {
+          if (out.body.size() + static_cast<size_t>(n) > kHttpTextMaxBytes) {
+            out.reason = "body-too-large";
+            break;
+          }
+          out.body.append(buf, static_cast<size_t>(n));
+          continue;
+        }
+        if (n == 0) {
+          ok = true;
+        } else {
+          out.reason = "read";
+        }
+        break;
+      }
     }
   } else {
     out.reason = esp_err_to_name(err);
@@ -331,6 +353,7 @@ bool httpGetText(const char* url, HttpTextResponse& out) {
 
   esp_http_client_close(client);
   esp_http_client_cleanup(client);
+  http_transport_gate::give();
   return ok;
 }
 
@@ -568,7 +591,7 @@ bool ensureWifiStackReady() {
 }
 
 void applySavedStaConfig() {
-  // Reuse Arduino-side saved credentials when Wi-Fi driver NVS config is missing.
+  // Reuse saved credentials when Wi-Fi driver NVS config is missing.
   const std::string savedSsid = platform::prefs::getString("wifi", "ssid", "");
   const std::string savedPass = platform::prefs::getString("wifi", "password", "");
   if (savedSsid.empty()) {

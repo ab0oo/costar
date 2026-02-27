@@ -13,9 +13,9 @@ idf_component_register(
     "../idf/main/LvglPasswordPrompt.cpp"
     "../idf/main/PlatformEspIdf.cpp"
     "../idf/main/PrefsEspIdf.cpp"
-    "core/BootCommon.cpp"
-    "core/RuntimeSettings.cpp"
-    "core/TimeSync.cpp"
+    "../idf/main/BootCommon.cpp"
+    "../idf/main/RuntimeSettings.cpp"
+    "../idf/main/TimeSync.cpp"
   INCLUDE_DIRS
     "../idf/main"
     "../include"

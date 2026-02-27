@@ -13,13 +13,12 @@ idf_component_register(
     "LvglPasswordPrompt.cpp"
     "PlatformEspIdf.cpp"
     "PrefsEspIdf.cpp"
-    "../../src/core/BootCommon.cpp"
-    "../../src/core/RuntimeSettings.cpp"
-    "../../src/core/TimeSync.cpp"
+    "BootCommon.cpp"
+    "RuntimeSettings.cpp"
+    "TimeSync.cpp"
   INCLUDE_DIRS
     "."
     "../../include"
-    "../../src"
   REQUIRES
     esp_event
     esp_timer

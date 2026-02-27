@@ -3,6 +3,7 @@
 #include "AppConfig.h"
 #include "DisplaySpiEspIdf.h"
 #include "Font5x7Classic.h"
+#include "HttpTransportGate.h"
 #include "RuntimeSettings.h"
 #include "platform/Platform.h"
 #include "platform/Prefs.h"
@@ -53,6 +54,7 @@ constexpr uint32_t kHttpWorkerStack = 8192U;
 constexpr uint32_t kHttpResponseMaxBytesDefault = 16384U;
 constexpr uint32_t kHttpResponseMaxBytesMin = 1024U;
 constexpr uint32_t kHttpResponseMaxBytesMax = 32768U;
+constexpr size_t kHttpCaptureSafetyMarginBytes = 256U;
 constexpr UBaseType_t kHttpWorkerPriority = 4U;
 constexpr BaseType_t kHttpWorkerCore = 0;
 constexpr uint32_t kHaWsConnectTimeoutMs = 15000U;
@@ -63,9 +65,15 @@ constexpr uint32_t kTapPostHttpRefreshDelayMs = 750U;
 constexpr size_t kIconMemCacheBudgetBytes = 192U * 1024U;
 constexpr const char* kIconCacheDir = "/littlefs/icon_cache";
 constexpr uint32_t kIconFetchRetryMs = 30000U;
+constexpr size_t kIconRetryMaxEntries = 64U;
 constexpr size_t kUiCriticalLargest8Bit = 12288U;
 constexpr size_t kUiCriticalFree8Bit = 24576U;
 constexpr time_t kTlsClockMinUnix = 1704067200;  // 2024-01-01T00:00:00Z
+constexpr size_t kTlsMinLargest8Bit = 32U * 1024U;
+constexpr size_t kTlsMinFree8Bit = 40U * 1024U;
+constexpr uint32_t kHttpReuseWindowMs = 2000U;
+constexpr size_t kHttpReuseMaxEntries = 8U;
+constexpr size_t kCanvasPersistentMaxBytes = 16U * 1024U;
 
 enum class DataSource : uint8_t {
   kHttp,
@@ -211,6 +219,7 @@ struct KeyValue {
 struct HttpCapture {
   char* data = nullptr;
   size_t size = 0;
+  size_t capacity = 0;
   size_t maxBytes = kHttpResponseMaxBytesDefault;
   bool overflow = false;
   bool oom = false;
@@ -233,6 +242,14 @@ struct HttpResult {
   uint32_t durationMs = 0;
   std::string host;
   bool viaProxy = false;
+};
+
+struct SharedHttpResponse {
+  bool ok = false;
+  int statusCode = 0;
+  std::string body;
+  std::string reason;
+  uint32_t fetchedAtMs = 0;
 };
 
 enum class TapActionType : uint8_t {
@@ -303,10 +320,11 @@ struct State {
 
 State s;
 std::vector<State> sInstances;
-SemaphoreHandle_t sHttpGate = nullptr;
 QueueHandle_t sHttpJobQueue = nullptr;
 TaskHandle_t sHttpWorkerTask = nullptr;
+std::map<std::string, SharedHttpResponse> sSharedHttpCache;
 uint16_t* sCanvas = nullptr;
+size_t sCanvasCapacityBytes = 0;
 uint16_t sCanvasW = 0;
 uint16_t sCanvasH = 0;
 uint16_t sCanvasY0 = 0;
@@ -1945,7 +1963,7 @@ bool parsePathSegment(std::string_view segment, std::string& key, std::vector<in
 }
 
 std::string valueViewToText(std::string_view valueView);
-bool httpGet(const std::string& url, const std::vector<KeyValue>& headers, int& statusCode, std::string& body,
+bool httpGet(std::string url, std::vector<KeyValue> headers, int& statusCode, std::string& body,
              std::string& reason);
 
 float distanceKm(float lat1, float lon1, float lat2, float lon2) {
@@ -3629,6 +3647,47 @@ void applyWeatherDerivedValues() {
   applyWeather("day2_code", "day2_cond", "day2_icon");
 }
 
+bool ensureHttpCaptureCapacity(HttpCapture* cap, size_t needBytes) {
+  if (cap == nullptr) {
+    return false;
+  }
+  if (needBytes > cap->maxBytes) {
+    cap->overflow = true;
+    return false;
+  }
+  if (needBytes <= cap->capacity && cap->data != nullptr) {
+    return true;
+  }
+
+  size_t target = needBytes;
+  if (target < cap->maxBytes) {
+    target = std::min(cap->maxBytes, target + kHttpCaptureSafetyMarginBytes);
+  }
+  if (target <= cap->capacity && cap->data != nullptr) {
+    return true;
+  }
+
+  void* grown = nullptr;
+  if (cap->data == nullptr) {
+    grown = heap_caps_malloc(target + 1U, MALLOC_CAP_8BIT);
+    if (grown != nullptr && cap->size == 0) {
+      static_cast<char*>(grown)[0] = '\0';
+    }
+  } else {
+    grown = heap_caps_realloc(cap->data, target + 1U, MALLOC_CAP_8BIT);
+  }
+  if (grown == nullptr) {
+    cap->oom = true;
+    return false;
+  }
+  cap->data = static_cast<char*>(grown);
+  cap->capacity = target;
+  if (cap->size <= cap->capacity) {
+    cap->data[cap->size] = '\0';
+  }
+  return true;
+}
+
 esp_err_t httpEventHandler(esp_http_client_event_t* evt) {
   if (evt == nullptr || evt->user_data == nullptr) {
     return ESP_OK;
@@ -3648,19 +3707,18 @@ esp_err_t httpEventHandler(esp_http_client_event_t* evt) {
         const size_t contentLen = static_cast<size_t>(parsed);
         if (contentLen > cap->maxBytes) {
           cap->overflow = true;
+        } else {
+          (void)ensureHttpCaptureCapacity(cap, contentLen);
         }
       }
     }
   }
   if (evt->event_id == HTTP_EVENT_ON_DATA && evt->data != nullptr && evt->data_len > 0) {
-    if (cap->overflow || cap->oom || cap->data == nullptr) {
-      if (cap->data == nullptr) {
-        cap->oom = true;
-      }
+    if (cap->overflow || cap->oom) {
       return ESP_OK;
     }
-    if (cap->size + static_cast<size_t>(evt->data_len) > cap->maxBytes) {
-      cap->overflow = true;
+    const size_t needBytes = cap->size + static_cast<size_t>(evt->data_len);
+    if (!ensureHttpCaptureCapacity(cap, needBytes)) {
       return ESP_OK;
     }
     std::memcpy(cap->data + cap->size, evt->data, static_cast<size_t>(evt->data_len));
@@ -3693,6 +3751,57 @@ bool urlUsesTls(const std::string& url) {
 
 bool tlsClockReady() {
   return std::time(nullptr) >= kTlsClockMinUnix;
+}
+
+std::string buildHttpReuseKey(const std::string& url, const std::vector<KeyValue>& headers,
+                              uint32_t maxResponseBytes) {
+  std::string key = url;
+  key += "|max=";
+  key += std::to_string(static_cast<unsigned>(maxResponseBytes));
+  for (const KeyValue& kv : headers) {
+    key += "|";
+    key += kv.key;
+    key += "=";
+    key += kv.value;
+  }
+  return key;
+}
+
+void pruneHttpReuseCache(uint32_t nowMs) {
+  for (auto it = sSharedHttpCache.begin(); it != sSharedHttpCache.end();) {
+    const uint32_t ageMs = nowMs - it->second.fetchedAtMs;
+    if (ageMs > kHttpReuseWindowMs) {
+      it = sSharedHttpCache.erase(it);
+      continue;
+    }
+    ++it;
+  }
+  while (sSharedHttpCache.size() > kHttpReuseMaxEntries) {
+    auto oldest = sSharedHttpCache.end();
+    for (auto it = sSharedHttpCache.begin(); it != sSharedHttpCache.end(); ++it) {
+      if (oldest == sSharedHttpCache.end() || it->second.fetchedAtMs < oldest->second.fetchedAtMs) {
+        oldest = it;
+      }
+    }
+    if (oldest == sSharedHttpCache.end()) {
+      break;
+    }
+    sSharedHttpCache.erase(oldest);
+  }
+}
+
+const SharedHttpResponse* readHttpReuseCache(const std::string& key, uint32_t nowMs) {
+  pruneHttpReuseCache(nowMs);
+  auto it = sSharedHttpCache.find(key);
+  if (it == sSharedHttpCache.end()) {
+    return nullptr;
+  }
+  return &it->second;
+}
+
+void writeHttpReuseCache(const std::string& key, SharedHttpResponse&& value) {
+  pruneHttpReuseCache(platform::millisMs());
+  sSharedHttpCache[key] = std::move(value);
 }
 
 void logTlsFailureEpoch(const std::string& url, esp_err_t err) {
@@ -4463,16 +4572,22 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
     reason = "clock not synced";
     return false;
   }
-
-  if (sHttpGate == nullptr) {
-    sHttpGate = xSemaphoreCreateMutex();
-    if (sHttpGate == nullptr) {
-      reason = "http gate alloc failed";
+  if (urlUsesTls(url)) {
+    const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    const size_t freeHeap = esp_get_free_heap_size();
+    if (largest < kTlsMinLargest8Bit || freeHeap < kTlsMinFree8Bit) {
+      char lowHeapReason[96];
+      std::snprintf(lowHeapReason, sizeof(lowHeapReason), "tls low heap free=%u largest=%u",
+                    static_cast<unsigned>(freeHeap), static_cast<unsigned>(largest));
+      reason = lowHeapReason;
+      ESP_LOGE(kTag, "tls guard defer host=%s free=%u largest=%u min_free=%u min_largest=%u",
+               hostOut.c_str(), static_cast<unsigned>(freeHeap), static_cast<unsigned>(largest),
+               static_cast<unsigned>(kTlsMinFree8Bit), static_cast<unsigned>(kTlsMinLargest8Bit));
       return false;
     }
   }
 
-  if (xSemaphoreTake(sHttpGate, pdMS_TO_TICKS(kHttpGateTimeoutMs)) != pdTRUE) {
+  if (!http_transport_gate::take(kHttpGateTimeoutMs)) {
     reason = "transport gate timeout";
     return false;
   }
@@ -4483,13 +4598,6 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
 
   HttpCapture cap;
   cap.maxBytes = std::clamp<uint32_t>(maxResponseBytes, kHttpResponseMaxBytesMin, kHttpResponseMaxBytesMax);
-  cap.data = static_cast<char*>(heap_caps_malloc(cap.maxBytes + 1U, MALLOC_CAP_8BIT));
-  if (cap.data == nullptr) {
-    xSemaphoreGive(sHttpGate);
-    reason = "http capture alloc failed";
-    return false;
-  }
-  cap.data[0] = '\0';
   esp_http_client_config_t cfg = {};
   cfg.url = url.c_str();
   cfg.timeout_ms = static_cast<int>(kHttpTimeoutMs);
@@ -4504,7 +4612,7 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
 
   esp_http_client_handle_t client = esp_http_client_init(&cfg);
   if (client == nullptr) {
-    xSemaphoreGive(sHttpGate);
+    http_transport_gate::give();
     reason = "http init failed";
     return false;
   }
@@ -4561,16 +4669,9 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
   if (err == ESP_OK) {
     statusCode = esp_http_client_get_status_code(client);
   }
-  if (!cap.overflow && !cap.oom && cap.size > 0 && cap.data != nullptr) {
-    body.assign(cap.data, cap.size);
-  }
-
+  // Release TLS/client allocations before attempting to allocate std::string body storage.
   esp_http_client_cleanup(client);
-  if (cap.data != nullptr) {
-    heap_caps_free(cap.data);
-    cap.data = nullptr;
-  }
-  xSemaphoreGive(sHttpGate);
+  http_transport_gate::give();
   durationMs = platform::millisMs() - startMs;
 
   if (err != ESP_OK) {
@@ -4578,12 +4679,20 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
     reason = esp_err_to_name(err);
     ESP_LOGW(kTag, "http fail host=%s proxy=%d dur_ms=%u reason=%s", hostOut.c_str(), viaProxy ? 1 : 0,
              static_cast<unsigned>(durationMs), reason.c_str());
+    if (cap.data != nullptr) {
+      heap_caps_free(cap.data);
+      cap.data = nullptr;
+    }
     return false;
   }
   if (statusCode <= 0) {
     reason = "no-http-status";
     ESP_LOGW(kTag, "http fail host=%s proxy=%d dur_ms=%u reason=%s", hostOut.c_str(), viaProxy ? 1 : 0,
              static_cast<unsigned>(durationMs), reason.c_str());
+    if (cap.data != nullptr) {
+      heap_caps_free(cap.data);
+      cap.data = nullptr;
+    }
     return false;
   }
   if (cap.overflow) {
@@ -4591,6 +4700,10 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
     ESP_LOGW(kTag, "http fail host=%s proxy=%d dur_ms=%u reason=%s max_bytes=%u", hostOut.c_str(),
              viaProxy ? 1 : 0, static_cast<unsigned>(durationMs), reason.c_str(),
              static_cast<unsigned>(cap.maxBytes));
+    if (cap.data != nullptr) {
+      heap_caps_free(cap.data);
+      cap.data = nullptr;
+    }
     return false;
   }
   if (cap.oom) {
@@ -4598,7 +4711,29 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
     ESP_LOGW(kTag, "http fail host=%s proxy=%d dur_ms=%u reason=%s max_bytes=%u", hostOut.c_str(),
              viaProxy ? 1 : 0, static_cast<unsigned>(durationMs), reason.c_str(),
              static_cast<unsigned>(cap.maxBytes));
+    if (cap.data != nullptr) {
+      heap_caps_free(cap.data);
+      cap.data = nullptr;
+    }
     return false;
+  }
+  if (cap.size > 0 && cap.data != nullptr) {
+    const size_t largestBeforeCopy = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    if (largestBeforeCopy < (cap.size + 1024U)) {
+      reason = "http body copy oom";
+      ESP_LOGW(kTag,
+               "http fail host=%s proxy=%d dur_ms=%u reason=%s body=%u largest=%u",
+               hostOut.c_str(), viaProxy ? 1 : 0, static_cast<unsigned>(durationMs), reason.c_str(),
+               static_cast<unsigned>(cap.size), static_cast<unsigned>(largestBeforeCopy));
+      heap_caps_free(cap.data);
+      cap.data = nullptr;
+      return false;
+    }
+    body.assign(cap.data, cap.size);
+  }
+  if (cap.data != nullptr) {
+    heap_caps_free(cap.data);
+    cap.data = nullptr;
   }
 
   ESP_LOGD(kTag, "http done method=%s host=%s proxy=%d status=%d bytes=%u dur_ms=%u", method.c_str(),
@@ -4651,7 +4786,7 @@ bool ensureHttpWorker() {
   return true;
 }
 
-bool httpGet(const std::string& url, const std::vector<KeyValue>& headers, int& statusCode, std::string& body,
+bool httpGet(std::string url, std::vector<KeyValue> headers, int& statusCode, std::string& body,
              std::string& reason) {
   statusCode = 0;
   body.clear();
@@ -4676,10 +4811,10 @@ bool httpGet(const std::string& url, const std::vector<KeyValue>& headers, int& 
     reason = "http job alloc failed";
     return false;
   }
-  job->url = url;
+  job->url = std::move(url);
   job->method = "GET";
   job->body.clear();
-  job->headers = headers;
+  job->headers = std::move(headers);
   job->maxResponseBytes = s.httpMaxBytes;
   job->replyQueue = replyQueue;
 
@@ -4706,8 +4841,8 @@ bool httpGet(const std::string& url, const std::vector<KeyValue>& headers, int& 
   return ok;
 }
 
-bool httpRequest(const std::string& method, const std::string& url, const std::vector<KeyValue>& headers,
-                 const std::string& reqBody, int& statusCode, std::string& body, std::string& reason) {
+bool httpRequest(std::string method, std::string url, std::vector<KeyValue> headers,
+                 std::string reqBody, int& statusCode, std::string& body, std::string& reason) {
   statusCode = 0;
   body.clear();
   reason.clear();
@@ -4731,10 +4866,10 @@ bool httpRequest(const std::string& method, const std::string& url, const std::v
     reason = "http job alloc failed";
     return false;
   }
-  job->method = method;
-  job->url = url;
-  job->body = reqBody;
-  job->headers = headers;
+  job->method = std::move(method);
+  job->url = std::move(url);
+  job->body = std::move(reqBody);
+  job->headers = std::move(headers);
   job->maxResponseBytes = s.httpMaxBytes;
   job->replyQueue = replyQueue;
 
@@ -4822,7 +4957,7 @@ bool executeTapAction(std::string& reasonOut) {
     return false;
   }
 
-  const std::string url = bindRuntimeTemplate(s.tapUrlTemplate);
+  std::string url = bindRuntimeTemplate(s.tapUrlTemplate);
   if (url.empty()) {
     reasonOut = "tap_url empty";
     return false;
@@ -4831,7 +4966,7 @@ bool executeTapAction(std::string& reasonOut) {
   std::transform(method.begin(), method.end(), method.begin(), [](unsigned char c) {
     return static_cast<char>(std::toupper(c));
   });
-  const std::string body = bindRuntimeTemplate(s.tapBodyTemplate);
+  std::string body = bindRuntimeTemplate(s.tapBodyTemplate);
 
   std::vector<KeyValue> headers;
   headers.reserve(s.tapHeaders.size());
@@ -4849,7 +4984,8 @@ bool executeTapAction(std::string& reasonOut) {
   int status = 0;
   std::string resp;
   std::string reason;
-  if (!httpRequest(method, url, headers, body, status, resp, reason)) {
+  if (!httpRequest(std::move(method), std::move(url), std::move(headers), std::move(body), status, resp,
+                   reason)) {
     reasonOut = reason;
     return false;
   }
@@ -4939,6 +5075,15 @@ bool resolveFieldsFromHttp(std::string&& jsonTextOwned) {
   }
   s.sourceJson.clear();
   return resolveFieldsFromJsonView(std::string_view(jsonTextOwned));
+}
+
+bool resolveFieldsFromHttp(const std::string& jsonText) {
+  if (s.retainSourceJson) {
+    s.sourceJson = jsonText;
+    return resolveFieldsFromJsonView(std::string_view(s.sourceJson));
+  }
+  s.sourceJson.clear();
+  return resolveFieldsFromJsonView(std::string_view(jsonText));
 }
 
 bool resolveFieldsFromLocalTime() {
@@ -5045,7 +5190,7 @@ bool fetchAndResolve(uint32_t nowMs) {
     return false;
   }
 
-  const std::string url = bindRuntimeTemplate(s.urlTemplate);
+  std::string url = bindRuntimeTemplate(s.urlTemplate);
   std::vector<KeyValue> resolvedHeaders;
   resolvedHeaders.reserve(s.headers.size());
   for (const KeyValue& kv : s.headers) {
@@ -5058,8 +5203,34 @@ bool fetchAndResolve(uint32_t nowMs) {
   int statusCode = 0;
   std::string body;
   std::string reason;
-  ESP_LOGI(kTag, "fetch http widget=%s url=%s", s.widgetId.c_str(), url.c_str());
-  if (!httpGet(url, resolvedHeaders, statusCode, body, reason)) {
+  const std::string cacheKey = buildHttpReuseKey(url, resolvedHeaders, s.httpMaxBytes);
+  const SharedHttpResponse* shared = nullptr;
+  bool requestOk = false;
+  shared = readHttpReuseCache(cacheKey, nowMs);
+  if (shared != nullptr) {
+    requestOk = shared->ok;
+    statusCode = shared->statusCode;
+    reason = shared->reason;
+    const uint32_t ageMs = nowMs - shared->fetchedAtMs;
+    ESP_LOGI(kTag, "fetch http reuse widget=%s age_ms=%u ok=%d status=%d bytes=%u",
+             s.widgetId.c_str(), static_cast<unsigned>(ageMs), requestOk ? 1 : 0, statusCode,
+             static_cast<unsigned>(shared->body.size()));
+  } else {
+    ESP_LOGI(kTag, "fetch http widget=%s url=%s", s.widgetId.c_str(), url.c_str());
+    requestOk = httpGet(std::move(url), std::move(resolvedHeaders), statusCode, body, reason);
+    if (requestOk && statusCode >= 200 && statusCode < 300 && !body.empty()) {
+      SharedHttpResponse cached = {};
+      cached.ok = true;
+      cached.statusCode = statusCode;
+      cached.body = std::move(body);
+      cached.reason.clear();
+      cached.fetchedAtMs = nowMs;
+      writeHttpReuseCache(cacheKey, std::move(cached));
+      shared = readHttpReuseCache(cacheKey, nowMs);
+    }
+  }
+
+  if (!requestOk) {
     noteFetchFailure(nowMs, reason.c_str());
     return false;
   }
@@ -5070,12 +5241,13 @@ bool fetchAndResolve(uint32_t nowMs) {
     return false;
   }
 
-  if (body.empty()) {
+  const std::string* parseBody = (shared != nullptr) ? &shared->body : &body;
+  if (parseBody->empty()) {
     noteFetchFailure(nowMs, "empty body");
     return false;
   }
 
-  if (!resolveFieldsFromHttp(std::move(body))) {
+  if (!resolveFieldsFromHttp(*parseBody)) {
     noteFetchFailure(nowMs, "dsl parse unresolved");
     return false;
   }
@@ -5386,16 +5558,6 @@ bool ensureIconCacheDir() {
   return false;
 }
 
-bool iconMemCacheGet(const std::string& key, std::vector<uint16_t>& outPixels) {
-  auto it = sIconMemCache.find(key);
-  if (it == sIconMemCache.end()) {
-    return false;
-  }
-  it->second.lastUsedMs = platform::millisMs();
-  outPixels = it->second.pixels;
-  return true;
-}
-
 bool iconMemCacheGetPtr(const std::string& key, const std::vector<uint16_t>*& outPixels) {
   outPixels = nullptr;
   auto it = sIconMemCache.find(key);
@@ -5407,7 +5569,31 @@ bool iconMemCacheGetPtr(const std::string& key, const std::vector<uint16_t>*& ou
   return true;
 }
 
-void iconMemCachePut(const std::string& key, const std::vector<uint16_t>& pixels) {
+void pruneIconRetryMap(uint32_t nowMs) {
+  for (auto it = sIconRetryAfterMs.begin(); it != sIconRetryAfterMs.end();) {
+    if (static_cast<int32_t>(nowMs - it->second) >= 0) {
+      it = sIconRetryAfterMs.erase(it);
+      continue;
+    }
+    ++it;
+  }
+  while (sIconRetryAfterMs.size() > kIconRetryMaxEntries) {
+    auto victim = sIconRetryAfterMs.begin();
+    for (auto it = sIconRetryAfterMs.begin(); it != sIconRetryAfterMs.end(); ++it) {
+      if (it->second > victim->second) {
+        victim = it;
+      }
+    }
+    sIconRetryAfterMs.erase(victim);
+  }
+}
+
+void setIconRetryAfter(const std::string& key, uint32_t nowMs, uint32_t delayMs) {
+  pruneIconRetryMap(nowMs);
+  sIconRetryAfterMs[key] = nowMs + delayMs;
+}
+
+void iconMemCachePut(const std::string& key, std::vector<uint16_t>&& pixels) {
   const size_t bytes = pixels.size() * sizeof(uint16_t);
   if (bytes > kIconMemCacheBudgetBytes) {
     return;
@@ -5431,7 +5617,7 @@ void iconMemCachePut(const std::string& key, const std::vector<uint16_t>& pixels
   }
 
   IconMemEntry entry;
-  entry.pixels = pixels;
+  entry.pixels = std::move(pixels);
   entry.lastUsedMs = platform::millisMs();
   sIconMemCacheBytes += bytes;
   sIconMemCache[key] = std::move(entry);
@@ -5466,23 +5652,25 @@ void iconFileCachePut(const std::string& key, const std::vector<uint16_t>& pixel
   std::fclose(fp);
 }
 
-bool loadIconRemote(const std::string& url, int w, int h, std::vector<uint16_t>& outPixels,
-                    bool allowNetwork = true) {
+bool loadIconRemote(const std::string& url, int w, int h, bool allowNetwork = true) {
   if (url.empty() || w <= 0 || h <= 0) {
     return false;
   }
   const std::string key = iconCacheKey(url, w, h);
   const uint32_t nowMs = platform::millisMs();
+  pruneIconRetryMap(nowMs);
   auto retryIt = sIconRetryAfterMs.find(key);
   if (retryIt != sIconRetryAfterMs.end() && nowMs < retryIt->second) {
     return false;
   }
-  if (iconMemCacheGet(key, outPixels)) {
+  const std::vector<uint16_t>* cachedPixels = nullptr;
+  if (iconMemCacheGetPtr(key, cachedPixels) && cachedPixels != nullptr) {
     sIconRetryAfterMs.erase(key);
     return true;
   }
-  if (iconFileCacheGet(key, w, h, outPixels)) {
-    iconMemCachePut(key, outPixels);
+  std::vector<uint16_t> filePixels;
+  if (iconFileCacheGet(key, w, h, filePixels)) {
+    iconMemCachePut(key, std::move(filePixels));
     sIconRetryAfterMs.erase(key);
     return true;
   }
@@ -5495,32 +5683,33 @@ bool loadIconRemote(const std::string& url, int w, int h, std::vector<uint16_t>&
   std::string reason;
   const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
   if (largest < 8192U) {
-    sIconRetryAfterMs[key] = nowMs + kIconFetchRetryMs;
-    ESP_LOGW(kTag, "icon fetch skipped low_heap url=%s largest=%u", url.c_str(), static_cast<unsigned>(largest));
+    setIconRetryAfter(key, nowMs, kIconFetchRetryMs);
+    ESP_LOGE(kTag, "icon fetch skipped low_heap url=%s largest=%u", url.c_str(),
+             static_cast<unsigned>(largest));
     return false;
   }
   if (!httpGet(url, {}, status, body, reason)) {
     ESP_LOGW(kTag, "icon fetch fail url=%s reason=%s", url.c_str(), reason.c_str());
-    sIconRetryAfterMs[key] = nowMs + kIconFetchRetryMs;
+    setIconRetryAfter(key, nowMs, kIconFetchRetryMs);
     return false;
   }
   if (status < 200 || status >= 300) {
     ESP_LOGW(kTag, "icon fetch status=%d url=%s", status, url.c_str());
-    sIconRetryAfterMs[key] = nowMs + kIconFetchRetryMs;
+    setIconRetryAfter(key, nowMs, kIconFetchRetryMs);
     return false;
   }
   const size_t needBytes = static_cast<size_t>(w) * static_cast<size_t>(h) * sizeof(uint16_t);
   if (body.size() != needBytes) {
     ESP_LOGW(kTag, "icon fetch size mismatch url=%s got=%u expect=%u", url.c_str(),
              static_cast<unsigned>(body.size()), static_cast<unsigned>(needBytes));
-    sIconRetryAfterMs[key] = nowMs + kIconFetchRetryMs;
+    setIconRetryAfter(key, nowMs, kIconFetchRetryMs);
     return false;
   }
   const size_t needPixels = static_cast<size_t>(w) * static_cast<size_t>(h);
-  outPixels.resize(needPixels);
-  std::memcpy(outPixels.data(), body.data(), needBytes);
-  iconMemCachePut(key, outPixels);
-  iconFileCachePut(key, outPixels);
+  std::vector<uint16_t> pixels(needPixels);
+  std::memcpy(pixels.data(), body.data(), needBytes);
+  iconFileCachePut(key, pixels);
+  iconMemCachePut(key, std::move(pixels));
   sIconRetryAfterMs.erase(key);
   return true;
 }
@@ -5535,8 +5724,7 @@ void prefetchRemoteIconsForCurrentState() {
     if (!isHttpUrl(iconPath)) {
       continue;
     }
-    std::vector<uint16_t> ignoredPixels;
-    (void)loadIconRemote(iconPath, node.w, node.h, ignoredPixels, true);
+    (void)loadIconRemote(iconPath, node.w, node.h, true);
   }
 }
 
@@ -5977,17 +6165,40 @@ void render() {
   }
   const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
   const size_t targetBytes = (largest * 3U) / 4U;
-  uint16_t bandRows =
+  uint16_t desiredRows =
       static_cast<uint16_t>(std::clamp<size_t>(targetBytes / bytesPerRow, 1U, static_cast<size_t>(s.h)));
-  size_t bandBytes = bytesPerRow * static_cast<size_t>(bandRows);
-  sCanvas = static_cast<uint16_t*>(heap_caps_malloc(bandBytes, MALLOC_CAP_8BIT));
-  while (sCanvas == nullptr && bandRows > 1) {
-    bandRows = static_cast<uint16_t>(bandRows / 2U);
-    bandBytes = bytesPerRow * static_cast<size_t>(bandRows);
-    sCanvas = static_cast<uint16_t*>(heap_caps_malloc(bandBytes, MALLOC_CAP_8BIT));
+  size_t desiredBytes = bytesPerRow * static_cast<size_t>(desiredRows);
+  const size_t fullWidgetBytes = bytesPerRow * static_cast<size_t>(s.h);
+  const size_t cappedBytes = std::max<size_t>(
+      bytesPerRow, std::min<size_t>(kCanvasPersistentMaxBytes, fullWidgetBytes));
+  if (desiredBytes > cappedBytes) {
+    desiredBytes = cappedBytes;
+    desiredRows = static_cast<uint16_t>(std::max<size_t>(1U, desiredBytes / bytesPerRow));
   }
 
-  if (sCanvas == nullptr) {
+  if (sCanvas == nullptr || sCanvasCapacityBytes < desiredBytes) {
+    uint16_t tryRows = desiredRows;
+    size_t tryBytes = desiredBytes;
+    uint16_t* newCanvas = nullptr;
+    while (newCanvas == nullptr && tryRows > 0) {
+      tryBytes = bytesPerRow * static_cast<size_t>(tryRows);
+      newCanvas = static_cast<uint16_t*>(heap_caps_malloc(tryBytes, MALLOC_CAP_8BIT));
+      if (newCanvas == nullptr && tryRows > 1) {
+        tryRows = static_cast<uint16_t>(tryRows / 2U);
+      } else {
+        break;
+      }
+    }
+    if (newCanvas != nullptr) {
+      if (sCanvas != nullptr) {
+        heap_caps_free(sCanvas);
+      }
+      sCanvas = newCanvas;
+      sCanvasCapacityBytes = tryBytes;
+    }
+  }
+
+  if (sCanvas == nullptr || sCanvasCapacityBytes < bytesPerRow) {
     ESP_LOGW(kTag, "widget=%s canvas alloc failed largest=%u row_bytes=%u; using direct draw",
              s.widgetId.c_str(), static_cast<unsigned>(largest), static_cast<unsigned>(bytesPerRow));
     drawSolidRect(s.x, s.y, s.w, s.h, kBg);
@@ -6005,6 +6216,9 @@ void render() {
     return;
   }
 
+  uint16_t bandRows =
+      static_cast<uint16_t>(std::max<size_t>(1U, sCanvasCapacityBytes / bytesPerRow));
+  bandRows = std::min<uint16_t>(bandRows, s.h);
   sCanvasW = s.w;
   for (uint16_t row = 0; row < s.h; row = static_cast<uint16_t>(row + bandRows)) {
     const uint16_t rowsThis = std::min<uint16_t>(bandRows, static_cast<uint16_t>(s.h - row));
@@ -6027,9 +6241,6 @@ void render() {
 
     (void)display_spi::drawRgb565(s.x, sCanvasY0, sCanvasW, sCanvasH, sCanvas);
   }
-
-  heap_caps_free(sCanvas);
-  sCanvas = nullptr;
   sCanvasW = 0;
   sCanvasH = 0;
   sCanvasY0 = 0;
@@ -6042,15 +6253,27 @@ namespace dsl_widget_runtime {
 void reset() {
   const size_t iconEntries = sIconMemCache.size();
   const size_t iconBytes = sIconMemCacheBytes;
+  const size_t httpReuseEntries = sSharedHttpCache.size();
+  const size_t canvasBytes = sCanvasCapacityBytes;
   sIconMemCache.clear();
   sIconMemCacheBytes = 0;
   sIconRetryAfterMs.clear();
+  sSharedHttpCache.clear();
+  if (sCanvas != nullptr) {
+    heap_caps_free(sCanvas);
+    sCanvas = nullptr;
+  }
+  sCanvasCapacityBytes = 0;
+  sCanvasW = 0;
+  sCanvasH = 0;
+  sCanvasY0 = 0;
   teardownHaWsClient();
   s = {};
   sInstances.clear();
-  if (iconEntries > 0 || iconBytes > 0) {
-    ESP_LOGI(kTag, "reset cleared ws+icons icon_entries=%u icon_bytes=%u",
-             static_cast<unsigned>(iconEntries), static_cast<unsigned>(iconBytes));
+  if (iconEntries > 0 || iconBytes > 0 || httpReuseEntries > 0 || canvasBytes > 0) {
+    ESP_LOGI(kTag, "reset cleared ws+icons+http+canvas icon_entries=%u icon_bytes=%u http_reuse=%u canvas_bytes=%u",
+             static_cast<unsigned>(iconEntries), static_cast<unsigned>(iconBytes),
+             static_cast<unsigned>(httpReuseEntries), static_cast<unsigned>(canvasBytes));
   }
 }
 
@@ -6203,8 +6426,8 @@ bool onTap(const char* widgetId, uint16_t localX, uint16_t localY) {
         std::transform(method.begin(), method.end(), method.begin(), [](unsigned char c) {
           return static_cast<char>(std::toupper(c));
         });
-        const std::string url = bindRuntimeTemplate(tr.httpUrl);
-        const std::string body = bindRuntimeTemplate(tr.httpBody);
+        std::string url = bindRuntimeTemplate(tr.httpUrl);
+        std::string body = bindRuntimeTemplate(tr.httpBody);
         std::vector<KeyValue> headers;
         headers.reserve(tr.httpHeaders.size() + 1);
         for (const auto& kv : tr.httpHeaders) {
@@ -6221,7 +6444,8 @@ bool onTap(const char* widgetId, uint16_t localX, uint16_t localY) {
         int status = 0;
         std::string resp;
         std::string reason;
-        const bool ok = httpRequest(method, url, headers, body, status, resp, reason);
+        const bool ok = httpRequest(std::move(method), std::move(url), std::move(headers),
+                                    std::move(body), status, resp, reason);
         if (!ok || status < 200 || status >= 300) {
           ESP_LOGW(kTag, "tap touch_region http fail widget=%s status=%d reason=%s",
                    s.widgetId.c_str(), status, reason.c_str());

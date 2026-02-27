@@ -1,10 +1,6 @@
 #pragma once
 
-#ifdef ARDUINO
-#include <Arduino.h>
-#else
 #include <cstdint>
-#endif
 
 namespace AppConfig {
 // Migration testing mode: force both profiles to the same active layout file.
@@ -41,28 +37,15 @@ constexpr bool kUserButtonActiveLow = true;
 constexpr uint16_t kUserButtonDebounceMs = 45;
 
 // CYD XPT2046 calibration for landscape (TFT rotation=1, touch rotation=2).
-#ifdef ARDUINO
 constexpr uint16_t kTouchRawMinX = 250;
 constexpr uint16_t kTouchRawMaxX = 3870;
 constexpr uint16_t kTouchRawMinY = 280;
 constexpr uint16_t kTouchRawMaxY = 3900;
-#else
-// Keep calibration aligned with Arduino path to match touch/UI parity.
-constexpr uint16_t kTouchRawMinX = 250;
-constexpr uint16_t kTouchRawMaxX = 3870;
-constexpr uint16_t kTouchRawMinY = 280;
-constexpr uint16_t kTouchRawMaxY = 3900;
-#endif
 constexpr bool kTouchInvertX = false;
 constexpr bool kTouchInvertY = false;
 constexpr bool kTouchEnabled = true;
-#ifdef ARDUINO
-constexpr int8_t kTouchCsPin = TOUCH_CS;
-constexpr int8_t kTouchIrqPin = TOUCH_IRQ;
-#else
 constexpr int8_t kTouchCsPin = 33;
 constexpr int8_t kTouchIrqPin = 36;
-#endif
 constexpr int8_t kTouchSpiSckPin = 25;
 constexpr int8_t kTouchSpiMisoPin = 39;
 constexpr int8_t kTouchSpiMosiPin = 32;

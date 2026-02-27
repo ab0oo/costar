@@ -15,8 +15,7 @@ constexpr const char* kTag = "touch";
 constexpr spi_host_device_t kTouchHost = SPI2_HOST;
 constexpr int kDmaChannel = SPI_DMA_CH_AUTO;
 constexpr int kTouchClockHz = 2500000;
-// Keep threshold slightly lower than Arduino library during porting so weak
-// presses are still captured while we validate mapping.
+// Keep threshold slightly lower so weak presses are still captured.
 constexpr int kTouchZThreshold = 180;
 constexpr bool kEnableRuntimeWarpCorrection = false;
 constexpr const char* kTouchPrefsNs = "touch";
@@ -100,8 +99,7 @@ uint16_t bestTwoAvg(uint16_t a, uint16_t b, uint16_t c) {
 }
 
 bool readRawStable(uint16_t& rawX, uint16_t& rawY, uint16_t& zOut) {
-  // Emulate XPT2046_Touchscreen::update() sampling order so calibration/mapping
-  // behaves like the Arduino path.
+  // Match the established XPT2046 sampling order so calibration remains stable.
   uint16_t z1 = 0;
   uint16_t z2 = 0;
   if (!readAxis(0xB1, z1) || !readAxis(0xC1, z2)) {
@@ -132,7 +130,7 @@ bool readRawStable(uint16_t& rawX, uint16_t& rawY, uint16_t& zOut) {
   const uint16_t x = bestTwoAvg(data0, data2, data4);
   const uint16_t y = bestTwoAvg(data1, data3, data5);
 
-  // Apply the same touch rotation as Arduino path (setRotation(2)).
+  // Apply touchscreen rotation equivalent to setRotation(2).
   rawX = y;
   rawY = static_cast<uint16_t>(4095U - x);
   zOut = static_cast<uint16_t>(z);
@@ -147,7 +145,7 @@ void initCalibrationDefaults() {
   sCalibration.rawMaxX = AppConfig::kTouchRawMaxX;
   sCalibration.rawMinY = AppConfig::kTouchRawMinY;
   sCalibration.rawMaxY = AppConfig::kTouchRawMaxY;
-  // Arduino path maps screen X from rawY and screen Y from rawX.
+  // Map screen X from rawY and screen Y from rawX.
   sCalibration.swapXY = true;
   sCalibration.invertX = AppConfig::kTouchInvertX;
   sCalibration.invertY = AppConfig::kTouchInvertY;

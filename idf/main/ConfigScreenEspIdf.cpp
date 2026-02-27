@@ -87,6 +87,9 @@ bool ensureLvglReady() {
   sLvglDisplay = lv_display_create(w, h);
   if (sLvglDisplay == nullptr) {
     ESP_LOGW(kTag, "lvgl display create failed");
+    heap_caps_free(sLvglBuf);
+    sLvglBuf = nullptr;
+    sLvglBufSize = 0;
     return false;
   }
   lv_display_set_buffers(sLvglDisplay, sLvglBuf, nullptr, sLvglBufSize, LV_DISPLAY_RENDER_MODE_PARTIAL);
@@ -105,6 +108,17 @@ void lvRunFrames(uint32_t ms) {
   for (uint32_t i = 0; i < steps; ++i) {
     lv_tick_inc(kLvTickMs);
     (void)lv_timer_handler();
+  }
+}
+
+void loadScreenAndDeleteOld(lv_obj_t* next) {
+  if (next == nullptr) {
+    return;
+  }
+  lv_obj_t* old = lv_screen_active();
+  lv_screen_load(next);
+  if (old != nullptr && old != next) {
+    lv_obj_del(old);
   }
 }
 
@@ -180,7 +194,7 @@ void drawWithLvgl(const config_screen::ViewState& state, const UiLayout& layout)
   addBtn(layout.toggleTemp, state.useFahrenheit ? "TEMP F" : "TEMP C", 0x224270, 0xFFE46E);
   addBtn(layout.toggleDist, state.useMiles ? "DIST MI" : "DIST KM", 0x224270, 0xFFE46E);
 
-  lv_screen_load(scr);
+  loadScreenAndDeleteOld(scr);
   lvRunFrames(40);
 }
 
@@ -258,7 +272,7 @@ void drawWifiListWithLvgl(const char* const* labels, uint16_t shown, const WifiL
     }
   }
 
-  lv_screen_load(scr);
+  loadScreenAndDeleteOld(scr);
   lvRunFrames(50);
 }
 
@@ -301,7 +315,7 @@ void drawStatusWithLvgl(const char* title, const char* subtitle, bool isError) {
   lv_obj_set_width(msg, AppConfig::kScreenWidth - 40);
   lv_obj_center(msg);
 
-  lv_screen_load(scr);
+  loadScreenAndDeleteOld(scr);
   lvRunFrames(60);
 }
 
