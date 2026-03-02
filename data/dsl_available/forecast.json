@@ -52,11 +52,7 @@
           "locale": "en-US"
         }
       },
-      "day2_code": "daily.weather_code[1]",
-      "moon_phase": {
-        "path": "computed.moon_phase"
-      }
-    }
+      "day2_code": "daily.weather_code[1]"    }
   },
   "ui": {
     "title": "Forecast",
@@ -116,30 +112,6 @@
         "font": 1,
         "color": "#E0E0E0",
         "text": "{{day2_min}}/{{day2_max}} {{pref.temp_unit}}"
-      },
-      {
-        "type": "label",
-        "x": 6,
-        "y": 88,
-        "font": 1,
-        "color": "#B0BEC5",
-        "text": "Moon Phase:"
-      },
-      {
-        "type": "label",
-        "x": 6,
-        "y": 102,
-        "font": 1,
-        "color": "#E0E0E0",
-        "text": "{{moon_phase}}"
-      },
-      {
-        "type": "moon_phase",
-        "x": 132,
-        "y": 106,
-        "r": 11,
-        "color": "#E0E0E0",
-        "bg": "#202020"
       }
     ]
   }

@@ -166,6 +166,41 @@
       line-height: 1.4;
     }
 
+    .tabBar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .tabBtn {
+      border-color: #3d5577;
+      background: #101a29;
+      color: var(--muted);
+      padding: 6px 10px;
+    }
+
+    .tabBtn.active {
+      border-color: var(--accent);
+      color: var(--text);
+      background: #14233a;
+    }
+
+    .tabPanels {
+      border: 1px solid #344764;
+      border-radius: 8px;
+      padding: 10px;
+      background: #0e1622;
+    }
+
+    .tabPanel {
+      display: none;
+      gap: 10px;
+    }
+
+    .tabPanel.active {
+      display: grid;
+    }
+
     @media (max-width: 1100px) {
       .layout {
         grid-template-columns: 1fr;
@@ -182,6 +217,14 @@
       </div>
       <div class="body">
         <div class="row">
+          <label>DSL File
+            <select id="dslFileSelect"></select>
+          </label>
+          <button id="reloadDslBtn" type="button">Reload Selected</button>
+          <button id="connectProjectBtn" type="button">Connect Project Folder</button>
+          <button id="saveDslBtn" type="button">Save Selected To Project</button>
+        </div>
+        <div class="row">
           <button id="loadWeatherBtn" type="button">Load Weather Sample</button>
           <button id="loadAdsbBtn" type="button">Load ADSB Sample</button>
           <button id="formatBtn" type="button">Format JSON</button>
@@ -189,6 +232,7 @@
           <input id="fileOpen" type="file" accept=".json,application/json">
         </div>
         <div class="hint">Drag the lower-right corner of either JSON editor to resize vertically.</div>
+        <div id="dslFileStatus" class="status"></div>
         <div id="dslEditor" class="editorArea"></div>
         <div id="dslStatus" class="status"></div>
       </div>
@@ -200,34 +244,50 @@
         <small>Simulates field extraction/formatting</small>
       </div>
       <div class="body">
-        <div class="row">
-          <label>Source JSON Payload</label>
+        <div class="tabBar" role="tablist" aria-label="Runtime JSON editor tabs">
+          <button class="tabBtn active" type="button" role="tab" aria-selected="true" aria-controls="payloadTab" data-tab-target="payloadTab">Payload</button>
+          <button class="tabBtn" type="button" role="tab" aria-selected="false" aria-controls="sharedSettingsTab" data-tab-target="sharedSettingsTab">Shared Settings</button>
+          <button class="tabBtn" type="button" role="tab" aria-selected="false" aria-controls="widgetSettingsTab" data-tab-target="widgetSettingsTab">Widget Settings</button>
+          <button class="tabBtn" type="button" role="tab" aria-selected="false" aria-controls="layoutSettingsTab" data-tab-target="layoutSettingsTab">Layout JSON</button>
         </div>
-        <div id="payloadEditor" class="editorArea"></div>
-        <div class="row">
-          <button id="applyPayloadBtn" type="button">Apply Payload</button>
-          <label><input id="animateClock" type="checkbox" checked> animate local_time widgets</label>
-        </div>
-        <div class="row">
-          <label>Shared Settings JSON (screen_layout.shared_settings)</label>
-        </div>
-        <div id="sharedSettingsEditor" class="editorArea"></div>
-        <div class="row">
-          <label>Widget Settings JSON (widget_defs[widget].settings)</label>
-        </div>
-        <div id="widgetSettingsEditor" class="editorArea"></div>
-        <div class="row">
-          <button id="applySettingsBtn" type="button">Apply Settings</button>
-          <label>Widget ID
-            <input id="layoutWidgetId" type="text" value="ha-card-1" size="14">
-          </label>
-        </div>
-        <div class="row">
-          <label>Optional Screen Layout JSON (import helper)</label>
-        </div>
-        <div id="layoutSettingsEditor" class="editorArea"></div>
-        <div class="row">
-          <button id="importLayoutSettingsBtn" type="button">Import From Layout JSON</button>
+        <div class="tabPanels">
+          <div id="payloadTab" class="tabPanel active" role="tabpanel">
+            <div class="row">
+              <label>Source JSON Payload</label>
+            </div>
+            <div id="payloadEditor" class="editorArea"></div>
+            <div class="row">
+              <button id="applyPayloadBtn" type="button">Apply Payload</button>
+              <label><input id="animateClock" type="checkbox" checked> animate local_time widgets</label>
+            </div>
+          </div>
+          <div id="sharedSettingsTab" class="tabPanel" role="tabpanel">
+            <div class="row">
+              <label>Shared Settings JSON (screen_layout.shared_settings)</label>
+            </div>
+            <div id="sharedSettingsEditor" class="editorArea"></div>
+          </div>
+          <div id="widgetSettingsTab" class="tabPanel" role="tabpanel">
+            <div class="row">
+              <label>Widget Settings JSON (widget_defs[widget].settings)</label>
+            </div>
+            <div id="widgetSettingsEditor" class="editorArea"></div>
+            <div class="row">
+              <button id="applySettingsBtn" type="button">Apply Settings</button>
+            </div>
+          </div>
+          <div id="layoutSettingsTab" class="tabPanel" role="tabpanel">
+            <div class="row">
+              <label>Optional Screen Layout JSON (import helper)</label>
+            </div>
+            <div id="layoutSettingsEditor" class="editorArea"></div>
+            <div class="row">
+              <label>Widget ID
+                <input id="layoutWidgetId" type="text" value="ha-card-1" size="14">
+              </label>
+              <button id="importLayoutSettingsBtn" type="button">Import From Layout JSON</button>
+            </div>
+          </div>
         </div>
         <div id="settingsStatus" class="status"></div>
         <div id="settingsHint" class="hint"></div>
@@ -286,6 +346,11 @@
     const sharedSettingsEditorEl = document.getElementById("sharedSettingsEditor");
     const widgetSettingsEditorEl = document.getElementById("widgetSettingsEditor");
     const layoutSettingsEditorEl = document.getElementById("layoutSettingsEditor");
+    const dslFileSelect = document.getElementById("dslFileSelect");
+    const dslFileStatus = document.getElementById("dslFileStatus");
+    const reloadDslBtn = document.getElementById("reloadDslBtn");
+    const connectProjectBtn = document.getElementById("connectProjectBtn");
+    const saveDslBtn = document.getElementById("saveDslBtn");
     const dslStatus = document.getElementById("dslStatus");
     const payloadStatus = document.getElementById("payloadStatus");
     const settingsStatus = document.getElementById("settingsStatus");
@@ -300,6 +365,8 @@
     const layoutWidgetId = document.getElementById("layoutWidgetId");
     const runtimePrefHint = document.getElementById("runtimePrefHint");
     const runtimeGeoHint = document.getElementById("runtimeGeoHint");
+    const editorTabButtons = Array.from(document.querySelectorAll(".tabBtn"));
+    const editorTabPanels = Array.from(document.querySelectorAll(".tabPanel"));
     const canvas = document.getElementById("screen");
     const ctx = canvas.getContext("2d");
 
@@ -405,6 +472,25 @@
     const iconCache = new Map();
     let dslDebounce = null;
     let payloadDebounce = null;
+    let projectRootHandle = null;
+
+    const defaultDslFiles = [
+      "adsb_nearest.json",
+      "clock_analog.json",
+      "clock_analog_full.json",
+      "clock_analog_quarter.json",
+      "clock_local.json",
+      "crypto_price.json",
+      "forecast.json",
+      "ha_speaker_card.json",
+      "homeassistant_control_card.json",
+      "homeassistant_entity.json",
+      "nyt_headlines.json",
+      "stock_quote.json",
+      "usgs_quakes_nearest.json",
+      "usgs_quakes_radar.json",
+      "weather_now.json"
+    ];
 
     const dslEditor = new JSONEditor(dslEditorEl, {
       mode: "code",
@@ -495,6 +581,166 @@
       el.classList.remove("ok", "err");
       if (!text) return;
       el.classList.add(ok ? "ok" : "err");
+    }
+
+    function setDslEditorText(text) {
+      dslEditor.setText(text);
+      compileDsl();
+      renderPreview();
+    }
+
+    function currentDslPath() {
+      return String(dslFileSelect.value || "").trim();
+    }
+
+    function dslFileNameFromPath(path) {
+      if (!path) return "widget.dsl.json";
+      const slash = path.lastIndexOf("/");
+      return slash >= 0 ? path.slice(slash + 1) : path;
+    }
+
+    async function listRepoDslFiles() {
+      try {
+        const res = await fetch("/data/dsl_available/", { cache: "no-store" });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const html = await res.text();
+        const doc = new DOMParser().parseFromString(html, "text/html");
+        const paths = new Set();
+        for (const a of doc.querySelectorAll("a[href]")) {
+          const href = String(a.getAttribute("href") || "");
+          if (!href || href.startsWith("?") || href.startsWith("#")) continue;
+          const full = new URL(href, window.location.origin + "/data/dsl_available/");
+          if (!full.pathname.startsWith("/data/dsl_available/")) continue;
+          if (!full.pathname.endsWith(".json")) continue;
+          paths.add(full.pathname);
+        }
+        const out = Array.from(paths).sort((a, b) => a.localeCompare(b));
+        if (out.length > 0) return out;
+      } catch {
+        // Fall back to static list below.
+      }
+      return defaultDslFiles.map((name) => "/data/dsl_available/" + name);
+    }
+
+    function populateDslFileSelect(paths) {
+      const prev = currentDslPath();
+      dslFileSelect.innerHTML = "";
+      for (const path of paths) {
+        const opt = document.createElement("option");
+        opt.value = path;
+        opt.textContent = dslFileNameFromPath(path);
+        dslFileSelect.appendChild(opt);
+      }
+      if (!paths.length) return;
+      const weatherPath = "/data/dsl_available/weather_now.json";
+      if (prev && paths.includes(prev)) dslFileSelect.value = prev;
+      else if (paths.includes(weatherPath)) dslFileSelect.value = weatherPath;
+      else dslFileSelect.value = paths[0];
+    }
+
+    async function loadSelectedDslFile() {
+      const path = currentDslPath();
+      if (!path) {
+        setStatus(dslFileStatus, "No DSL file selected.", false);
+        return;
+      }
+      try {
+        const text = await loadRepoFile(path);
+        setDslEditorText(text);
+        setStatus(dslFileStatus, "Loaded " + path, true);
+      } catch (err) {
+        setStatus(dslFileStatus, "DSL load failed: " + err.message, false);
+      }
+    }
+
+    async function resolveDslAvailableDirHandle(rootHandle) {
+      if (!rootHandle) return null;
+      try {
+        const dataDir = await rootHandle.getDirectoryHandle("data");
+        return await dataDir.getDirectoryHandle("dsl_available");
+      } catch {
+        // Allow selecting the data/ directory itself.
+      }
+      try {
+        return await rootHandle.getDirectoryHandle("dsl_available");
+      } catch {
+        return null;
+      }
+    }
+
+    async function connectProjectFolder() {
+      if (typeof window.showDirectoryPicker !== "function") {
+        setStatus(dslFileStatus, "This browser does not support project writes (showDirectoryPicker missing).", false);
+        return;
+      }
+      try {
+        const picked = await window.showDirectoryPicker({ mode: "readwrite" });
+        const dslDir = await resolveDslAvailableDirHandle(picked);
+        if (!dslDir) {
+          setStatus(dslFileStatus, "Selected folder must be repo root or data/.", false);
+          return;
+        }
+        projectRootHandle = picked;
+        setStatus(dslFileStatus, "Project folder connected. Save writes to data/dsl_available/.", true);
+      } catch (err) {
+        setStatus(dslFileStatus, "Project folder connect canceled or failed: " + err.message, false);
+      }
+    }
+
+    async function saveSelectedDslToProject() {
+      const path = currentDslPath();
+      if (!path) {
+        setStatus(dslFileStatus, "No DSL file selected to save.", false);
+        return;
+      }
+      if (!projectRootHandle) {
+        setStatus(dslFileStatus, "Connect project folder first, then save.", false);
+        return;
+      }
+      try {
+        const dslDir = await resolveDslAvailableDirHandle(projectRootHandle);
+        if (!dslDir) {
+          setStatus(dslFileStatus, "Connected folder is missing data/dsl_available/.", false);
+          return;
+        }
+        const fileName = dslFileNameFromPath(path);
+        const fileHandle = await dslDir.getFileHandle(fileName, { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(dslEditor.getText());
+        await writable.close();
+        setStatus(dslFileStatus, "Saved " + fileName + " to project.", true);
+      } catch (err) {
+        setStatus(dslFileStatus, "Save failed: " + err.message, false);
+      }
+    }
+
+    async function initDslFilePicker() {
+      const files = await listRepoDslFiles();
+      populateDslFileSelect(files);
+      if (!files.length) {
+        setStatus(dslFileStatus, "No DSL files found under /data/dsl_available/.", false);
+        return;
+      }
+      await loadSelectedDslFile();
+    }
+
+    function activateEditorTab(tabId) {
+      for (const panel of editorTabPanels) {
+        panel.classList.toggle("active", panel.id === tabId);
+      }
+      for (const button of editorTabButtons) {
+        const isActive = button.dataset.tabTarget === tabId;
+        button.classList.toggle("active", isActive);
+        button.setAttribute("aria-selected", isActive ? "true" : "false");
+      }
+      requestAnimationFrame(resizeJsonEditors);
+    }
+
+    for (const tabButton of editorTabButtons) {
+      tabButton.addEventListener("click", () => {
+        const target = tabButton.dataset.tabTarget || "";
+        if (target) activateEditorTab(target);
+      });
     }
 
     function parseJson(text) {
@@ -778,6 +1024,9 @@
       if (typeof path !== "string") return undefined;
       const workPath = path.trim();
       if (!workPath) return undefined;
+      if (workPath === "computed.moon_phase") {
+        return computeMoonPhaseName(new Date());
+      }
       if (
         workPath.startsWith("sort_num(") ||
         workPath.startsWith("sort_alpha(") ||
@@ -868,6 +1117,15 @@
       }
     }
 
+    function formatCompass16(deg) {
+      const dirs = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+      if (!Number.isFinite(deg)) return "";
+      let normalized = deg % 360;
+      if (normalized < 0) normalized += 360;
+      const idx = Math.floor((normalized + 11.25) / 22.5) & 15;
+      return dirs[idx];
+    }
+
     function applyFormat(raw, fmt, values) {
       if (!fmt) return String(raw ?? "");
       const scope = values || {};
@@ -903,6 +1161,11 @@
           }
         } else if (unit === "%" || unit === "percent") {
           unitSuffix = "%";
+        } else if (unit === "compass_16" || unit === "wind_dir" || unit === "cardinal_16") {
+          out = formatCompass16(v);
+          if (resolvedPrefix) out = resolvedPrefix + out;
+          if (resolvedSuffix) out += resolvedSuffix;
+          return out;
         }
 
         let digits;
@@ -1053,11 +1316,54 @@
       return { values, numerics, series, dataDoc };
     }
 
-    function textPx(font) {
-      if (font >= 4) return 26;
-      if (font >= 3) return 18;
-      if (font >= 2) return 14;
-      return 11;
+    const FONT5X7_ASCII_START = 32;
+    const FONT5X7_ASCII_END = 126;
+    const FONT5X7 = new Uint8Array([
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5F, 0x00, 0x00, 0x00, 0x07, 0x00, 0x07, 0x00, 0x14, 0x7F, 0x14, 0x7F, 0x14,
+      0x24, 0x2A, 0x7F, 0x2A, 0x12, 0x23, 0x13, 0x08, 0x64, 0x62, 0x36, 0x49, 0x56, 0x20, 0x50, 0x00, 0x08, 0x07, 0x03, 0x00,
+      0x00, 0x1C, 0x22, 0x41, 0x00, 0x00, 0x41, 0x22, 0x1C, 0x00, 0x2A, 0x1C, 0x7F, 0x1C, 0x2A, 0x08, 0x08, 0x3E, 0x08, 0x08,
+      0x00, 0x80, 0x70, 0x30, 0x00, 0x08, 0x08, 0x08, 0x08, 0x08, 0x00, 0x00, 0x60, 0x60, 0x00, 0x20, 0x10, 0x08, 0x04, 0x02,
+      0x3E, 0x51, 0x49, 0x45, 0x3E, 0x00, 0x42, 0x7F, 0x40, 0x00, 0x72, 0x49, 0x49, 0x49, 0x46, 0x21, 0x41, 0x49, 0x4D, 0x33,
+      0x18, 0x14, 0x12, 0x7F, 0x10, 0x27, 0x45, 0x45, 0x45, 0x39, 0x3C, 0x4A, 0x49, 0x49, 0x31, 0x41, 0x21, 0x11, 0x09, 0x07,
+      0x36, 0x49, 0x49, 0x49, 0x36, 0x46, 0x49, 0x49, 0x29, 0x1E, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x40, 0x34, 0x00, 0x00,
+      0x00, 0x08, 0x14, 0x22, 0x41, 0x14, 0x14, 0x14, 0x14, 0x14, 0x00, 0x41, 0x22, 0x14, 0x08, 0x02, 0x01, 0x59, 0x09, 0x06,
+      0x3E, 0x41, 0x5D, 0x59, 0x4E, 0x7C, 0x12, 0x11, 0x12, 0x7C, 0x7F, 0x49, 0x49, 0x49, 0x36, 0x3E, 0x41, 0x41, 0x41, 0x22,
+      0x7F, 0x41, 0x41, 0x41, 0x3E, 0x7F, 0x49, 0x49, 0x49, 0x41, 0x7F, 0x09, 0x09, 0x09, 0x01, 0x3E, 0x41, 0x41, 0x51, 0x73,
+      0x7F, 0x08, 0x08, 0x08, 0x7F, 0x00, 0x41, 0x7F, 0x41, 0x00, 0x20, 0x40, 0x41, 0x3F, 0x01, 0x7F, 0x08, 0x14, 0x22, 0x41,
+      0x7F, 0x40, 0x40, 0x40, 0x40, 0x7F, 0x02, 0x1C, 0x02, 0x7F, 0x7F, 0x04, 0x08, 0x10, 0x7F, 0x3E, 0x41, 0x41, 0x41, 0x3E,
+      0x7F, 0x09, 0x09, 0x09, 0x06, 0x3E, 0x41, 0x51, 0x21, 0x5E, 0x7F, 0x09, 0x19, 0x29, 0x46, 0x26, 0x49, 0x49, 0x49, 0x32,
+      0x03, 0x01, 0x7F, 0x01, 0x03, 0x3F, 0x40, 0x40, 0x40, 0x3F, 0x1F, 0x20, 0x40, 0x20, 0x1F, 0x3F, 0x40, 0x38, 0x40, 0x3F,
+      0x63, 0x14, 0x08, 0x14, 0x63, 0x03, 0x04, 0x78, 0x04, 0x03, 0x61, 0x59, 0x49, 0x4D, 0x43, 0x00, 0x7F, 0x41, 0x41, 0x41,
+      0x02, 0x04, 0x08, 0x10, 0x20, 0x00, 0x41, 0x41, 0x41, 0x7F, 0x04, 0x02, 0x01, 0x02, 0x04, 0x40, 0x40, 0x40, 0x40, 0x40,
+      0x00, 0x03, 0x07, 0x08, 0x00, 0x20, 0x54, 0x54, 0x78, 0x40, 0x7F, 0x28, 0x44, 0x44, 0x38, 0x38, 0x44, 0x44, 0x44, 0x28,
+      0x38, 0x44, 0x44, 0x28, 0x7F, 0x38, 0x54, 0x54, 0x54, 0x18, 0x00, 0x08, 0x7E, 0x09, 0x02, 0x18, 0xA4, 0xA4, 0x9C, 0x78,
+      0x7F, 0x08, 0x04, 0x04, 0x78, 0x00, 0x44, 0x7D, 0x40, 0x00, 0x20, 0x40, 0x40, 0x3D, 0x00, 0x7F, 0x10, 0x28, 0x44, 0x00,
+      0x00, 0x41, 0x7F, 0x40, 0x00, 0x7C, 0x04, 0x78, 0x04, 0x78, 0x7C, 0x08, 0x04, 0x04, 0x78, 0x38, 0x44, 0x44, 0x44, 0x38,
+      0xFC, 0x18, 0x24, 0x24, 0x18, 0x18, 0x24, 0x24, 0x18, 0xFC, 0x7C, 0x08, 0x04, 0x04, 0x08, 0x48, 0x54, 0x54, 0x54, 0x24,
+      0x04, 0x04, 0x3F, 0x44, 0x24, 0x3C, 0x40, 0x40, 0x20, 0x7C, 0x1C, 0x20, 0x40, 0x20, 0x1C, 0x3C, 0x40, 0x30, 0x40, 0x3C,
+      0x44, 0x28, 0x10, 0x28, 0x44, 0x4C, 0x90, 0x90, 0x90, 0x7C, 0x44, 0x64, 0x54, 0x4C, 0x44, 0x00, 0x08, 0x36, 0x41, 0x00,
+      0x00, 0x00, 0x77, 0x00, 0x00, 0x00, 0x41, 0x36, 0x08, 0x00, 0x02, 0x01, 0x02, 0x04, 0x02
+    ]);
+
+    function fontScale(font) {
+      return Number(font) >= 4 ? 2 : 1;
+    }
+
+    function textWidthPx(text, scale) {
+      return String(text ?? "").length * 6 * Math.max(1, scale);
+    }
+
+    function datumTextX(x, textW, align) {
+      if (align === "center") return Math.round(x - (textW / 2));
+      if (align === "right") return Math.round(x - textW);
+      return Math.round(x);
+    }
+
+    function datumTextY(y, textH, scale, valign) {
+      if (valign === "middle") return Math.round(y - (textH / 2));
+      if (valign === "bottom") return Math.round(y - textH);
+      if (valign === "baseline") return Math.round(y - Math.max(1, textH - scale));
+      return Math.round(y);
     }
 
     function hexColor(v, fallback) {
@@ -1065,15 +1371,38 @@
       return fallback;
     }
 
-    function drawString(text, x, y, font, color, align = "left", valign = "top") {
-      ctx.fillStyle = color;
-      ctx.font = `${textPx(font)}px monospace`;
-      ctx.textAlign = align;
-      if (valign === "middle") ctx.textBaseline = "middle";
-      else if (valign === "bottom") ctx.textBaseline = "bottom";
-      else if (valign === "baseline") ctx.textBaseline = "alphabetic";
-      else ctx.textBaseline = "top";
-      ctx.fillText(String(text ?? ""), x, y);
+    function drawGlyph5x7(x, y, ch, fg, bg, scale) {
+      let code = ch.charCodeAt(0);
+      if (code < FONT5X7_ASCII_START || code > FONT5X7_ASCII_END) code = 63;
+      const base = (code - FONT5X7_ASCII_START) * 5;
+      for (let col = 0; col < 5; col++) {
+        const bits = FONT5X7[base + col];
+        for (let row = 0; row < 8; row++) {
+          ctx.fillStyle = (bits & (1 << row)) ? fg : bg;
+          ctx.fillRect(x + col * scale, y + row * scale, scale, scale);
+        }
+      }
+      ctx.fillStyle = bg;
+      ctx.fillRect(x + 5 * scale, y, scale, 8 * scale);
+    }
+
+    function drawText5x7(x, y, text, fg, bg, scale) {
+      const src = String(text ?? "");
+      let penX = x;
+      for (let i = 0; i < src.length; i++) {
+        drawGlyph5x7(penX, y, src[i], fg, bg, scale);
+        penX += 6 * scale;
+      }
+    }
+
+    function drawString(text, x, y, font, color, align = "left", valign = "top", bg = "#000000") {
+      const scale = fontScale(font);
+      const src = String(text ?? "");
+      const textW = textWidthPx(src, scale);
+      const textH = 8 * scale;
+      const textX = datumTextX(x, textW, align);
+      const textY = datumTextY(y, textH, scale, valign);
+      drawText5x7(textX, textY, src, color, bg, scale);
     }
 
     function parseBoolish(value, fallback = false) {
@@ -1088,11 +1417,7 @@
     }
 
     function measureTextWidth(text, font) {
-      ctx.save();
-      ctx.font = `${textPx(font)}px monospace`;
-      const width = ctx.measureText(String(text ?? "")).width;
-      ctx.restore();
-      return width;
+      return textWidthPx(text, fontScale(font));
     }
 
     function ellipsizeText(text, font, maxWidth) {
@@ -1197,7 +1522,7 @@
 
       const effectiveLineHeight = Number(lineHeight) > 0
         ? Math.round(Number(lineHeight))
-        : Math.max(10, Math.round(textPx(font) * 1.15));
+        : (8 * fontScale(font));
       let effectiveMaxLines = Number(maxLines) > 0 ? Math.round(Number(maxLines)) : 0;
       if (Number(height) > 0) {
         const byHeight = Math.floor(Number(height) / effectiveLineHeight);
@@ -1280,6 +1605,18 @@
       const days = (date.getTime() - knownNewMoon) / 86400000;
       const phase = ((days % synodic) + synodic) % synodic;
       return phase / synodic;
+    }
+
+    function computeMoonPhaseName(date) {
+      const phase = computeMoonPhaseFraction(date);
+      if (phase < 0.0625 || phase >= 0.9375) return "New Moon";
+      if (phase < 0.1875) return "Waxing Crescent";
+      if (phase < 0.3125) return "First Quarter";
+      if (phase < 0.4375) return "Waxing Gibbous";
+      if (phase < 0.5625) return "Full Moon";
+      if (phase < 0.6875) return "Waning Gibbous";
+      if (phase < 0.8125) return "Last Quarter";
+      return "Waning Crescent";
     }
 
     const intFields = new Set(["x","y","w","h","x2","y2","r","length","thickness","line_height","max_lines"]);
@@ -1489,6 +1826,14 @@
       const rawNodes = (((parsedDsl || {}).ui || {}).nodes) || [];
       const nodeList = expandNodes(rawNodes, null);
       const { values, numerics, series, dataDoc } = buildResolvedData(parsedDsl, parsedPayload);
+      const ui = ((parsedDsl || {}).ui) || {};
+      const showTitle = ui && ui.show_title === true;
+      const uiTitle = (ui && typeof ui.title === "string") ? ui.title : "";
+
+      // Match firmware behavior: title is opt-in via ui.show_title, default off.
+      if (showTitle && uiTitle) {
+        drawString(bindTemplate(uiTitle, values), 4, 4, 1, "#5ec8ff", "left", "top");
+      }
 
       for (const node of nodeList) {
         const type = node.type || "label";
@@ -1537,19 +1882,15 @@
         if (type === "value_box") {
           ctx.fillStyle = bg;
           ctx.fillRect(x, y, w, h);
-          ctx.strokeStyle = fg;
-          ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
-          if (node.text) drawString(bindTemplate(node.text, values), x + 4, y + 3, 1, fg, "left", "top");
+          if (node.text) drawString(bindTemplate(node.text, values), x + 4, y + 4, 1, fg, "left", "top", bg);
           const val = node.key ? (values[node.key] ?? "") : "";
-          drawString(val, x + 4, y + 14, font, fg, "left", "top");
+          drawString(val, x + 4, y + 16, font, fg, "left", "top", bg);
           continue;
         }
 
         if (type === "progress") {
           ctx.fillStyle = bg;
           ctx.fillRect(x, y, w, h);
-          ctx.strokeStyle = fg;
-          ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
           const key = node.key || "";
           let v = numerics[key];
           if (!Number.isFinite(v)) v = parseNumberMaybe(values[key]) ?? 0;
@@ -1559,15 +1900,10 @@
           const fillW = Math.floor((w - 4) * ratio);
           ctx.fillStyle = fg;
           ctx.fillRect(x + 2, y + 2, fillW, Math.max(0, h - 4));
-          drawString(String(v.toFixed(1)), x + Math.floor(w / 2), y + Math.floor(h / 2), 1, "#ffffff", "center", "middle");
           continue;
         }
 
         if (type === "sparkline") {
-          ctx.fillStyle = bg;
-          ctx.fillRect(x, y, w, h);
-          ctx.strokeStyle = fg;
-          ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
           const vals = series[node.key] || [];
           if (vals.length < 2) continue;
           let min = Number(node.min);
@@ -1582,8 +1918,8 @@
           for (let i = 0; i < vals.length; i++) {
             const rx = (i / (vals.length - 1)) * (w - 2);
             const ry = (vals[i] - min) / (max - min);
-            const px = x + 1 + rx;
-            const py = y + (h - 2) - (ry * (h - 2));
+            const px = Math.round(x + 1 + rx);
+            const py = Math.round(y + (h - 2) - (ry * (h - 2)));
             if (i === 0) ctx.moveTo(px, py);
             else ctx.lineTo(px, py);
           }
@@ -1596,7 +1932,7 @@
           const thickness = Math.max(1, Number(node.thickness || 1));
           const startDeg = Number.isFinite(Number(node.start_deg)) ? Number(node.start_deg) : 0;
           const endDeg = Number.isFinite(Number(node.end_deg)) ? Number(node.end_deg) : 360;
-          if (bg.toLowerCase() !== "#000000") {
+          if (Math.abs(endDeg - startDeg) >= 359 && bg.toLowerCase() !== "#000000") {
             ctx.fillStyle = bg;
             ctx.beginPath();
             ctx.arc(x, y, r, 0, Math.PI * 2);
@@ -1626,12 +1962,16 @@
             }
           }
           if (!Number.isFinite(x2) || !Number.isFinite(y2)) continue;
-          const thick = Math.max(1, Number(node.thickness || 1));
+          const x1i = Math.round(x);
+          const y1i = Math.round(y);
+          const x2i = Math.round(x2);
+          const y2i = Math.round(y2);
+          const thick = Math.max(1, Number(node.width ?? node.thickness ?? 1));
           ctx.strokeStyle = fg;
           ctx.lineWidth = thick;
           ctx.beginPath();
-          ctx.moveTo(x, y);
-          ctx.lineTo(x2, y2);
+          ctx.moveTo(x1i, y1i);
+          ctx.lineTo(x2i, y2i);
           ctx.stroke();
           ctx.lineWidth = 1;
           continue;
@@ -1804,7 +2144,7 @@
       const blob = new Blob([dslEditor.getText()], { type: "application/json" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = "widget.dsl.json";
+      a.download = dslFileNameFromPath(currentDslPath());
       a.click();
       URL.revokeObjectURL(a.href);
     });
@@ -1814,9 +2154,7 @@
       if (!file) return;
       const reader = new FileReader();
       reader.onload = () => {
-        dslEditor.setText(String(reader.result || ""));
-        compileDsl();
-        renderPreview();
+        setDslEditorText(String(reader.result || ""));
       };
       reader.readAsText(file);
       ev.target.value = "";
@@ -1830,7 +2168,13 @@
 
     document.getElementById("loadWeatherBtn").addEventListener("click", async () => {
       try {
-        dslEditor.setText(await loadRepoFile("/data/dsl_active/weather_now.json"));
+        const weatherPath = "/data/dsl_available/weather_now.json";
+        if (dslFileSelect.querySelector(`option[value="${weatherPath}"]`)) {
+          dslFileSelect.value = weatherPath;
+          await loadSelectedDslFile();
+        } else {
+          setDslEditorText(await loadRepoFile(weatherPath));
+        }
         payloadEditor.setText(`{
   "current": {
     "temperature_2m": 18.2,
@@ -1845,7 +2189,7 @@
     "sunset": ["2026-02-22T01:49"]
   }
 }`);
-        compileDsl();
+        setStatus(dslFileStatus, "Loaded weather sample payload.", true);
         compilePayload();
         renderPreview();
       } catch (err) {
@@ -1855,7 +2199,13 @@
 
     document.getElementById("loadAdsbBtn").addEventListener("click", async () => {
       try {
-        dslEditor.setText(await loadRepoFile("/data/dsl_available/adsb_nearest.json"));
+        const adsbPath = "/data/dsl_available/adsb_nearest.json";
+        if (dslFileSelect.querySelector(`option[value="${adsbPath}"]`)) {
+          dslFileSelect.value = adsbPath;
+          await loadSelectedDslFile();
+        } else {
+          setDslEditorText(await loadRepoFile(adsbPath));
+        }
         payloadEditor.setText(`{
   "ac": [
     {"flight":"UAL2423","t":"B739","alt_baro":10025,"dst":35.6,"destination":"KSFO","lat":37.65,"lon":-121.98},
@@ -1865,12 +2215,28 @@
     {"flight":"N441QF","t":"C172","alt_baro":1800,"dst":31.5,"destination":"?","lat":38.39,"lon":-121.59}
   ]
 }`);
-        compileDsl();
+        setStatus(dslFileStatus, "Loaded ADSB sample payload.", true);
         compilePayload();
         renderPreview();
       } catch (err) {
         setStatus(dslStatus, "Sample load failed: " + err.message, false);
       }
+    });
+
+    dslFileSelect.addEventListener("change", () => {
+      loadSelectedDslFile();
+    });
+
+    reloadDslBtn.addEventListener("click", () => {
+      loadSelectedDslFile();
+    });
+
+    connectProjectBtn.addEventListener("click", () => {
+      connectProjectFolder();
+    });
+
+    saveDslBtn.addEventListener("click", () => {
+      saveSelectedDslToProject();
     });
 
     function tick() {
@@ -2059,29 +2425,29 @@
         ]
       },
       {
-        "type": "hand",
+        "type": "line",
         "x": 80,
         "y": 72,
         "length": 28,
-        "thickness": 3,
+        "width": 3,
         "color": "#FFFFFF",
         "angle_expr": "(hour % 12) * 30 + minute * 0.5"
       },
       {
-        "type": "hand",
+        "type": "line",
         "x": 80,
         "y": 72,
         "length": 46,
-        "thickness": 2,
+        "width": 2,
         "color": "#9FD3FF",
         "angle_expr": "minute*6"
       },
       {
-        "type": "hand",
+        "type": "line",
         "x": 80,
         "y": 72,
         "length": 54,
-        "thickness": 1,
+        "width": 1,
         "color": "#F5E663",
         "angle_expr": "second*6"
       },
@@ -2150,6 +2516,7 @@
     compilePayload();
     compileSettings();
     renderPreview();
+    initDslFilePicker();
     requestAnimationFrame(tick);
   </script>
 </body>

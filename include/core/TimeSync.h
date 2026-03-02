@@ -5,6 +5,7 @@
 namespace timesync {
 
 void configureUtcNtp();
+bool isUtcTimeReady();
 bool ensureUtcTime(uint32_t timeoutMs = 6000);
 void logUiTimeContext(const char* timezone, int offsetMinutes, bool hasOffset);
 

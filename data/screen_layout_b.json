@@ -40,22 +40,21 @@
       "type": "dsl",
       "update_ms": 1000,
       "settings": {
-        "dsl_path": "/dsl_active/weather_now.json"
+        "dsl_path": "/dsl_available/weather_now.json"
       }
     },
     "forecast": {
       "type": "dsl",
       "update_ms": 1000,
       "settings": {
-        "dsl_path": "/dsl_active/forecast.json"
+        "dsl_path": "/dsl_available/forecast.json"
       }
     },
     "clock-full": {
       "type": "dsl",
       "update_ms": 1000,
       "settings": {
-        "dsl_path": "/dsl_active/clock_analog_full.json",
-        "use_sprite": "true"
+        "dsl_path": "/dsl_available/clock_analog_full.json"
       }
     }
   }

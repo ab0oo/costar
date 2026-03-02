@@ -2,9 +2,12 @@
 
 #include "AppConfig.h"
 #include "DisplaySpiEspIdf.h"
+#include "DslJson.h"
+#include "DslTime.h"
 #include "Font5x7Classic.h"
 #include "HttpTransportGate.h"
 #include "RuntimeSettings.h"
+#include "core/TimeSync.h"
 #include "platform/Platform.h"
 #include "platform/Prefs.h"
 
@@ -57,40 +60,45 @@ constexpr uint32_t kHttpResponseMaxBytesMax = 32768U;
 constexpr size_t kHttpCaptureSafetyMarginBytes = 256U;
 constexpr UBaseType_t kHttpWorkerPriority = 4U;
 constexpr BaseType_t kHttpWorkerCore = 0;
-constexpr uint32_t kHaWsConnectTimeoutMs = 15000U;
-constexpr uint32_t kHaWsDefaultKeepAliveMs = 30000U;
-constexpr size_t kHaWsMaxFrameBytes = 16384U;
-constexpr size_t kHaWsDiagLargeFrameBytes = 3000U;
+constexpr uint32_t kWsConnectTimeoutMs = 15000U;
+constexpr uint32_t kWsDefaultKeepAliveMs = 30000U;
+constexpr size_t kWsMaxFrameBytes = 8192U;
+constexpr size_t kWsDiagLargeFrameBytes = 3000U;
 constexpr uint32_t kTapPostHttpRefreshDelayMs = 750U;
-constexpr size_t kIconMemCacheBudgetBytes = 192U * 1024U;
+constexpr size_t kIconMemCacheBudgetBytes = 24U * 1024U;
 constexpr const char* kIconCacheDir = "/littlefs/icon_cache";
 constexpr uint32_t kIconFetchRetryMs = 30000U;
 constexpr size_t kIconRetryMaxEntries = 64U;
+constexpr uint32_t kLowHeapRecoverCooldownMs = 1500U;
+constexpr size_t kRuntimeValueSlotsMax = 192U;
+constexpr size_t kValueInsertMinLargest8Bit = 4U * 1024U;
+constexpr size_t kValueInsertMinFree8Bit = 12U * 1024U;
+// Track pending WS requests briefly to tolerate async ack/event sequences.
+constexpr uint32_t kWsPendingReqTimeoutMs = 8000U;
 constexpr size_t kUiCriticalLargest8Bit = 12288U;
 constexpr size_t kUiCriticalFree8Bit = 24576U;
-constexpr time_t kTlsClockMinUnix = 1704067200;  // 2024-01-01T00:00:00Z
-constexpr size_t kTlsMinLargest8Bit = 32U * 1024U;
+// Guard against fragmentation before TLS setup. mbedtls_ssl_setup needs more
+// than 16KB contiguous even with dynamic buffers; 20KB gives reliable headroom.
+constexpr size_t kTlsMinLargest8Bit = 20U * 1024U;
 constexpr size_t kTlsMinFree8Bit = 40U * 1024U;
-constexpr uint32_t kHttpReuseWindowMs = 2000U;
-constexpr size_t kHttpReuseMaxEntries = 8U;
+// Once a WS connection is up, its TLS context is permanently resident. Only
+// need enough heap for template string allocations (~3-5KB).
+// Post-WS steady state is ~12-20KB largest / ~15-20KB free depending on the
+// TLS handshake cost — use 8KB/12KB to allow fetching at this level.
+constexpr size_t kWsActiveMinLargest8Bit = 8U * 1024U;
+constexpr size_t kWsActiveMinFree8Bit = 12U * 1024U;
+constexpr uint32_t kHttpReuseWindowMs = 500U;
+constexpr size_t kHttpReuseMaxEntries = 3U;
 constexpr size_t kCanvasPersistentMaxBytes = 16U * 1024U;
+constexpr size_t kWsCacheJsonMaxEntries = 16U;
 
 enum class DataSource : uint8_t {
   kHttp,
-  kHaWs,
+  kWebSocket,
   kLocalTime,
   kUnknown,
 };
 
-struct FormatSpec {
-  int roundDigits = -1;
-  std::string unit;
-  std::string locale;
-  std::string prefix;
-  std::string suffix;
-  std::string tz;
-  std::string timeFormat;
-};
 
 struct FieldSpec {
   std::string key;
@@ -194,6 +202,7 @@ enum class TouchActionType : uint8_t {
   kNone,
   kModal,
   kHttp,
+  kWsPublish,
 };
 
 struct TouchRegion {
@@ -209,6 +218,8 @@ struct TouchRegion {
   std::string httpBody;
   std::string httpContentType = "application/json";
   std::vector<std::pair<std::string, std::string>> httpHeaders;
+  std::string wsUrl;
+  std::string wsBody;
 };
 
 struct KeyValue {
@@ -256,7 +267,7 @@ enum class TapActionType : uint8_t {
   kNone,
   kRefresh,
   kHttp,
-  kHaWsService,
+  kWsPublish,
 };
 
 struct LocalTimeContext {
@@ -299,18 +310,31 @@ struct State {
   std::vector<KeyValue> tapHeaders;
   std::string urlTemplate;
   std::string wsEntityTemplate;
+  std::string wsCacheKeyTemplate;
+  std::string wsSubscribeTemplate;
+  std::string wsBootstrapTemplate;
+  std::string wsResultPath;
+  std::string wsEventPath;
+  std::string wsAuthTemplate;
+  std::string wsUrlTemplate;
+  std::string wsTokenTemplate;
+  std::string wsPathTemplate;
+  std::string wsConnectionProfileTemplate;
   std::vector<KeyValue> headers;
   std::vector<std::string> transforms;
   std::vector<FieldSpec> fields;
   std::vector<Node> nodes;
   std::vector<ModalSpec> modals;
   std::vector<TouchRegion> touchRegions;
+  std::string uiTitle;
+  bool showTitle = false;
   std::vector<KeyValue> values;
   std::map<std::string, double> numericValues;
   std::map<std::string, std::string> transformValues;
   std::map<std::string, std::string> settingValues;
   std::string activeModalId;
   uint32_t modalDismissDueMs = 0;
+  bool drawBorder = true;
   std::string sourceJson;
   bool retainSourceJson = false;
   std::string transformJson;
@@ -338,12 +362,29 @@ std::map<std::string, IconMemEntry> sIconMemCache;
 size_t sIconMemCacheBytes = 0;
 bool sIconCacheDirReady = false;
 std::map<std::string, uint32_t> sIconRetryAfterMs;
+uint32_t sLastLowHeapRecoverMs = 0;
 
-struct HaWsState {
+struct WsReqMeta {
+  std::string cacheKey;
+  std::string resultPath;
+  std::string eventPath;
+  bool isSubscribe = false;
+  uint32_t sentAtMs = 0;
+};
+
+struct WsState {
   SemaphoreHandle_t lock = nullptr;
   esp_websocket_client_handle_t client = nullptr;
+  std::string profileKey;
   std::string wsUrl;
   std::string token;
+  std::string authTemplate;
+  std::string authRequiredType = "auth_required";
+  std::string authOkType = "auth_ok";
+  std::string authInvalidType = "auth_invalid";
+  std::string readyType = "ready";
+  std::vector<std::string> initMessages;
+  bool initSent = false;
   bool authOk = false;
   bool ready = false;
   bool started = false;
@@ -352,505 +393,20 @@ struct HaWsState {
   uint32_t reconnectDueMs = 0;
   uint8_t failureStreak = 0;
   std::string rxFrame;
-  std::map<std::string, std::string> entityStateJson;
-  std::map<uint32_t, std::string> renderReqToEntityId;
-  std::map<std::string, uint32_t> entityIdToRenderReq;
-  std::map<uint32_t, std::string> triggerReqToEntityId;
-  std::map<std::string, uint32_t> entityIdToTriggerReq;
-  std::map<uint32_t, std::string> triggerSubIdToEntityId;
-  std::map<std::string, uint32_t> entityIdToTriggerSubId;
+  std::map<std::string, std::string> cacheJsonByKey;
+  std::map<uint32_t, WsReqMeta> pendingReqById;
+  std::map<std::string, uint32_t> cacheKeyToPendingBootstrapReq;
+  std::map<std::string, uint32_t> cacheKeyToPendingSubscribeReq;
+  std::map<uint32_t, WsReqMeta> activeSubById;
+  std::map<std::string, uint32_t> cacheKeyToActiveSubId;
 };
 
-HaWsState sHaWs;
+WsState sWs;
 
-size_t skipWs(std::string_view text, size_t i) {
-  while (i < text.size()) {
-    const unsigned char c = static_cast<unsigned char>(text[i]);
-    if (c != ' ' && c != '\n' && c != '\r' && c != '\t') {
-      break;
-    }
-    ++i;
-  }
-  return i;
-}
+bool reclaimRuntimeCachesLowHeap(const char* reason);
 
-std::string_view trimView(std::string_view text) {
-  size_t start = 0;
-  while (start < text.size()) {
-    const unsigned char c = static_cast<unsigned char>(text[start]);
-    if (c != ' ' && c != '\n' && c != '\r' && c != '\t') {
-      break;
-    }
-    ++start;
-  }
-  size_t end = text.size();
-  while (end > start) {
-    const unsigned char c = static_cast<unsigned char>(text[end - 1]);
-    if (c != ' ' && c != '\n' && c != '\r' && c != '\t') {
-      break;
-    }
-    --end;
-  }
-  return text.substr(start, end - start);
-}
+using namespace dsl_json;
 
-bool parseQuotedString(std::string_view text, size_t quotePos, std::string& out, size_t& nextPos) {
-  if (quotePos >= text.size() || text[quotePos] != '"') {
-    return false;
-  }
-  out.clear();
-
-  for (size_t i = quotePos + 1; i < text.size(); ++i) {
-    const char c = text[i];
-    if (c == '"') {
-      nextPos = i + 1;
-      return true;
-    }
-    if (c == '\\') {
-      if (i + 1 >= text.size()) {
-        return false;
-      }
-      const char esc = text[++i];
-      switch (esc) {
-        case '"':
-        case '\\':
-        case '/':
-          out.push_back(esc);
-          break;
-        case 'b':
-          out.push_back('\b');
-          break;
-        case 'f':
-          out.push_back('\f');
-          break;
-        case 'n':
-          out.push_back('\n');
-          break;
-        case 'r':
-          out.push_back('\r');
-          break;
-        case 't':
-          out.push_back('\t');
-          break;
-        case 'u': {
-          // Keep parsing lightweight: decode BMP ASCII codepoints, degrade others to '?'.
-          if (i + 4 >= text.size()) {
-            return false;
-          }
-          unsigned value = 0;
-          for (int nib = 0; nib < 4; ++nib) {
-            const char hex = text[i + 1 + static_cast<size_t>(nib)];
-            value <<= 4;
-            if (hex >= '0' && hex <= '9') {
-              value |= static_cast<unsigned>(hex - '0');
-            } else if (hex >= 'A' && hex <= 'F') {
-              value |= static_cast<unsigned>(hex - 'A' + 10);
-            } else if (hex >= 'a' && hex <= 'f') {
-              value |= static_cast<unsigned>(hex - 'a' + 10);
-            } else {
-              return false;
-            }
-          }
-          i += 4;
-          out.push_back((value <= 0x7F) ? static_cast<char>(value) : '?');
-          break;
-        }
-        default:
-          out.push_back(esc);
-          break;
-      }
-      continue;
-    }
-    out.push_back(c);
-  }
-
-  return false;
-}
-
-bool findValueEnd(std::string_view text, size_t start, size_t& endPos) {
-  start = skipWs(text, start);
-  if (start >= text.size()) {
-    return false;
-  }
-
-  const char first = text[start];
-  if (first == '"') {
-    std::string ignored;
-    size_t next = 0;
-    if (!parseQuotedString(text, start, ignored, next)) {
-      return false;
-    }
-    endPos = next;
-    return true;
-  }
-
-  if (first == '{' || first == '[') {
-    const char open = first;
-    const char close = (first == '{') ? '}' : ']';
-    int depth = 0;
-    bool inString = false;
-    bool escape = false;
-    for (size_t i = start; i < text.size(); ++i) {
-      const char c = text[i];
-      if (inString) {
-        if (escape) {
-          escape = false;
-        } else if (c == '\\') {
-          escape = true;
-        } else if (c == '"') {
-          inString = false;
-        }
-        continue;
-      }
-
-      if (c == '"') {
-        inString = true;
-        continue;
-      }
-      if (c == open) {
-        ++depth;
-        continue;
-      }
-      if (c == close) {
-        --depth;
-        if (depth == 0) {
-          endPos = i + 1;
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  size_t i = start;
-  while (i < text.size()) {
-    const char c = text[i];
-    if (c == ',' || c == '}' || c == ']') {
-      break;
-    }
-    ++i;
-  }
-  endPos = i;
-  return true;
-}
-
-bool objectMemberValue(std::string_view objectText, std::string_view key, std::string_view& out) {
-  objectText = trimView(objectText);
-  if (objectText.size() < 2 || objectText.front() != '{' || objectText.back() != '}') {
-    return false;
-  }
-
-  size_t i = 1;
-  while (i + 1 < objectText.size()) {
-    i = skipWs(objectText, i);
-    if (i >= objectText.size() - 1 || objectText[i] == '}') {
-      break;
-    }
-
-    if (objectText[i] != '"') {
-      return false;
-    }
-
-    std::string memberKey;
-    size_t keyEnd = 0;
-    if (!parseQuotedString(objectText, i, memberKey, keyEnd)) {
-      return false;
-    }
-
-    i = skipWs(objectText, keyEnd);
-    if (i >= objectText.size() || objectText[i] != ':') {
-      return false;
-    }
-
-    ++i;
-    const size_t valueStart = skipWs(objectText, i);
-    size_t valueEnd = 0;
-    if (!findValueEnd(objectText, valueStart, valueEnd)) {
-      return false;
-    }
-
-    if (memberKey == key) {
-      out = objectText.substr(valueStart, valueEnd - valueStart);
-      return true;
-    }
-
-    i = skipWs(objectText, valueEnd);
-    if (i < objectText.size() && objectText[i] == ',') {
-      ++i;
-    }
-  }
-
-  return false;
-}
-
-template <typename Fn>
-void forEachObjectMember(std::string_view objectText, Fn&& fn) {
-  objectText = trimView(objectText);
-  if (objectText.size() < 2 || objectText.front() != '{' || objectText.back() != '}') {
-    return;
-  }
-
-  size_t i = 1;
-  while (i + 1 < objectText.size()) {
-    i = skipWs(objectText, i);
-    if (i >= objectText.size() - 1 || objectText[i] == '}') {
-      break;
-    }
-    if (objectText[i] != '"') {
-      return;
-    }
-
-    std::string memberKey;
-    size_t keyEnd = 0;
-    if (!parseQuotedString(objectText, i, memberKey, keyEnd)) {
-      return;
-    }
-
-    i = skipWs(objectText, keyEnd);
-    if (i >= objectText.size() || objectText[i] != ':') {
-      return;
-    }
-
-    ++i;
-    const size_t valueStart = skipWs(objectText, i);
-    size_t valueEnd = 0;
-    if (!findValueEnd(objectText, valueStart, valueEnd)) {
-      return;
-    }
-
-    const std::string_view valueText = objectText.substr(valueStart, valueEnd - valueStart);
-    fn(memberKey, valueText);
-
-    i = skipWs(objectText, valueEnd);
-    if (i < objectText.size() && objectText[i] == ',') {
-      ++i;
-    }
-  }
-}
-
-bool arrayElementValue(std::string_view arrayText, int index, std::string_view& out) {
-  if (index < 0) {
-    return false;
-  }
-
-  arrayText = trimView(arrayText);
-  if (arrayText.size() < 2 || arrayText.front() != '[' || arrayText.back() != ']') {
-    return false;
-  }
-
-  int current = 0;
-  size_t i = 1;
-  while (i + 1 < arrayText.size()) {
-    i = skipWs(arrayText, i);
-    if (i >= arrayText.size() - 1 || arrayText[i] == ']') {
-      break;
-    }
-
-    size_t valueEnd = 0;
-    if (!findValueEnd(arrayText, i, valueEnd)) {
-      return false;
-    }
-    if (current == index) {
-      out = arrayText.substr(i, valueEnd - i);
-      return true;
-    }
-
-    ++current;
-    i = skipWs(arrayText, valueEnd);
-    if (i < arrayText.size() && arrayText[i] == ',') {
-      ++i;
-    }
-  }
-
-  return false;
-}
-
-template <typename Fn>
-void forEachArrayElement(std::string_view arrayText, Fn&& fn) {
-  arrayText = trimView(arrayText);
-  if (arrayText.size() < 2 || arrayText.front() != '[' || arrayText.back() != ']') {
-    return;
-  }
-
-  int idx = 0;
-  size_t i = 1;
-  while (i + 1 < arrayText.size()) {
-    i = skipWs(arrayText, i);
-    if (i >= arrayText.size() - 1 || arrayText[i] == ']') {
-      break;
-    }
-
-    size_t valueEnd = 0;
-    if (!findValueEnd(arrayText, i, valueEnd)) {
-      return;
-    }
-
-    fn(idx, arrayText.substr(i, valueEnd - i));
-    ++idx;
-
-    i = skipWs(arrayText, valueEnd);
-    if (i < arrayText.size() && arrayText[i] == ',') {
-      ++i;
-    }
-  }
-}
-
-bool parseStrictDouble(const std::string& text, double& out) {
-  std::string trimmed = text;
-  const auto notWs = [](unsigned char c) { return c != ' ' && c != '\n' && c != '\r' && c != '\t'; };
-  trimmed.erase(trimmed.begin(), std::find_if(trimmed.begin(), trimmed.end(), notWs));
-  trimmed.erase(std::find_if(trimmed.rbegin(), trimmed.rend(), notWs).base(), trimmed.end());
-  if (trimmed.empty()) {
-    return false;
-  }
-
-  errno = 0;
-  char* endPtr = nullptr;
-  const double value = std::strtod(trimmed.c_str(), &endPtr);
-  if (endPtr == nullptr || endPtr == trimmed.c_str() || errno == ERANGE) {
-    return false;
-  }
-  while (*endPtr == ' ' || *endPtr == '\n' || *endPtr == '\r' || *endPtr == '\t') {
-    ++endPtr;
-  }
-  if (*endPtr != '\0') {
-    return false;
-  }
-
-  out = value;
-  return true;
-}
-
-bool viewToString(std::string_view valueText, std::string& out) {
-  valueText = trimView(valueText);
-  if (valueText.empty()) {
-    out.clear();
-    return false;
-  }
-
-  if (valueText.front() == '"') {
-    size_t next = 0;
-    if (!parseQuotedString(valueText, 0, out, next)) {
-      return false;
-    }
-    return true;
-  }
-
-  out.assign(valueText.data(), valueText.size());
-  return true;
-}
-
-bool viewToInt(std::string_view valueText, int& out) {
-  std::string text;
-  if (!viewToString(valueText, text)) {
-    return false;
-  }
-  double value = 0.0;
-  if (!parseStrictDouble(text, value)) {
-    return false;
-  }
-  if (value < static_cast<double>(std::numeric_limits<int>::min()) ||
-      value > static_cast<double>(std::numeric_limits<int>::max())) {
-    return false;
-  }
-  out = static_cast<int>(std::lround(value));
-  return true;
-}
-
-bool viewToBool(std::string_view valueText, bool& out) {
-  std::string text;
-  if (!viewToString(valueText, text)) {
-    return false;
-  }
-  std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) {
-    return static_cast<char>(std::tolower(c));
-  });
-  if (text == "true" || text == "1" || text == "yes" || text == "on") {
-    out = true;
-    return true;
-  }
-  if (text == "false" || text == "0" || text == "no" || text == "off") {
-    out = false;
-    return true;
-  }
-  return false;
-}
-
-bool viewToDouble(std::string_view valueText, double& out) {
-  valueText = trimView(valueText);
-  if (valueText.empty()) {
-    return false;
-  }
-  if (valueText.front() == '"') {
-    std::string str;
-    size_t next = 0;
-    if (!parseQuotedString(valueText, 0, str, next)) {
-      return false;
-    }
-    return parseStrictDouble(str, out);
-  }
-  std::string str(valueText.data(), valueText.size());
-  return parseStrictDouble(str, out);
-}
-
-bool objectMemberString(std::string_view objectText, const char* key, std::string& out) {
-  std::string_view value;
-  if (!objectMemberValue(objectText, key, value)) {
-    return false;
-  }
-  return viewToString(value, out);
-}
-
-bool objectMemberInt(std::string_view objectText, const char* key, int& out) {
-  std::string_view value;
-  if (!objectMemberValue(objectText, key, value)) {
-    return false;
-  }
-  return viewToInt(value, out);
-}
-
-bool objectMemberBool(std::string_view objectText, const char* key, bool& out) {
-  std::string_view value;
-  if (!objectMemberValue(objectText, key, value)) {
-    return false;
-  }
-  return viewToBool(value, out);
-}
-
-bool objectMemberObject(std::string_view objectText, const char* key, std::string_view& out) {
-  if (!objectMemberValue(objectText, key, out)) {
-    return false;
-  }
-  out = trimView(out);
-  return out.size() >= 2 && out.front() == '{' && out.back() == '}';
-}
-
-bool objectMemberArray(std::string_view objectText, const char* key, std::string_view& out) {
-  if (!objectMemberValue(objectText, key, out)) {
-    return false;
-  }
-  out = trimView(out);
-  return out.size() >= 2 && out.front() == '[' && out.back() == ']';
-}
-
-uint16_t rgbTo565(uint8_t r, uint8_t g, uint8_t b) {
-  return static_cast<uint16_t>(((r & 0xF8U) << 8U) | ((g & 0xFCU) << 3U) | (b >> 3U));
-}
-
-bool parseHexColor565(const std::string& hex, uint16_t& outColor) {
-  if (hex.size() != 7 || hex[0] != '#') {
-    return false;
-  }
-  char* endPtr = nullptr;
-  const long value = std::strtol(hex.c_str() + 1, &endPtr, 16);
-  if (endPtr == nullptr || *endPtr != '\0' || value < 0 || value > 0xFFFFFF) {
-    return false;
-  }
-  outColor =
-      rgbTo565(static_cast<uint8_t>((value >> 16) & 0xFF), static_cast<uint8_t>((value >> 8) & 0xFF),
-               static_cast<uint8_t>(value & 0xFF));
-  return true;
-}
 
 struct VarContext {
   const VarContext* parent = nullptr;
@@ -1210,112 +766,6 @@ bool evalNumericExpr(const std::string& input, const VarContext* ctx, float& out
   return true;
 }
 
-std::string readFile(const char* path) {
-  if (path == nullptr || *path == '\0') {
-    return {};
-  }
-  std::FILE* fp = std::fopen(path, "rb");
-  if (fp == nullptr) {
-    return {};
-  }
-  if (std::fseek(fp, 0, SEEK_END) != 0) {
-    std::fclose(fp);
-    return {};
-  }
-  const long len = std::ftell(fp);
-  if (len <= 0) {
-    std::fclose(fp);
-    return {};
-  }
-  if (std::fseek(fp, 0, SEEK_SET) != 0) {
-    std::fclose(fp);
-    return {};
-  }
-  std::string out(static_cast<size_t>(len), '\0');
-  const size_t got = std::fread(out.data(), 1, out.size(), fp);
-  std::fclose(fp);
-  if (got != out.size()) {
-    return {};
-  }
-  return out;
-}
-
-float loadGeoLat() {
-  const int mode = static_cast<int>(platform::prefs::getInt("geo", "mode", 0));
-  if (mode == 1) {
-    const float manual = platform::prefs::getFloat("geo", "mlat", NAN);
-    if (!std::isnan(manual)) {
-      return manual;
-    }
-  }
-  const float cached = platform::prefs::getFloat("geo", "lat", NAN);
-  return std::isnan(cached) ? AppConfig::kDefaultLatitude : cached;
-}
-
-float loadGeoLon() {
-  const int mode = static_cast<int>(platform::prefs::getInt("geo", "mode", 0));
-  if (mode == 1) {
-    const float manual = platform::prefs::getFloat("geo", "mlon", NAN);
-    if (!std::isnan(manual)) {
-      return manual;
-    }
-  }
-  const float cached = platform::prefs::getFloat("geo", "lon", NAN);
-  return std::isnan(cached) ? AppConfig::kDefaultLongitude : cached;
-}
-
-std::string loadGeoTimezone() {
-  const int mode = static_cast<int>(platform::prefs::getInt("geo", "mode", 0));
-  if (mode == 1) {
-    const std::string manualTz = platform::prefs::getString("geo", "mtz", "");
-    if (!manualTz.empty()) {
-      return manualTz;
-    }
-  }
-  return platform::prefs::getString("geo", "tz", "");
-}
-
-bool loadGeoOffsetMinutes(int& out) {
-  constexpr int kOffsetUnknown = -32768;
-  const int mode = static_cast<int>(platform::prefs::getInt("geo", "mode", 0));
-  if (mode == 1) {
-    const int manual = static_cast<int>(platform::prefs::getInt("geo", "moff", kOffsetUnknown));
-    if (manual != kOffsetUnknown) {
-      out = manual;
-      return true;
-    }
-  }
-  const int cached = static_cast<int>(platform::prefs::getInt("geo", "off_min", kOffsetUnknown));
-  if (cached != kOffsetUnknown) {
-    out = cached;
-    return true;
-  }
-  return false;
-}
-
-bool inferOffsetFromTimezone(const std::string& tz, int& outMinutes) {
-  if (tz == "America/Los_Angeles") {
-    outMinutes = -8 * 60;
-    return true;
-  }
-  if (tz == "America/Denver") {
-    outMinutes = -7 * 60;
-    return true;
-  }
-  if (tz == "America/Chicago") {
-    outMinutes = -6 * 60;
-    return true;
-  }
-  if (tz == "America/New_York") {
-    outMinutes = -5 * 60;
-    return true;
-  }
-  if (tz == "UTC" || tz == "Etc/UTC") {
-    outMinutes = 0;
-    return true;
-  }
-  return false;
-}
 
 KeyValue* findValueSlot(const std::string& key) {
   for (auto& kv : s.values) {
@@ -1343,21 +793,24 @@ bool setValue(const std::string& key, const std::string& value) {
     slot->value = value;
     return true;
   }
+  if (s.values.size() >= kRuntimeValueSlotsMax) {
+    if (s.debug) {
+      ESP_LOGW(kTag, "setValue skip key=%s reason=max_slots size=%u", key.c_str(),
+               static_cast<unsigned>(s.values.size()));
+    }
+    return false;
+  }
+  const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  const size_t freeNow = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+  if (largest < kValueInsertMinLargest8Bit || freeNow < kValueInsertMinFree8Bit) {
+    ESP_LOGW(kTag, "setValue skip key=%s reason=low_heap free=%u largest=%u", key.c_str(),
+             static_cast<unsigned>(freeNow), static_cast<unsigned>(largest));
+    return false;
+  }
   s.values.push_back({key, value});
   return true;
 }
 
-std::string replaceAll(std::string input, const std::string& needle, const std::string& value) {
-  if (needle.empty()) {
-    return input;
-  }
-  size_t pos = 0;
-  while ((pos = input.find(needle, pos)) != std::string::npos) {
-    input.replace(pos, needle.size(), value);
-    pos += value.size();
-  }
-  return input;
-}
 
 std::string trimCopy(const std::string& in) {
   const auto notWs = [](unsigned char c) { return c != ' ' && c != '\n' && c != '\r' && c != '\t'; };
@@ -1499,7 +952,7 @@ bool parseNumericArg(const std::string& arg, double& out) {
   return parseStrictDouble(value, out);
 }
 
-std::string bindRuntimeTemplate(const std::string& input) {
+std::string bindRuntimeTemplateWithMode(const std::string& input, bool preserveUnknownTokens) {
   std::string out = input;
 
   size_t start = out.find("{{");
@@ -1571,6 +1024,10 @@ std::string bindRuntimeTemplate(const std::string& input) {
     }
 
     if (!resolved) {
+      if (preserveUnknownTokens) {
+        start = out.find("{{", end + 2);
+        continue;
+      }
       value.clear();
     }
 
@@ -1581,332 +1038,14 @@ std::string bindRuntimeTemplate(const std::string& input) {
   return out;
 }
 
-bool parseTzOffsetMinutes(const std::string& tz, int& minutes) {
-  if (tz.size() < 9) {
-    return false;
-  }
-  if (tz.rfind("UTC", 0) != 0) {
-    return false;
-  }
-  const char sign = tz[3];
-  if ((sign != '+' && sign != '-') || tz[6] != ':') {
-    return false;
-  }
-
-  const std::string hhText = tz.substr(4, 2);
-  const std::string mmText = tz.substr(7, 2);
-  double hh = 0.0;
-  double mm = 0.0;
-  if (!parseStrictDouble(hhText, hh) || !parseStrictDouble(mmText, mm)) {
-    return false;
-  }
-  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) {
-    return false;
-  }
-
-  minutes = static_cast<int>(hh) * 60 + static_cast<int>(mm);
-  if (sign == '-') {
-    minutes = -minutes;
-  }
-  return true;
+std::string bindRuntimeTemplate(const std::string& input) {
+  return bindRuntimeTemplateWithMode(input, false);
 }
 
-bool parseIsoMinuteTimestamp(const std::string& text, int& year, int& mon, int& day, int& hour,
-                             int& minute) {
-  if (text.size() < 10) {
-    return false;
-  }
-
-  const std::string y = text.substr(0, 4);
-  const std::string mo = text.substr(5, 2);
-  const std::string d = text.substr(8, 2);
-  double yv = 0.0;
-  double mov = 0.0;
-  double dv = 0.0;
-  if (!parseStrictDouble(y, yv) || !parseStrictDouble(mo, mov) || !parseStrictDouble(d, dv)) {
-    return false;
-  }
-
-  year = static_cast<int>(yv);
-  mon = static_cast<int>(mov);
-  day = static_cast<int>(dv);
-  hour = 0;
-  minute = 0;
-
-  if (text.size() >= 16) {
-    const std::string hh = text.substr(11, 2);
-    const std::string mm = text.substr(14, 2);
-    double hhv = 0.0;
-    double mmv = 0.0;
-    if (!parseStrictDouble(hh, hhv) || !parseStrictDouble(mm, mmv)) {
-      return false;
-    }
-    hour = static_cast<int>(hhv);
-    minute = static_cast<int>(mmv);
-  }
-
-  if (year < 1970 || mon < 1 || mon > 12 || day < 1 || day > 31 || hour < 0 || hour > 23 ||
-      minute < 0 || minute > 59) {
-    return false;
-  }
-  return true;
+std::string bindRuntimeTemplatePreserveUnknown(const std::string& input) {
+  return bindRuntimeTemplateWithMode(input, true);
 }
 
-long long daysFromCivil(int year, int mon, int day) {
-  year -= mon <= 2;
-  const int era = (year >= 0 ? year : year - 399) / 400;
-  const unsigned yoe = static_cast<unsigned>(year - era * 400);
-  const unsigned doy =
-      (153 * static_cast<unsigned>(mon + (mon > 2 ? -3 : 9)) + 2) / 5 + static_cast<unsigned>(day) - 1;
-  const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-  return static_cast<long long>(era) * 146097LL + static_cast<long long>(doe) - 719468LL;
-}
-
-void civilFromDays(long long z, int& year, int& mon, int& day) {
-  z += 719468;
-  const long long era = (z >= 0 ? z : z - 146096) / 146097;
-  const unsigned doe = static_cast<unsigned>(z - era * 146097);
-  const unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-  year = static_cast<int>(yoe) + static_cast<int>(era) * 400;
-  const unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-  const unsigned mp = (5 * doy + 2) / 153;
-  day = static_cast<int>(doy - (153 * mp + 2) / 5 + 1);
-  mon = static_cast<int>(mp + (mp < 10 ? 3 : -9));
-  year += (mon <= 2);
-}
-
-std::string formatTimestampWithTz(const std::string& text, const std::string& tz,
-                                  const std::string& timeFormat) {
-  int offsetMinutes = 0;
-  std::string tzSource = tz;
-
-  if (tzSource == "local") {
-    if (!loadGeoOffsetMinutes(offsetMinutes)) {
-      const std::string geoTz = loadGeoTimezone();
-      if (!inferOffsetFromTimezone(geoTz, offsetMinutes)) {
-        offsetMinutes = 0;
-      }
-    }
-    char tzBuf[16];
-    const char sign = (offsetMinutes < 0) ? '-' : '+';
-    const int absMin = std::abs(offsetMinutes);
-    std::snprintf(tzBuf, sizeof(tzBuf), "UTC%c%02d:%02d", sign, absMin / 60, absMin % 60);
-    tzSource = tzBuf;
-  }
-
-  if (!parseTzOffsetMinutes(tzSource, offsetMinutes)) {
-    return text;
-  }
-
-  int year = 0;
-  int mon = 0;
-  int day = 0;
-  int hour = 0;
-  int minute = 0;
-  if (!parseIsoMinuteTimestamp(text, year, mon, day, hour, minute)) {
-    return text;
-  }
-
-  long long totalMinutes = daysFromCivil(year, mon, day) * 1440LL + static_cast<long long>(hour) * 60LL +
-                           static_cast<long long>(minute);
-  totalMinutes += static_cast<long long>(offsetMinutes);
-
-  long long dayCount = totalMinutes / 1440LL;
-  int rem = static_cast<int>(totalMinutes % 1440LL);
-  if (rem < 0) {
-    rem += 1440;
-    --dayCount;
-  }
-
-  int outYear = 0;
-  int outMon = 0;
-  int outDay = 0;
-  civilFromDays(dayCount, outYear, outMon, outDay);
-
-  const int outHour = rem / 60;
-  const int outMinute = rem % 60;
-
-  int dow = static_cast<int>((dayCount + 4) % 7);
-  if (dow < 0) {
-    dow += 7;
-  }
-
-  static const char* kDowShort[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
-  static const char* kDowLong[] = {"Sunday", "Monday", "Tuesday", "Wednesday",
-                                   "Thursday", "Friday", "Saturday"};
-  static const char* kMonthShort[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
-  static const char* kMonthLong[] = {"January", "February", "March", "April", "May", "June",
-                                     "July", "August", "September", "October", "November",
-                                     "December"};
-
-  auto isoWeekNumber = [&](int y, int m, int d) {
-    const long long dayNum = daysFromCivil(y, m, d);
-    int dowMon = static_cast<int>((dayNum + 3) % 7);
-    if (dowMon < 0) {
-      dowMon += 7;
-    }
-    dowMon += 1;
-
-    const long long jan1 = daysFromCivil(y, 1, 1);
-    int jan1Dow = static_cast<int>((jan1 + 3) % 7);
-    if (jan1Dow < 0) {
-      jan1Dow += 7;
-    }
-    jan1Dow += 1;
-
-    const bool leap = (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
-    const bool has53 = (jan1Dow == 4) || (leap && jan1Dow == 3);
-
-    const int doy = static_cast<int>(dayNum - jan1) + 1;
-    int week = (doy - dowMon + 10) / 7;
-    if (week < 1) {
-      const int prevYear = y - 1;
-      const long long prevJan1 = daysFromCivil(prevYear, 1, 1);
-      int prevJan1Dow = static_cast<int>((prevJan1 + 3) % 7);
-      if (prevJan1Dow < 0) {
-        prevJan1Dow += 7;
-      }
-      prevJan1Dow += 1;
-      const bool prevLeap =
-          (prevYear % 4 == 0 && prevYear % 100 != 0) || (prevYear % 400 == 0);
-      const bool prevHas53 = (prevJan1Dow == 4) || (prevLeap && prevJan1Dow == 3);
-      week = prevHas53 ? 53 : 52;
-    } else if (week == 53 && !has53) {
-      week = 1;
-    }
-    return week;
-  };
-
-  std::string out = timeFormat.empty() ? "%H:%M" : timeFormat;
-
-  auto replaceToken = [&](const std::string& token, const std::string& value) {
-    out = replaceAll(out, token, value);
-  };
-
-  char num[16];
-  std::snprintf(num, sizeof(num), "%04d", outYear);
-  replaceToken("%Y", num);
-  std::snprintf(num, sizeof(num), "%02d", outMon);
-  replaceToken("%m", num);
-  std::snprintf(num, sizeof(num), "%02d", outDay);
-  replaceToken("%d", num);
-  std::snprintf(num, sizeof(num), "%02d", outHour);
-  replaceToken("%H", num);
-  std::snprintf(num, sizeof(num), "%02d", outMinute);
-  replaceToken("%M", num);
-
-  replaceToken("%a", kDowShort[dow]);
-  replaceToken("%A", kDowLong[dow]);
-  if (outMon >= 1 && outMon <= 12) {
-    replaceToken("%b", kMonthShort[outMon - 1]);
-    replaceToken("%B", kMonthLong[outMon - 1]);
-  }
-
-  std::snprintf(num, sizeof(num), "%02d", isoWeekNumber(outYear, outMon, outDay));
-  replaceToken("%V", num);
-
-  return out;
-}
-
-std::string formatNumericLocale(double value, int decimals, const std::string& locale) {
-  if (decimals < 0) {
-    decimals = 0;
-  }
-  if (decimals > 6) {
-    decimals = 6;
-  }
-
-  char buf[64];
-  std::snprintf(buf, sizeof(buf), "%.*f", decimals, value);
-  std::string text = buf;
-
-  const size_t dotPos = text.find('.');
-  std::string intPart = (dotPos == std::string::npos) ? text : text.substr(0, dotPos);
-  std::string fracPart = (dotPos == std::string::npos) ? std::string() : text.substr(dotPos + 1);
-
-  bool negative = false;
-  if (!intPart.empty() && intPart.front() == '-') {
-    negative = true;
-    intPart.erase(intPart.begin());
-  }
-
-  const bool euroStyle = (locale == "de-DE" || locale == "fr-FR" || locale == "es-ES");
-  const char thousandsSep = euroStyle ? '.' : ',';
-  const char decimalSep = euroStyle ? ',' : '.';
-
-  std::string grouped;
-  grouped.reserve(intPart.size() + intPart.size() / 3 + 2);
-  for (size_t i = 0; i < intPart.size(); ++i) {
-    grouped.push_back(intPart[i]);
-    const size_t rem = intPart.size() - i - 1;
-    if (rem > 0 && rem % 3 == 0) {
-      grouped.push_back(thousandsSep);
-    }
-  }
-
-  std::string out = negative ? ("-" + grouped) : grouped;
-  if (decimals > 0) {
-    out.push_back(decimalSep);
-    out += fracPart;
-  }
-  return out;
-}
-
-std::string applyFormat(const std::string& rawText, const FormatSpec& fmt, bool numeric,
-                        double numericValue) {
-  std::string out = numeric ? std::string() : rawText;
-
-  if (!fmt.tz.empty()) {
-    out = formatTimestampWithTz(rawText, fmt.tz, fmt.timeFormat);
-  }
-
-  double value = numericValue;
-  std::string unitSuffix;
-  std::string unitLower = fmt.unit;
-  std::transform(unitLower.begin(), unitLower.end(), unitLower.begin(), [](unsigned char c) {
-    return static_cast<char>(std::tolower(c));
-  });
-
-  if (numeric && !unitLower.empty()) {
-    if (unitLower == "f" || unitLower == "fahrenheit" || unitLower == "c_to_f") {
-      value = (value * 9.0 / 5.0) + 32.0;
-      unitSuffix = " F";
-    } else if (unitLower == "c" || unitLower == "celsius") {
-      unitSuffix = " C";
-    } else if (unitLower == "pressure") {
-      if (RuntimeSettings::useFahrenheit) {
-        value = value * 0.0295299830714;
-        unitSuffix = " inHg";
-      } else {
-        unitSuffix = " hPa";
-      }
-    } else if (unitLower == "percent" || unitLower == "%") {
-      unitSuffix = "%";
-    }
-  }
-
-  if (numeric) {
-    int decimals = 2;
-    if (fmt.roundDigits >= 0) {
-      decimals = fmt.roundDigits;
-    } else if (unitLower == "pressure") {
-      decimals = RuntimeSettings::useFahrenheit ? 2 : 0;
-    }
-    out += formatNumericLocale(value, decimals, fmt.locale);
-  }
-
-  if (!fmt.prefix.empty()) {
-    out = fmt.prefix + out;
-  }
-  if (!fmt.suffix.empty()) {
-    out += fmt.suffix;
-  } else if (!unitSuffix.empty()) {
-    out += unitSuffix;
-  }
-
-  return out;
-}
 
 bool parsePathSegment(std::string_view segment, std::string& key, std::vector<int>& indices) {
   key.clear();
@@ -1963,6 +1102,7 @@ bool parsePathSegment(std::string_view segment, std::string& key, std::vector<in
 }
 
 std::string valueViewToText(std::string_view valueView);
+bool ensureHttpWorker();
 bool httpGet(std::string url, std::vector<KeyValue> headers, int& statusCode, std::string& body,
              std::string& reason);
 
@@ -2506,6 +1646,7 @@ NodeType parseNodeType(std::string_view nodeObj, bool& known) {
   if (type == "icon") return NodeType::kIcon;
   if (type == "moon_phase") return NodeType::kMoonPhase;
   if (type == "arc" || type == "circle") return NodeType::kArc;
+  // "hand" is a deprecated alias retained for backward compatibility.
   if (type == "line" || type == "hand") return NodeType::kLine;
   known = false;
   return NodeType::kLabel;
@@ -2685,7 +1826,15 @@ void applyNode(std::string_view nodeObj, const VarContext* vars, std::vector<Nod
   (void)readIntValue(nodeObj, "y2", vars, node.y2);
   (void)readIntValue(nodeObj, "r", vars, node.radius);
   (void)readIntValue(nodeObj, "length", vars, node.length);
-  (void)readIntValue(nodeObj, "thickness", vars, node.thickness);
+  int thickness = node.thickness;
+  const bool hasThickness = readIntValue(nodeObj, "thickness", vars, thickness);
+  int width = node.thickness;
+  const bool hasWidth = readIntValue(nodeObj, "width", vars, width);
+  if (node.type == NodeType::kLine) {
+    node.thickness = hasWidth ? width : thickness;
+  } else if (hasThickness) {
+    node.thickness = thickness;
+  }
   (void)readIntValue(nodeObj, "font", vars, node.font);
   (void)readIntValue(nodeObj, "line_height", vars, node.lineHeight);
   (void)readIntValue(nodeObj, "max_lines", vars, node.maxLines);
@@ -2787,6 +1936,9 @@ TouchActionType parseTouchActionType(const std::string& action) {
   if (lower == "http") {
     return TouchActionType::kHttp;
   }
+  if (lower == "ws" || lower == "ws_publish" || lower == "websocket") {
+    return TouchActionType::kWsPublish;
+  }
   return TouchActionType::kNone;
 }
 
@@ -2836,6 +1988,12 @@ bool parseTouchRegion(std::string_view regionObj, TouchRegion& out) {
       });
     }
     if (out.httpUrl.empty()) {
+      return false;
+    }
+  } else if (out.action == TouchActionType::kWsPublish) {
+    out.wsUrl = readStringValue(onTouchObj, "url", nullptr, "");
+    out.wsBody = readStringValue(onTouchObj, "body", nullptr, "");
+    if (trimCopy(out.wsUrl).empty() && trimCopy(out.wsBody).empty()) {
       return false;
     }
   }
@@ -3317,8 +2475,8 @@ bool loadDslConfig(const std::string& dslJson) {
 
   if (source == "http") {
     s.source = DataSource::kHttp;
-  } else if (source == "ha_ws") {
-    s.source = DataSource::kHaWs;
+  } else if (source == "websocket" || source == "ws") {
+    s.source = DataSource::kWebSocket;
   } else if (source == "local_time") {
     s.source = DataSource::kLocalTime;
   } else {
@@ -3327,10 +2485,42 @@ bool loadDslConfig(const std::string& dslJson) {
 
   s.urlTemplate.clear();
   s.wsEntityTemplate.clear();
+  s.wsCacheKeyTemplate.clear();
+  s.wsSubscribeTemplate.clear();
+  s.wsBootstrapTemplate.clear();
+  s.wsResultPath.clear();
+  s.wsEventPath.clear();
+  s.wsAuthTemplate.clear();
+  s.wsUrlTemplate.clear();
+  s.wsTokenTemplate.clear();
+  s.wsPathTemplate.clear();
+  s.wsConnectionProfileTemplate.clear();
   s.headers.clear();
   s.transforms.clear();
   (void)objectMemberString(dataObj, "url", s.urlTemplate);
   (void)objectMemberString(dataObj, "entity_id", s.wsEntityTemplate);
+  (void)objectMemberString(dataObj, "cache_key", s.wsCacheKeyTemplate);
+  (void)objectMemberString(dataObj, "result_path", s.wsResultPath);
+  (void)objectMemberString(dataObj, "event_path", s.wsEventPath);
+  (void)objectMemberString(dataObj, "auth_message", s.wsAuthTemplate);
+  (void)objectMemberString(dataObj, "ws_url", s.wsUrlTemplate);
+  (void)objectMemberString(dataObj, "ws_token", s.wsTokenTemplate);
+  (void)objectMemberString(dataObj, "ws_path", s.wsPathTemplate);
+  (void)objectMemberString(dataObj, "connection_profile", s.wsConnectionProfileTemplate);
+  std::string_view wsSubscribeValue;
+  if (objectMemberValue(dataObj, "subscribe", wsSubscribeValue)) {
+    wsSubscribeValue = trimView(wsSubscribeValue);
+    if (!wsSubscribeValue.empty()) {
+      s.wsSubscribeTemplate.assign(wsSubscribeValue.data(), wsSubscribeValue.size());
+    }
+  }
+  std::string_view wsBootstrapValue;
+  if (objectMemberValue(dataObj, "bootstrap", wsBootstrapValue)) {
+    wsBootstrapValue = trimView(wsBootstrapValue);
+    if (!wsBootstrapValue.empty()) {
+      s.wsBootstrapTemplate.assign(wsBootstrapValue.data(), wsBootstrapValue.size());
+    }
+  }
   std::string_view headersObj;
   if (objectMemberObject(dataObj, "headers", headersObj)) {
     forEachObjectMember(headersObj, [](const std::string& key, std::string_view valueText) {
@@ -3393,12 +2583,18 @@ bool loadDslConfig(const std::string& dslJson) {
     s.fields.push_back(std::move(spec));
   });
 
+  s.values.reserve(std::min<size_t>(kRuntimeValueSlotsMax, s.fields.size() + 24U));
   for (const FieldSpec& f : s.fields) {
     s.values.push_back({f.key, ""});
   }
 
   std::string_view uiObj;
   if (objectMemberObject(root, "ui", uiObj)) {
+    s.uiTitle.clear();
+    s.showTitle = false;
+    (void)objectMemberString(uiObj, "title", s.uiTitle);
+    (void)objectMemberBool(uiObj, "show_title", s.showTitle);
+
     std::string_view labelsArray;
     if (objectMemberArray(uiObj, "labels", labelsArray)) {
       forEachArrayElement(labelsArray, [&](int, std::string_view value) {
@@ -3471,8 +2667,23 @@ bool loadDslConfig(const std::string& dslJson) {
     ESP_LOGE(kTag, "dsl missing data.url for http source");
     return false;
   }
-  if (s.source == DataSource::kHaWs && s.wsEntityTemplate.empty()) {
-    s.wsEntityTemplate = "{{setting.entity_id}}";
+  if (s.source == DataSource::kWebSocket) {
+    if (s.wsEntityTemplate.empty()) {
+      s.wsEntityTemplate = "{{setting.entity_id}}";
+    }
+    if (s.wsCacheKeyTemplate.empty()) {
+      if (!s.wsEntityTemplate.empty()) {
+        s.wsCacheKeyTemplate = s.wsEntityTemplate;
+      } else {
+        s.wsCacheKeyTemplate = s.widgetId;
+      }
+    }
+    if (s.wsResultPath.empty()) {
+      s.wsResultPath = "result";
+    }
+    if (s.wsEventPath.empty()) {
+      s.wsEventPath = "event";
+    }
   }
   if (auto it = s.settingValues.find("http_max_bytes"); it != s.settingValues.end()) {
     double parsed = 0.0;
@@ -3483,9 +2694,30 @@ bool loadDslConfig(const std::string& dslJson) {
   }
 
   for (const Node& n : s.nodes) {
-    if (!n.path.empty()) {
+    // Icon node paths are filesystem/URL paths, never looked up in sourceJson.
+    if (n.type != NodeType::kIcon && !n.path.empty()) {
       s.retainSourceJson = true;
       break;
+    }
+  }
+  // Websocket sources keep payloads in shared cache; avoid per-widget duplicate
+  // source JSON unless explicitly re-enabled.
+  if (s.source == DataSource::kWebSocket) {
+    s.retainSourceJson = false;
+  }
+  if (auto it = s.settingValues.find("retain_source_json"); it != s.settingValues.end()) {
+    const std::string v = trimCopy(it->second);
+    const std::string low = [&]() {
+      std::string out = v;
+      std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+      });
+      return out;
+    }();
+    if (low == "1" || low == "true" || low == "yes" || low == "on") {
+      s.retainSourceJson = true;
+    } else if (low == "0" || low == "false" || low == "no" || low == "off") {
+      s.retainSourceJson = false;
     }
   }
 
@@ -3624,7 +2856,12 @@ bool resolveLocalTimeValue(const LocalTimeContext& ctx, const std::string& path,
 void applyWeatherDerivedValues() {
   const auto applyWeather = [](const char* codeKey, const char* textKey, const char* iconKey) {
     const std::string* codeText = getValue(codeKey);
-    if (codeText == nullptr || codeText->empty()) {
+    // If the source key isn't in this widget's value store at all, skip —
+    // calling setValue for textKey/iconKey would insert spurious new slots.
+    if (codeText == nullptr) {
+      return;
+    }
+    if (codeText->empty()) {
       (void)setValue(textKey, "");
       (void)setValue(iconKey, "");
       return;
@@ -3750,7 +2987,7 @@ bool urlUsesTls(const std::string& url) {
 }
 
 bool tlsClockReady() {
-  return std::time(nullptr) >= kTlsClockMinUnix;
+  return timesync::isUtcTimeReady();
 }
 
 std::string buildHttpReuseKey(const std::string& url, const std::vector<KeyValue>& headers,
@@ -3852,49 +3089,31 @@ std::string readSetting(const std::string& key, const std::string& fallback) {
   return it->second;
 }
 
-bool takeHaWsLock(uint32_t timeoutMs) {
-  if (sHaWs.lock == nullptr) {
-    sHaWs.lock = xSemaphoreCreateMutex();
-    if (sHaWs.lock == nullptr) {
+struct WsProfileConfig {
+  std::string url;
+  std::string path;
+  std::string token;
+  std::string authMessage;
+  std::string authRequiredType = "auth_required";
+  std::string authOkType = "auth_ok";
+  std::string authInvalidType = "auth_invalid";
+  std::string readyType = "ready";
+  std::vector<std::string> initMessages;
+};
+
+bool takeWsLock(uint32_t timeoutMs) {
+  if (sWs.lock == nullptr) {
+    sWs.lock = xSemaphoreCreateMutex();
+    if (sWs.lock == nullptr) {
       return false;
     }
   }
-  return xSemaphoreTake(sHaWs.lock, pdMS_TO_TICKS(timeoutMs)) == pdTRUE;
+  return xSemaphoreTake(sWs.lock, pdMS_TO_TICKS(timeoutMs)) == pdTRUE;
 }
 
-void giveHaWsLock() {
-  if (sHaWs.lock != nullptr) {
-    xSemaphoreGive(sHaWs.lock);
-  }
-}
-
-void teardownHaWsClient() {
-  esp_websocket_client_handle_t clientToDestroy = nullptr;
-  if (takeHaWsLock(200)) {
-    clientToDestroy = sHaWs.client;
-    sHaWs.client = nullptr;
-    sHaWs.wsUrl.clear();
-    sHaWs.token.clear();
-    sHaWs.authOk = false;
-    sHaWs.ready = false;
-    sHaWs.started = false;
-    sHaWs.bootstrapTriggerPending = false;
-    sHaWs.nextReqId = 1;
-    sHaWs.reconnectDueMs = 0;
-    sHaWs.failureStreak = 0;
-    sHaWs.rxFrame.clear();
-    sHaWs.entityStateJson.clear();
-    sHaWs.renderReqToEntityId.clear();
-    sHaWs.entityIdToRenderReq.clear();
-    sHaWs.triggerReqToEntityId.clear();
-    sHaWs.entityIdToTriggerReq.clear();
-    sHaWs.triggerSubIdToEntityId.clear();
-    sHaWs.entityIdToTriggerSubId.clear();
-    giveHaWsLock();
-  }
-  if (clientToDestroy != nullptr) {
-    esp_websocket_client_stop(clientToDestroy);
-    esp_websocket_client_destroy(clientToDestroy);
+void giveWsLock() {
+  if (sWs.lock != nullptr) {
+    xSemaphoreGive(sWs.lock);
   }
 }
 
@@ -3914,29 +3133,273 @@ std::string jsonEscape(const std::string& in) {
   return out;
 }
 
-uint32_t nextHaWsReqIdLocked() {
-  if (sHaWs.nextReqId == 0) {
-    sHaWs.nextReqId = 1;
+uint32_t nextWsReqIdLocked() {
+  if (sWs.nextReqId == 0) {
+    sWs.nextReqId = 1;
   }
-  return sHaWs.nextReqId++;
+  return sWs.nextReqId++;
 }
 
-void haWsSendAuthLocked() {
-  if (sHaWs.client == nullptr || sHaWs.token.empty()) {
+bool wsSendTextLocked(const std::string& payload) {
+  if (sWs.client == nullptr || payload.empty()) {
+    return false;
+  }
+  const int sent = esp_websocket_client_send_text(sWs.client, payload.c_str(),
+                                                  static_cast<int>(payload.size()),
+                                                  pdMS_TO_TICKS(1000));
+  return sent >= 0;
+}
+
+bool buildWsMessageWithId(std::string message, uint32_t id, std::string& out) {
+  out.clear();
+  std::string_view trimmed = trimView(message);
+  if (trimmed.empty() || trimmed.front() != '{' || trimmed.back() != '}') {
+    return false;
+  }
+
+  std::string_view idView;
+  if (objectMemberValue(trimmed, "id", idView)) {
+    out.assign(trimmed.data(), trimmed.size());
+    return true;
+  }
+
+  if (trimmed.size() == 2) {
+    out = "{\"id\":";
+    out += std::to_string(static_cast<unsigned>(id));
+    out += "}";
+    return true;
+  }
+
+  out = "{\"id\":";
+  out += std::to_string(static_cast<unsigned>(id));
+  out += ",";
+  out.append(trimmed.data() + 1, trimmed.size() - 2);
+  out.push_back('}');
+  return true;
+}
+
+void wsStoreCacheLocked(const std::string& cacheKey, const std::string& jsonPayload, const char* kind,
+                        const std::string& path) {
+  if (cacheKey.empty() || jsonPayload.empty()) {
     return;
   }
-  const std::string msg =
-      std::string("{\"type\":\"auth\",\"access_token\":\"") + jsonEscape(sHaWs.token) + "\"}";
-  (void)esp_websocket_client_send_text(sHaWs.client, msg.c_str(), static_cast<int>(msg.size()),
-                                       pdMS_TO_TICKS(1000));
+  sWs.cacheJsonByKey[cacheKey] = jsonPayload;
+  while (sWs.cacheJsonByKey.size() > kWsCacheJsonMaxEntries) {
+    sWs.cacheJsonByKey.erase(sWs.cacheJsonByKey.begin());
+  }
+  sWs.bootstrapTriggerPending = true;
+  const size_t previewLen = std::min<size_t>(jsonPayload.size(), 160U);
+  ESP_LOGI(kTag, "ws cache update key=%s kind=%s path=%s bytes=%u preview=%.*s", cacheKey.c_str(),
+           kind != nullptr ? kind : "unknown", path.c_str(),
+           static_cast<unsigned>(jsonPayload.size()), static_cast<int>(previewLen),
+           jsonPayload.c_str());
 }
 
-bool normalizeHaWsUrl(const std::string& baseUrl, const std::string& wsPath, std::string& out) {
+bool wsExtractPayloadByPath(std::string_view message, const std::string& path, std::string& out) {
+  out.clear();
+  std::string_view valueView;
+  if (path.empty()) {
+    return false;
+  }
+  if (!resolveJsonPath(message, path, valueView)) {
+    return false;
+  }
+  out = valueViewToText(valueView);
+  return !out.empty();
+}
+
+void wsSendAuthLocked() {
+  if (sWs.client == nullptr || sWs.token.empty()) {
+    return;
+  }
+
+  std::string authPayload = trimCopy(sWs.authTemplate);
+  if (authPayload.empty()) {
+    authPayload =
+        std::string("{\"type\":\"auth\",\"access_token\":\"") + jsonEscape(sWs.token) + "\"}";
+  } else {
+    authPayload = replaceAll(authPayload, "{{ws_token}}", jsonEscape(sWs.token));
+    authPayload = replaceAll(authPayload, "{{token}}", jsonEscape(sWs.token));
+    authPayload = replaceAll(authPayload, "{{setting.ws_token}}", jsonEscape(sWs.token));
+  }
+
+  (void)wsSendTextLocked(authPayload);
+}
+
+void wsSendInitLocked() {
+  if (sWs.client == nullptr || sWs.initSent) {
+    return;
+  }
+  for (const std::string& rawMsg : sWs.initMessages) {
+    std::string msg = trimCopy(rawMsg);
+    if (msg.empty()) {
+      continue;
+    }
+    msg = replaceAll(msg, "{{ws_token}}", jsonEscape(sWs.token));
+    msg = replaceAll(msg, "{{token}}", jsonEscape(sWs.token));
+    msg = replaceAll(msg, "{{setting.ws_token}}", jsonEscape(sWs.token));
+    (void)wsSendTextLocked(msg);
+  }
+  sWs.initSent = true;
+}
+
+void wsHandleMessageLocked(std::string_view message) {
+  std::string type;
+  if (!objectMemberString(message, "type", type) || type.empty()) {
+    ESP_LOGW(kTag, "ws msg no-type bytes=%u", static_cast<unsigned>(message.size()));
+    return;
+  }
+  // Log all incoming message types for diagnostics (auth/result/event).
+  ESP_LOGI(kTag, "ws msg type=%s bytes=%u", type.c_str(), static_cast<unsigned>(message.size()));
+
+  if (type == sWs.authRequiredType) {
+    sWs.authOk = false;
+    sWs.ready = false;
+    wsSendAuthLocked();
+    return;
+  }
+  if (type == sWs.authOkType) {
+    sWs.authOk = true;
+    sWs.ready = sWs.readyType.empty() || sWs.readyType == sWs.authOkType;
+    wsSendInitLocked();
+    if (sWs.ready) {
+      sWs.bootstrapTriggerPending = true;
+    }
+    // Pre-create the HTTP worker now, while the largest contiguous block is at
+    // its post-TLS peak (~18KB). Value-slot allocations during the first
+    // fetchAndResolve will fragment the heap, dropping largest to ~10KB. If
+    // we wait until icon-fetch time the worker-creation (8KB) would push
+    // largest below the HTTP client's minimum, permanently blocking icon loads.
+    (void)ensureHttpWorker();
+    ESP_LOGI(kTag, "ws auth_ok ready");
+    return;
+  }
+  if (type == sWs.authInvalidType) {
+    sWs.authOk = false;
+    sWs.ready = false;
+    return;
+  }
+  if (!sWs.ready && type == sWs.readyType) {
+    sWs.ready = true;
+    sWs.bootstrapTriggerPending = true;
+    return;
+  }
+
+  if (type == "result") {
+    int id = 0;
+    bool success = false;
+    (void)objectMemberInt(message, "id", id);
+    (void)objectMemberBool(message, "success", success);
+    const uint32_t reqId = static_cast<uint32_t>(id);
+    auto pendingIt = sWs.pendingReqById.find(reqId);
+    if (pendingIt == sWs.pendingReqById.end()) {
+      // Fire-and-forget publishes (e.g. tap toggle) are not registered; log at verbose.
+      ESP_LOGV(kTag, "ws result untracked id=%u success=%d", static_cast<unsigned>(reqId), success ? 1 : 0);
+      return;
+    }
+
+    WsReqMeta meta = pendingIt->second;
+    sWs.pendingReqById.erase(pendingIt);
+    if (meta.isSubscribe) {
+      sWs.cacheKeyToPendingSubscribeReq.erase(meta.cacheKey);
+    } else {
+      sWs.cacheKeyToPendingBootstrapReq.erase(meta.cacheKey);
+    }
+    if (!success) {
+      ESP_LOGW(kTag, "ws result failed key=%s kind=%s id=%u", meta.cacheKey.c_str(),
+               meta.isSubscribe ? "subscribe" : "bootstrap",
+               static_cast<unsigned>(reqId));
+      return;
+    }
+
+    if (meta.isSubscribe) {
+      sWs.activeSubById[reqId] = meta;
+      sWs.cacheKeyToActiveSubId[meta.cacheKey] = reqId;
+      return;
+    }
+
+    std::string payloadJson;
+    const std::string resultPath = meta.resultPath.empty() ? "result" : meta.resultPath;
+    if (wsExtractPayloadByPath(message, resultPath, payloadJson)) {
+      wsStoreCacheLocked(meta.cacheKey, payloadJson, "bootstrap", resultPath);
+    } else {
+      // result is null or missing — this is normal for HA render_template which
+      // acts as a persistent subscription: result=null confirms registration, and
+      // data arrives as events with this same id. Promote to active subscription
+      // so future events are routed to the cache.
+      ESP_LOGI(kTag, "ws bootstrap null-result, promoting to sub key=%s id=%u",
+               meta.cacheKey.c_str(), static_cast<unsigned>(reqId));
+      sWs.activeSubById[reqId] = meta;
+      sWs.cacheKeyToActiveSubId[meta.cacheKey] = reqId;
+    }
+    return;
+  }
+
+  if (type == "event") {
+    int id = 0;
+    (void)objectMemberInt(message, "id", id);
+    const uint32_t subId = static_cast<uint32_t>(id);
+    auto subIt = sWs.activeSubById.find(subId);
+    if (subIt == sWs.activeSubById.end()) {
+      return;
+    }
+
+    const WsReqMeta& meta = subIt->second;
+    std::string payloadJson;
+    const std::string eventPath = meta.eventPath.empty() ? "event" : meta.eventPath;
+    if (wsExtractPayloadByPath(message, eventPath, payloadJson)) {
+      wsStoreCacheLocked(meta.cacheKey, payloadJson, "event", eventPath);
+    }
+    return;
+  }
+}
+
+void wsClientEventHandler(void* /*arg*/, esp_event_base_t /*base*/, int32_t eventId, void* eventData) {
+  if (!takeWsLock(50)) {
+    return;
+  }
+
+  if (eventId == WEBSOCKET_EVENT_CONNECTED) {
+    sWs.started = true;
+    sWs.authOk = false;
+    sWs.ready = false;
+    sWs.initSent = false;
+    sWs.rxFrame.clear();
+  } else if (eventId == WEBSOCKET_EVENT_DISCONNECTED || eventId == WEBSOCKET_EVENT_CLOSED ||
+             eventId == WEBSOCKET_EVENT_ERROR) {
+    sWs.authOk = false;
+    sWs.ready = false;
+    sWs.initSent = false;
+    sWs.started = false;
+    sWs.reconnectDueMs = platform::millisMs() + 1000U;
+  } else if (eventId == WEBSOCKET_EVENT_DATA) {
+    auto* data = static_cast<esp_websocket_event_data_t*>(eventData);
+    if (data != nullptr && data->data_ptr != nullptr && data->data_len > 0) {
+      if (data->payload_offset == 0) {
+        sWs.rxFrame.clear();
+      }
+      sWs.rxFrame.append(data->data_ptr, static_cast<size_t>(data->data_len));
+      const int total = data->payload_len;
+      const int offset = data->payload_offset;
+      const int len = data->data_len;
+      const bool done = data->fin || total <= 0 || (offset + len) >= total;
+      if (done && !sWs.rxFrame.empty()) {
+        wsHandleMessageLocked(std::string_view(sWs.rxFrame));
+        sWs.rxFrame.clear();
+      }
+    }
+  }
+
+  giveWsLock();
+}
+
+bool normalizeWsUrl(const std::string& baseUrl, const std::string& wsPath, std::string& out) {
   out.clear();
   const std::string trimmedBase = trimCopy(baseUrl);
   if (trimmedBase.empty()) {
     return false;
   }
+
   if (trimmedBase.rfind("ws://", 0) == 0 || trimmedBase.rfind("wss://", 0) == 0) {
     out = trimmedBase;
   } else if (trimmedBase.rfind("http://", 0) == 0) {
@@ -3946,12 +3409,13 @@ bool normalizeHaWsUrl(const std::string& baseUrl, const std::string& wsPath, std
   } else {
     out = "wss://" + trimmedBase;
   }
+
   if (out.find("/api/websocket") == std::string::npos) {
     std::string path = trimCopy(wsPath);
     if (path.empty()) {
       path = "/api/websocket";
     }
-    if (path.front() != '/') {
+    if (!path.empty() && path.front() != '/') {
       path.insert(path.begin(), '/');
     }
     if (!out.empty() && out.back() == '/') {
@@ -3962,12 +3426,356 @@ bool normalizeHaWsUrl(const std::string& baseUrl, const std::string& wsPath, std
   return true;
 }
 
-void ingestHaStateObjectLocked(std::string_view stateObj) {
-  std::string entityId;
-  if (!objectMemberString(stateObj, "entity_id", entityId) || entityId.empty()) {
-    return;
+bool parseWsProfileFromSettings(const std::string& profileName, WsProfileConfig& out) {
+  out = {};
+  const std::string trimmedName = trimCopy(profileName);
+  if (trimmedName.empty()) {
+    return false;
   }
-  sHaWs.entityStateJson[entityId] = std::string(stateObj);
+  const std::string profilesRaw = readSetting("ws_profiles", "");
+  const std::string_view profilesRoot = trimView(profilesRaw);
+  if (profilesRoot.empty() || profilesRoot.front() != '{') {
+    return false;
+  }
+
+  std::string_view profileObj;
+  if (!objectMemberObject(profilesRoot, trimmedName.c_str(), profileObj)) {
+    return false;
+  }
+
+  (void)objectMemberString(profileObj, "url", out.url);
+  (void)objectMemberString(profileObj, "path", out.path);
+  (void)objectMemberString(profileObj, "token", out.token);
+  (void)objectMemberString(profileObj, "auth_message", out.authMessage);
+  (void)objectMemberString(profileObj, "auth_required_type", out.authRequiredType);
+  (void)objectMemberString(profileObj, "auth_ok_type", out.authOkType);
+  (void)objectMemberString(profileObj, "auth_invalid_type", out.authInvalidType);
+  (void)objectMemberString(profileObj, "ready_type", out.readyType);
+
+  std::string_view initArray;
+  if (objectMemberArray(profileObj, "init", initArray)) {
+    forEachArrayElement(initArray, [&](int, std::string_view value) {
+      value = trimView(value);
+      if (value.empty()) {
+        return;
+      }
+      out.initMessages.push_back(valueViewToText(value));
+    });
+  }
+
+  return true;
+}
+
+void teardownWsClient() {
+  esp_websocket_client_handle_t client = nullptr;
+  if (takeWsLock(250)) {
+    client = sWs.client;
+    sWs.client = nullptr;
+    sWs.profileKey.clear();
+    sWs.wsUrl.clear();
+    sWs.token.clear();
+    sWs.authTemplate.clear();
+    sWs.authRequiredType = "auth_required";
+    sWs.authOkType = "auth_ok";
+    sWs.authInvalidType = "auth_invalid";
+    sWs.readyType = "ready";
+    sWs.initMessages.clear();
+    sWs.initSent = false;
+    sWs.authOk = false;
+    sWs.ready = false;
+    sWs.started = false;
+    sWs.bootstrapTriggerPending = false;
+    sWs.nextReqId = 1;
+    sWs.reconnectDueMs = 0;
+    sWs.failureStreak = 0;
+    sWs.rxFrame.clear();
+    sWs.cacheJsonByKey.clear();
+    sWs.pendingReqById.clear();
+    sWs.cacheKeyToPendingBootstrapReq.clear();
+    sWs.cacheKeyToPendingSubscribeReq.clear();
+    sWs.activeSubById.clear();
+    sWs.cacheKeyToActiveSubId.clear();
+    giveWsLock();
+  }
+  if (client != nullptr) {
+    esp_websocket_client_stop(client);
+    esp_websocket_client_destroy(client);
+  }
+}
+
+bool ensureWsConnected(const std::string& profileKey, const std::string& wsUrl, const std::string& token,
+                       const std::string& authTemplate, const std::string& authRequiredType,
+                       const std::string& authOkType, const std::string& authInvalidType,
+                       const std::string& readyType, const std::vector<std::string>& initMessages,
+                       const std::string& widgetId, std::string& reasonOut) {
+  reasonOut.clear();
+  if (wsUrl.empty()) {
+    reasonOut = "ws url empty";
+    return false;
+  }
+  if (urlUsesTls(wsUrl) && !tlsClockReady()) {
+    reasonOut = "clock not synced";
+    return false;
+  }
+
+  bool reinit = false;
+  if (!takeWsLock(250)) {
+    reasonOut = "ws lock timeout";
+    return false;
+  }
+  if (sWs.client == nullptr || sWs.wsUrl != wsUrl || sWs.profileKey != profileKey ||
+      sWs.token != token || sWs.authTemplate != authTemplate ||
+      sWs.authRequiredType != authRequiredType || sWs.authOkType != authOkType ||
+      sWs.authInvalidType != authInvalidType || sWs.readyType != readyType ||
+      sWs.initMessages != initMessages) {
+    reinit = true;
+  }
+  giveWsLock();
+
+  if (reinit) {
+    // Only guard heap for TLS when actually initiating a new connection.
+    if (urlUsesTls(wsUrl)) {
+      size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+      size_t freeHeap = esp_get_free_heap_size();
+      if (largest < kTlsMinLargest8Bit || freeHeap < kTlsMinFree8Bit) {
+        (void)reclaimRuntimeCachesLowHeap("ws-tls-guard");
+        largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+        freeHeap = esp_get_free_heap_size();
+      }
+      if (largest < kTlsMinLargest8Bit || freeHeap < kTlsMinFree8Bit) {
+        ESP_LOGE(kTag, "ws tls guard defer free=%u largest=%u", static_cast<unsigned>(freeHeap),
+                 static_cast<unsigned>(largest));
+        reasonOut = "ws tls low heap";
+        return false;
+      }
+    }
+    teardownWsClient();
+    if (!takeWsLock(250)) {
+      reasonOut = "ws lock timeout";
+      return false;
+    }
+    sWs.profileKey = profileKey;
+    sWs.wsUrl = wsUrl;
+    sWs.token = token;
+    sWs.authTemplate = authTemplate;
+    sWs.authRequiredType = trimCopy(authRequiredType.empty() ? "auth_required" : authRequiredType);
+    sWs.authOkType = trimCopy(authOkType.empty() ? "auth_ok" : authOkType);
+    sWs.authInvalidType = trimCopy(authInvalidType.empty() ? "auth_invalid" : authInvalidType);
+    sWs.readyType = trimCopy(readyType.empty() ? "ready" : readyType);
+    sWs.initMessages = initMessages;
+    sWs.initSent = false;
+    sWs.authOk = false;
+    sWs.ready = false;
+    sWs.started = false;
+    sWs.bootstrapTriggerPending = false;
+    sWs.nextReqId = 1;
+
+    esp_websocket_client_config_t cfg = {};
+    cfg.uri = sWs.wsUrl.c_str();
+    cfg.disable_auto_reconnect = false;
+    cfg.reconnect_timeout_ms = 5000;
+    cfg.network_timeout_ms = static_cast<int>(kWsConnectTimeoutMs);
+    cfg.keep_alive_enable = true;
+    cfg.keep_alive_idle = static_cast<int>(kWsDefaultKeepAliveMs / 1000U);
+    cfg.keep_alive_interval = 10;
+    cfg.keep_alive_count = 3;
+    cfg.buffer_size = static_cast<int>(kWsMaxFrameBytes);
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
+    sWs.client = esp_websocket_client_init(&cfg);
+    if (sWs.client == nullptr) {
+      giveWsLock();
+      reasonOut = "ws init failed";
+      return false;
+    }
+    (void)esp_websocket_register_events(sWs.client, WEBSOCKET_EVENT_ANY, wsClientEventHandler, nullptr);
+    ESP_LOGI(kTag, "ws connect widget=%s url=%s", widgetId.c_str(), sWs.wsUrl.c_str());
+    if (esp_websocket_client_start(sWs.client) != ESP_OK) {
+      esp_websocket_client_destroy(sWs.client);
+      sWs.client = nullptr;
+      giveWsLock();
+      reasonOut = "ws start failed";
+      return false;
+    }
+    giveWsLock();
+    reasonOut = "ws not ready";
+    return false;
+  }
+
+  if (!takeWsLock(50)) {
+    reasonOut = "ws lock timeout";
+    return false;
+  }
+  const bool ready = sWs.client != nullptr && sWs.ready && sWs.authOk && sWs.started;
+  giveWsLock();
+  reasonOut = ready ? "ws ready" : "ws not ready";
+  return ready;
+}
+
+bool readWsPayloadJson(const std::string& cacheKey, std::string& payloadJson) {
+  payloadJson.clear();
+  if (cacheKey.empty()) {
+    return false;
+  }
+  if (!takeWsLock(100)) {
+    return false;
+  }
+  auto it = sWs.cacheJsonByKey.find(cacheKey);
+  if (it != sWs.cacheJsonByKey.end()) {
+    payloadJson = it->second;
+  }
+  giveWsLock();
+  return !payloadJson.empty();
+}
+
+bool wsPublishMessage(const std::string& message, std::string& reasonOut) {
+  reasonOut.clear();
+  const std::string trimmed = trimCopy(message);
+  if (trimmed.empty()) {
+    reasonOut = "tap message empty";
+    return false;
+  }
+  if (!takeWsLock(200)) {
+    reasonOut = "ws lock timeout";
+    return false;
+  }
+  if (sWs.client == nullptr || !sWs.started || !sWs.authOk || !sWs.ready) {
+    giveWsLock();
+    reasonOut = "ws not ready";
+    return false;
+  }
+  const uint32_t reqId = nextWsReqIdLocked();
+  std::string payload;
+  if (!buildWsMessageWithId(trimmed, reqId, payload)) {
+    giveWsLock();
+    reasonOut = "tap message not json object";
+    return false;
+  }
+  const bool ok = wsSendTextLocked(payload);
+  giveWsLock();
+  if (!ok) {
+    reasonOut = "ws send failed";
+    return false;
+  }
+  return true;
+}
+
+bool requestWsBootstrap(const std::string& cacheKey, const std::string& bootstrapTemplate,
+                        const std::string& resultPath, const std::string& eventPath,
+                        std::string& reasonOut) {
+  reasonOut.clear();
+  if (cacheKey.empty()) {
+    reasonOut = "ws cache_key empty";
+    return false;
+  }
+  const std::string payloadTemplate = trimCopy(bootstrapTemplate);
+  if (payloadTemplate.empty()) {
+    reasonOut = "ws bootstrap empty";
+    return false;
+  }
+
+  if (!takeWsLock(200)) {
+    reasonOut = "ws lock timeout";
+    return false;
+  }
+  if (sWs.client == nullptr || !sWs.started || !sWs.authOk || !sWs.ready) {
+    giveWsLock();
+    reasonOut = "ws not ready";
+    return false;
+  }
+  if (sWs.cacheKeyToPendingBootstrapReq.count(cacheKey) != 0) {
+    giveWsLock();
+    reasonOut = "ws bootstrap queued";
+    return false;
+  }
+  // If this bootstrap was already promoted to an active subscription (null-result
+  // path for HA render_template), don't re-register — events will keep flowing.
+  if (sWs.cacheKeyToActiveSubId.count(cacheKey) != 0) {
+    giveWsLock();
+    reasonOut = "ws bootstrap subscribed";
+    return false;
+  }
+  const uint32_t reqId = nextWsReqIdLocked();
+  std::string payload;
+  if (!buildWsMessageWithId(payloadTemplate, reqId, payload)) {
+    giveWsLock();
+    reasonOut = "ws bootstrap invalid";
+    return false;
+  }
+  if (!wsSendTextLocked(payload)) {
+    giveWsLock();
+    reasonOut = "ws send failed";
+    return false;
+  }
+  WsReqMeta meta = {};
+  meta.cacheKey = cacheKey;
+  meta.resultPath = resultPath;
+  meta.eventPath = eventPath;
+  meta.isSubscribe = false;
+  meta.sentAtMs = platform::millisMs();
+  sWs.pendingReqById[reqId] = meta;
+  sWs.cacheKeyToPendingBootstrapReq[cacheKey] = reqId;
+  giveWsLock();
+  reasonOut = "ws bootstrap queued";
+  return true;
+}
+
+bool requestWsSubscription(const std::string& cacheKey, const std::string& subscribeTemplate,
+                           const std::string& resultPath, const std::string& eventPath,
+                           std::string& reasonOut) {
+  reasonOut.clear();
+  if (cacheKey.empty()) {
+    reasonOut = "ws cache_key empty";
+    return false;
+  }
+  const std::string payloadTemplate = trimCopy(subscribeTemplate);
+  if (payloadTemplate.empty()) {
+    reasonOut = "ws subscribe empty";
+    return false;
+  }
+
+  if (!takeWsLock(200)) {
+    reasonOut = "ws lock timeout";
+    return false;
+  }
+  if (sWs.client == nullptr || !sWs.started || !sWs.authOk || !sWs.ready) {
+    giveWsLock();
+    reasonOut = "ws not ready";
+    return false;
+  }
+  if (sWs.cacheKeyToActiveSubId.count(cacheKey) != 0) {
+    giveWsLock();
+    reasonOut = "ws subscribed";
+    return true;
+  }
+  if (sWs.cacheKeyToPendingSubscribeReq.count(cacheKey) != 0) {
+    giveWsLock();
+    reasonOut = "ws subscribe queued";
+    return false;
+  }
+
+  const uint32_t reqId = nextWsReqIdLocked();
+  std::string payload;
+  if (!buildWsMessageWithId(payloadTemplate, reqId, payload)) {
+    giveWsLock();
+    reasonOut = "ws subscribe invalid";
+    return false;
+  }
+  if (!wsSendTextLocked(payload)) {
+    giveWsLock();
+    reasonOut = "ws send failed";
+    return false;
+  }
+  WsReqMeta meta = {};
+  meta.cacheKey = cacheKey;
+  meta.resultPath = resultPath;
+  meta.eventPath = eventPath;
+  meta.isSubscribe = true;
+  meta.sentAtMs = platform::millisMs();
+  sWs.pendingReqById[reqId] = meta;
+  sWs.cacheKeyToPendingSubscribeReq[cacheKey] = reqId;
+  giveWsLock();
+  reasonOut = "ws subscribe queued";
+  return true;
 }
 
 bool parseHaServiceFromUrl(const std::string& url, std::string& domainOut, std::string& serviceOut) {
@@ -3999,14 +3807,13 @@ bool parseHaServiceFromUrl(const std::string& url, std::string& domainOut, std::
   return !domainOut.empty() && !serviceOut.empty();
 }
 
-bool haWsCallService(const std::string& domain, const std::string& service, const std::string& serviceDataJson,
-                     std::string& reasonOut) {
+bool wsCallService(const std::string& domain, const std::string& service, const std::string& serviceDataJson,
+                   std::string& reasonOut) {
   reasonOut.clear();
   if (domain.empty() || service.empty()) {
-    reasonOut = "ha_ws service empty";
+    reasonOut = "ws service empty";
     return false;
   }
-
   std::string body = trimCopy(serviceDataJson);
   if (body.empty()) {
     body = "{}";
@@ -4016,473 +3823,32 @@ bool haWsCallService(const std::string& domain, const std::string& service, cons
     return false;
   }
 
-  if (!takeHaWsLock(200)) {
+  if (!takeWsLock(200)) {
     reasonOut = "ws lock timeout";
     return false;
   }
-  if (sHaWs.client == nullptr || !sHaWs.started || !sHaWs.authOk || !sHaWs.ready) {
-    giveHaWsLock();
+  if (sWs.client == nullptr || !sWs.started || !sWs.authOk || !sWs.ready) {
+    giveWsLock();
     reasonOut = "ws not ready";
     return false;
   }
 
-  const uint32_t reqId = nextHaWsReqIdLocked();
-  char prefix[192];
-  std::snprintf(prefix, sizeof(prefix), "{\"id\":%u,\"type\":\"call_service\",\"domain\":\"%s\",\"service\":\"%s\","
-                                        "\"service_data\":",
-                static_cast<unsigned>(reqId), jsonEscape(domain).c_str(), jsonEscape(service).c_str());
-  std::string msg(prefix);
-  msg += body;
-  msg.push_back('}');
-  const int sent = esp_websocket_client_send_text(sHaWs.client, msg.c_str(), static_cast<int>(msg.size()),
-                                                  pdMS_TO_TICKS(1000));
-  giveHaWsLock();
-  if (sent < 0) {
+  const uint32_t reqId = nextWsReqIdLocked();
+  std::string payload = "{\"id\":";
+  payload += std::to_string(static_cast<unsigned>(reqId));
+  payload += ",\"type\":\"call_service\",\"domain\":\"";
+  payload += jsonEscape(domain);
+  payload += "\",\"service\":\"";
+  payload += jsonEscape(service);
+  payload += "\",\"service_data\":";
+  payload += body;
+  payload.push_back('}');
+  const bool ok = wsSendTextLocked(payload);
+  giveWsLock();
+  if (!ok) {
     reasonOut = "ws send failed";
     return false;
   }
-  return true;
-}
-
-void processHaWsMessageLocked(std::string_view msg) {
-  std::string type;
-  if (!objectMemberString(msg, "type", type) || type.empty()) {
-    return;
-  }
-
-  if (type == "auth_required") {
-    sHaWs.authOk = false;
-    sHaWs.ready = false;
-    haWsSendAuthLocked();
-    return;
-  }
-  if (type == "auth_ok") {
-    sHaWs.authOk = true;
-    sHaWs.ready = true;
-    sHaWs.bootstrapTriggerPending = true;
-    ESP_LOGI(kTag, "ha_ws auth_ok ready");
-    return;
-  }
-  if (type == "auth_invalid") {
-    sHaWs.authOk = false;
-    sHaWs.ready = false;
-    return;
-  }
-  if (type == "result") {
-    int id = 0;
-    bool success = false;
-    (void)objectMemberInt(msg, "id", id);
-    (void)objectMemberBool(msg, "success", success);
-    auto triggerReqIt = sHaWs.triggerReqToEntityId.find(static_cast<uint32_t>(id));
-    if (triggerReqIt != sHaWs.triggerReqToEntityId.end()) {
-      const std::string entityId = triggerReqIt->second;
-      sHaWs.triggerReqToEntityId.erase(triggerReqIt);
-      sHaWs.entityIdToTriggerReq.erase(entityId);
-      if (!success) {
-        ESP_LOGW(kTag, "ha_ws trigger subscribe fail entity=%s", entityId.c_str());
-        return;
-      }
-      sHaWs.triggerSubIdToEntityId[static_cast<uint32_t>(id)] = entityId;
-      sHaWs.entityIdToTriggerSubId[entityId] = static_cast<uint32_t>(id);
-      ESP_LOGI(kTag, "ha_ws trigger subscribed entity=%s", entityId.c_str());
-      return;
-    }
-    auto renderIt = sHaWs.renderReqToEntityId.find(static_cast<uint32_t>(id));
-    if (renderIt != sHaWs.renderReqToEntityId.end()) {
-      const std::string entityId = renderIt->second;
-      if (!success) {
-        sHaWs.renderReqToEntityId.erase(renderIt);
-        sHaWs.entityIdToRenderReq.erase(entityId);
-        ESP_LOGW(kTag, "ha_ws bootstrap fail entity=%s", entityId.c_str());
-        return;
-      }
-      std::string_view resultValue;
-      if (objectMemberValue(msg, "result", resultValue)) {
-        resultValue = trimView(resultValue);
-        if (resultValue == "null") {
-          // render_template often ACKs with null and sends actual value via a follow-up event.
-          ESP_LOGI(kTag, "ha_ws bootstrap ack entity=%s awaiting_event", entityId.c_str());
-          return;
-        }
-        if (resultValue.size() >= 2 && resultValue.front() == '{' && resultValue.back() == '}') {
-          ingestHaStateObjectLocked(resultValue);
-          sHaWs.renderReqToEntityId.erase(renderIt);
-          sHaWs.entityIdToRenderReq.erase(entityId);
-          ESP_LOGI(kTag, "ha_ws bootstrap ok entity=%s", entityId.c_str());
-          return;
-        }
-        std::string rendered;
-        if (viewToString(resultValue, rendered) && !rendered.empty()) {
-          std::string_view renderedView = trimView(rendered);
-          if (renderedView.size() >= 2 && renderedView.front() == '{' && renderedView.back() == '}') {
-            ingestHaStateObjectLocked(renderedView);
-            sHaWs.renderReqToEntityId.erase(renderIt);
-            sHaWs.entityIdToRenderReq.erase(entityId);
-            ESP_LOGI(kTag, "ha_ws bootstrap ok entity=%s", entityId.c_str());
-            return;
-          }
-        }
-        sHaWs.renderReqToEntityId.erase(renderIt);
-        sHaWs.entityIdToRenderReq.erase(entityId);
-        const size_t previewLen = std::min<size_t>(resultValue.size(), 120);
-        ESP_LOGW(kTag, "ha_ws bootstrap empty entity=%s result=%.*s", entityId.c_str(),
-                 static_cast<int>(previewLen), resultValue.data());
-        return;
-      }
-      sHaWs.renderReqToEntityId.erase(renderIt);
-      sHaWs.entityIdToRenderReq.erase(entityId);
-      ESP_LOGW(kTag, "ha_ws bootstrap empty entity=%s missing_result", entityId.c_str());
-      return;
-    }
-    if (!success) {
-      return;
-    }
-    return;
-  }
-  if (type == "event") {
-    int id = 0;
-    (void)objectMemberInt(msg, "id", id);
-    auto renderIt = sHaWs.renderReqToEntityId.find(static_cast<uint32_t>(id));
-    if (renderIt != sHaWs.renderReqToEntityId.end()) {
-      const std::string entityId = renderIt->second;
-      std::string_view eventObj;
-      if (!objectMemberObject(msg, "event", eventObj)) {
-        sHaWs.renderReqToEntityId.erase(renderIt);
-        sHaWs.entityIdToRenderReq.erase(entityId);
-        ESP_LOGW(kTag, "ha_ws bootstrap empty entity=%s missing_event", entityId.c_str());
-        return;
-      }
-      std::string rendered;
-      if (!objectMemberString(eventObj, "result", rendered) || rendered.empty()) {
-        sHaWs.renderReqToEntityId.erase(renderIt);
-        sHaWs.entityIdToRenderReq.erase(entityId);
-        ESP_LOGW(kTag, "ha_ws bootstrap empty entity=%s event_no_result", entityId.c_str());
-        return;
-      }
-      std::string_view renderedView = trimView(rendered);
-      if (renderedView.size() >= 2 && renderedView.front() == '{' && renderedView.back() == '}') {
-        ingestHaStateObjectLocked(renderedView);
-        sHaWs.renderReqToEntityId.erase(renderIt);
-        sHaWs.entityIdToRenderReq.erase(entityId);
-        ESP_LOGI(kTag, "ha_ws bootstrap ok entity=%s", entityId.c_str());
-        return;
-      }
-      sHaWs.renderReqToEntityId.erase(renderIt);
-      sHaWs.entityIdToRenderReq.erase(entityId);
-      ESP_LOGW(kTag, "ha_ws bootstrap empty entity=%s event_result=%s", entityId.c_str(), rendered.c_str());
-      return;
-    }
-
-    auto triggerSubIt = sHaWs.triggerSubIdToEntityId.find(static_cast<uint32_t>(id));
-    if (triggerSubIt != sHaWs.triggerSubIdToEntityId.end()) {
-      std::string_view eventObj;
-      if (!objectMemberObject(msg, "event", eventObj)) {
-        return;
-      }
-      std::string_view variablesObj;
-      if (!objectMemberObject(eventObj, "variables", variablesObj)) {
-        return;
-      }
-      std::string_view triggerObj;
-      if (!objectMemberObject(variablesObj, "trigger", triggerObj)) {
-        return;
-      }
-      std::string_view toStateObj;
-      if (!objectMemberObject(triggerObj, "to_state", toStateObj)) {
-        return;
-      }
-      ingestHaStateObjectLocked(toStateObj);
-      return;
-    }
-    return;
-  }
-}
-
-void haWsEventHandler(void* /*handler_args*/, esp_event_base_t base, int32_t event_id, void* event_data) {
-  if (base != WEBSOCKET_EVENTS || event_data == nullptr) {
-    return;
-  }
-  auto* data = static_cast<esp_websocket_event_data_t*>(event_data);
-  if (event_id == WEBSOCKET_EVENT_DISCONNECTED) {
-    if (takeHaWsLock(50)) {
-      const uint32_t nowMs = platform::millisMs();
-      sHaWs.started = false;
-      sHaWs.authOk = false;
-      sHaWs.ready = false;
-      sHaWs.bootstrapTriggerPending = false;
-      sHaWs.rxFrame.clear();
-      sHaWs.renderReqToEntityId.clear();
-      sHaWs.entityIdToRenderReq.clear();
-      sHaWs.triggerReqToEntityId.clear();
-      sHaWs.entityIdToTriggerReq.clear();
-      sHaWs.triggerSubIdToEntityId.clear();
-      sHaWs.entityIdToTriggerSubId.clear();
-      if (sHaWs.failureStreak < 32) {
-        ++sHaWs.failureStreak;
-      }
-      const uint32_t backoff = std::min<uint32_t>(60000U, 1000U << std::min<uint8_t>(sHaWs.failureStreak, 6));
-      sHaWs.reconnectDueMs = nowMs + backoff;
-      const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-      const size_t freeNow = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-      ESP_LOGW(kTag, "ha_ws disconnected backoff_ms=%u heap_largest=%u heap_free=%u",
-               static_cast<unsigned>(backoff), static_cast<unsigned>(largest), static_cast<unsigned>(freeNow));
-      giveHaWsLock();
-    }
-    return;
-  }
-  if (event_id != WEBSOCKET_EVENT_DATA || data->data_ptr == nullptr || data->data_len <= 0 ||
-      data->op_code != 0x1) {
-    return;
-  }
-  const size_t totalLen = data->payload_len > 0 ? static_cast<size_t>(data->payload_len)
-                                                : static_cast<size_t>(data->data_len);
-  if (totalLen >= kHaWsDiagLargeFrameBytes && data->payload_offset == 0) {
-    const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-    const size_t freeNow = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-    ESP_LOGW(kTag, "ha_ws large frame payload_len=%u heap_largest=%u heap_free=%u",
-             static_cast<unsigned>(totalLen), static_cast<unsigned>(largest), static_cast<unsigned>(freeNow));
-  }
-  if (totalLen > kHaWsMaxFrameBytes) {
-    ESP_LOGW(kTag, "ha_ws drop frame payload_len=%u cap=%u", static_cast<unsigned>(totalLen),
-             static_cast<unsigned>(kHaWsMaxFrameBytes));
-    return;
-  }
-  if (!takeHaWsLock(100)) {
-    return;
-  }
-  if (data->payload_offset == 0) {
-    sHaWs.rxFrame.clear();
-  }
-  if (sHaWs.rxFrame.size() + static_cast<size_t>(data->data_len) > kHaWsMaxFrameBytes) {
-    ESP_LOGW(kTag, "ha_ws drop frame growth=%u cap=%u",
-             static_cast<unsigned>(sHaWs.rxFrame.size() + static_cast<size_t>(data->data_len)),
-             static_cast<unsigned>(kHaWsMaxFrameBytes));
-    sHaWs.rxFrame.clear();
-    giveHaWsLock();
-    return;
-  }
-  sHaWs.rxFrame.append(static_cast<const char*>(data->data_ptr), static_cast<size_t>(data->data_len));
-  const int total = data->payload_len;
-  if (total > 0 && (data->payload_offset + data->data_len) >= total) {
-    processHaWsMessageLocked(sHaWs.rxFrame);
-    sHaWs.rxFrame.clear();
-  }
-  giveHaWsLock();
-}
-
-bool ensureHaWsConnected(const std::string& wsUrl, const std::string& token, const std::string& widgetId,
-                         std::string& reasonOut) {
-  reasonOut.clear();
-  if (wsUrl.empty() || token.empty()) {
-    reasonOut = "ws url/token empty";
-    return false;
-  }
-  if (urlUsesTls(wsUrl) && !tlsClockReady()) {
-    reasonOut = "clock not synced";
-    return false;
-  }
-
-  if (!takeHaWsLock(300)) {
-    reasonOut = "ws lock timeout";
-    return false;
-  }
-
-  const uint32_t nowMs = platform::millisMs();
-  const bool configChanged = (sHaWs.wsUrl != wsUrl || sHaWs.token != token);
-  if (configChanged) {
-    if (sHaWs.client != nullptr) {
-      esp_websocket_client_stop(sHaWs.client);
-      esp_websocket_client_destroy(sHaWs.client);
-      sHaWs.client = nullptr;
-    }
-    sHaWs.wsUrl = wsUrl;
-    sHaWs.token = token;
-    sHaWs.authOk = false;
-    sHaWs.ready = false;
-    sHaWs.started = false;
-    sHaWs.bootstrapTriggerPending = false;
-    sHaWs.entityStateJson.clear();
-    sHaWs.renderReqToEntityId.clear();
-    sHaWs.entityIdToRenderReq.clear();
-    sHaWs.triggerReqToEntityId.clear();
-    sHaWs.entityIdToTriggerReq.clear();
-    sHaWs.triggerSubIdToEntityId.clear();
-    sHaWs.entityIdToTriggerSubId.clear();
-    sHaWs.failureStreak = 0;
-    sHaWs.reconnectDueMs = 0;
-    sHaWs.nextReqId = 1;
-  }
-
-  if (sHaWs.client == nullptr) {
-    esp_websocket_client_config_t cfg = {};
-    cfg.uri = sHaWs.wsUrl.c_str();
-    cfg.task_prio = 4;
-    cfg.task_stack = 6144;
-    cfg.network_timeout_ms = static_cast<int>(kHaWsConnectTimeoutMs);
-    cfg.reconnect_timeout_ms = 0;
-    cfg.disable_auto_reconnect = true;
-    cfg.keep_alive_enable = true;
-    cfg.ping_interval_sec = static_cast<int>(kHaWsDefaultKeepAliveMs / 1000U);
-    cfg.cert_pem = nullptr;
-    cfg.use_global_ca_store = false;
-    cfg.crt_bundle_attach = esp_crt_bundle_attach;
-
-    sHaWs.client = esp_websocket_client_init(&cfg);
-    if (sHaWs.client == nullptr) {
-      giveHaWsLock();
-      reasonOut = "ws init failed";
-      return false;
-    }
-    (void)esp_websocket_register_events(
-        sHaWs.client, static_cast<esp_websocket_event_id_t>(-1), haWsEventHandler, nullptr);
-  }
-
-  if (!sHaWs.started && (sHaWs.reconnectDueMs == 0 || static_cast<int32_t>(nowMs - sHaWs.reconnectDueMs) >= 0)) {
-    if (esp_websocket_client_start(sHaWs.client) == ESP_OK) {
-      sHaWs.started = true;
-      ESP_LOGI(kTag, "ha_ws connect widget=%s url=%s", widgetId.c_str(), sHaWs.wsUrl.c_str());
-    } else {
-      sHaWs.started = false;
-      sHaWs.authOk = false;
-      sHaWs.ready = false;
-      if (sHaWs.failureStreak < 32) {
-        ++sHaWs.failureStreak;
-      }
-      const uint32_t backoff = std::min<uint32_t>(60000U, 1000U << std::min<uint8_t>(sHaWs.failureStreak, 6));
-      sHaWs.reconnectDueMs = nowMs + backoff;
-      giveHaWsLock();
-      reasonOut = "ws start failed";
-      return false;
-    }
-  }
-
-  const bool ready = sHaWs.ready;
-  giveHaWsLock();
-  if (!ready) {
-    reasonOut = "ws not ready";
-    return false;
-  }
-  return true;
-}
-
-bool readHaWsEntityJson(const std::string& entityId, std::string& outJson) {
-  outJson.clear();
-  if (entityId.empty()) {
-    return false;
-  }
-  if (!takeHaWsLock(100)) {
-    return false;
-  }
-  auto it = sHaWs.entityStateJson.find(entityId);
-  if (it != sHaWs.entityStateJson.end()) {
-    outJson = it->second;
-  }
-  giveHaWsLock();
-  return !outJson.empty();
-}
-
-bool requestHaWsEntitySubscription(const std::string& entityId, std::string& reasonOut) {
-  reasonOut.clear();
-  if (entityId.empty()) {
-    reasonOut = "ha_ws entity empty";
-    return false;
-  }
-  if (!takeHaWsLock(150)) {
-    reasonOut = "ws lock timeout";
-    return false;
-  }
-  if (sHaWs.entityIdToTriggerSubId.find(entityId) != sHaWs.entityIdToTriggerSubId.end()) {
-    giveHaWsLock();
-    reasonOut = "ha_ws trigger subscribed";
-    return true;
-  }
-  if (sHaWs.entityIdToTriggerReq.find(entityId) != sHaWs.entityIdToTriggerReq.end()) {
-    giveHaWsLock();
-    reasonOut = "ha_ws trigger pending";
-    return true;
-  }
-  if (sHaWs.client == nullptr || !sHaWs.started || !sHaWs.authOk || !sHaWs.ready) {
-    giveHaWsLock();
-    reasonOut = "ws not ready";
-    return false;
-  }
-  const uint32_t reqId = nextHaWsReqIdLocked();
-  char prefix[192];
-  std::snprintf(prefix, sizeof(prefix),
-                "{\"id\":%u,\"type\":\"subscribe_trigger\",\"trigger\":[{\"platform\":\"state\",\"entity_id\":\"",
-                static_cast<unsigned>(reqId));
-  std::string msg(prefix);
-  msg += jsonEscape(entityId);
-  msg += "\"}]}";
-  const int sent = esp_websocket_client_send_text(sHaWs.client, msg.c_str(), static_cast<int>(msg.size()),
-                                                  pdMS_TO_TICKS(1000));
-  if (sent < 0) {
-    giveHaWsLock();
-    reasonOut = "ha_ws trigger send failed";
-    return false;
-  }
-  sHaWs.triggerReqToEntityId[reqId] = entityId;
-  sHaWs.entityIdToTriggerReq[entityId] = reqId;
-  giveHaWsLock();
-  ESP_LOGI(kTag, "ha_ws trigger subscribe request entity=%s", entityId.c_str());
-  reasonOut = "ha_ws trigger queued";
-  return true;
-}
-
-bool requestHaWsEntityBootstrap(const std::string& entityId, std::string& reasonOut) {
-  reasonOut.clear();
-  if (entityId.empty()) {
-    reasonOut = "ha_ws entity empty";
-    return false;
-  }
-  if (!takeHaWsLock(150)) {
-    reasonOut = "ws lock timeout";
-    return false;
-  }
-  if (sHaWs.entityStateJson.find(entityId) != sHaWs.entityStateJson.end()) {
-    giveHaWsLock();
-    reasonOut = "ha_ws entity cached";
-    return true;
-  }
-  if (sHaWs.entityIdToRenderReq.find(entityId) != sHaWs.entityIdToRenderReq.end()) {
-    giveHaWsLock();
-    reasonOut = "ha_ws bootstrap pending";
-    return true;
-  }
-  if (sHaWs.client == nullptr || !sHaWs.started || !sHaWs.authOk || !sHaWs.ready) {
-    giveHaWsLock();
-    reasonOut = "ws not ready";
-    return false;
-  }
-  const uint32_t reqId = nextHaWsReqIdLocked();
-  const std::string templ =
-      "{% set s = states[entity_id] %}"
-      "{{ {'entity_id': entity_id,"
-      "'state': (s.state if s else ''),"
-      "'last_updated': (s.last_updated.isoformat() if s and s.last_updated else ''),"
-      "'last_changed': (s.last_changed.isoformat() if s and s.last_changed else ''),"
-      "'attributes': (s.attributes if s else {})} | tojson }}";
-  char prefix[160];
-  std::snprintf(prefix, sizeof(prefix),
-                "{\"id\":%u,\"type\":\"render_template\",\"template\":\"",
-                static_cast<unsigned>(reqId));
-  std::string msg(prefix);
-  msg += jsonEscape(templ);
-  msg += "\",\"report_errors\":true,\"variables\":{\"entity_id\":\"";
-  msg += jsonEscape(entityId);
-  msg += "\"}}";
-  const int sent = esp_websocket_client_send_text(sHaWs.client, msg.c_str(), static_cast<int>(msg.size()),
-                                                  pdMS_TO_TICKS(1000));
-  if (sent < 0) {
-    giveHaWsLock();
-    reasonOut = "ha_ws bootstrap send failed";
-    return false;
-  }
-  sHaWs.renderReqToEntityId[reqId] = entityId;
-  sHaWs.entityIdToRenderReq[entityId] = reqId;
-  giveHaWsLock();
-  ESP_LOGI(kTag, "ha_ws bootstrap request entity=%s", entityId.c_str());
-  reasonOut = "ha_ws bootstrap queued";
   return true;
 }
 
@@ -4501,8 +3867,8 @@ TapActionType parseTapActionTypeFromSettings(const std::map<std::string, std::st
   if (action == "http") {
     return TapActionType::kHttp;
   }
-  if (action == "ha_ws" || action == "ha_ws_service" || action == "ws") {
-    return TapActionType::kHaWsService;
+  if (action == "ws" || action == "ws_publish" || action == "websocket") {
+    return TapActionType::kWsPublish;
   }
   return TapActionType::kNone;
 }
@@ -4514,7 +3880,8 @@ void loadTapActionFromSettings() {
   s.tapBodyTemplate.clear();
   s.tapContentType = "application/json";
   s.tapHeaders.clear();
-  if (s.tapAction != TapActionType::kHttp) {
+  if (s.tapAction != TapActionType::kHttp &&
+      s.tapAction != TapActionType::kWsPublish) {
     return;
   }
 
@@ -4552,9 +3919,9 @@ void loadTapActionFromSettings() {
     }
   }
 
-  // Preserve existing tap_url / tap_body config for HA cards while keeping HA traffic WS-only.
-  if (s.source == DataSource::kHaWs && s.tapAction == TapActionType::kHttp) {
-    s.tapAction = TapActionType::kHaWsService;
+  // For generic websocket sources, prefer existing shared WS connection over HTTPS taps.
+  if (s.source == DataSource::kWebSocket && s.tapAction == TapActionType::kHttp) {
+    s.tapAction = TapActionType::kWsPublish;
   }
 }
 
@@ -4573,8 +3940,13 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
     return false;
   }
   if (urlUsesTls(url)) {
-    const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-    const size_t freeHeap = esp_get_free_heap_size();
+    size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    size_t freeHeap = esp_get_free_heap_size();
+    if (largest < kTlsMinLargest8Bit || freeHeap < kTlsMinFree8Bit) {
+      (void)reclaimRuntimeCachesLowHeap("tls-guard");
+      largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+      freeHeap = esp_get_free_heap_size();
+    }
     if (largest < kTlsMinLargest8Bit || freeHeap < kTlsMinFree8Bit) {
       char lowHeapReason[96];
       std::snprintf(lowHeapReason, sizeof(lowHeapReason), "tls low heap free=%u largest=%u",
@@ -4746,8 +4118,11 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
 void httpWorkerTask(void* /*arg*/) {
   for (;;) {
     HttpJob* job = nullptr;
-    if (xQueueReceive(sHttpJobQueue, &job, portMAX_DELAY) != pdTRUE || job == nullptr) {
+    if (xQueueReceive(sHttpJobQueue, &job, portMAX_DELAY) != pdTRUE) {
       continue;
+    }
+    if (job == nullptr) {
+      break;
     }
     HttpResult* result = new HttpResult();
     if (result == nullptr) {
@@ -4767,6 +4142,8 @@ void httpWorkerTask(void* /*arg*/) {
     }
     delete job;
   }
+  sHttpWorkerTask = nullptr;
+  vTaskDelete(nullptr);
 }
 
 bool ensureHttpWorker() {
@@ -4784,6 +4161,55 @@ bool ensureHttpWorker() {
     }
   }
   return true;
+}
+
+void teardownHttpWorker() {
+  if (sHttpJobQueue == nullptr) {
+    return;
+  }
+
+  // Stop the worker task so we can reclaim its stack between layout switches.
+  if (sHttpWorkerTask != nullptr) {
+    HttpJob* quit = nullptr;
+    (void)xQueueSend(sHttpJobQueue, &quit, pdMS_TO_TICKS(20));
+    for (int i = 0; i < 40 && sHttpWorkerTask != nullptr; ++i) {
+      vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    if (sHttpWorkerTask != nullptr) {
+      vTaskDelete(sHttpWorkerTask);
+      sHttpWorkerTask = nullptr;
+    }
+  }
+
+  // Drain any queued jobs and notify waiters with nullptr (treated as failure).
+  HttpJob* job = nullptr;
+  while (xQueueReceive(sHttpJobQueue, &job, 0) == pdTRUE) {
+    if (job != nullptr) {
+      if (job->replyQueue != nullptr) {
+        HttpResult* nullResult = nullptr;
+        (void)xQueueSend(job->replyQueue, &nullResult, 0);
+      }
+      delete job;
+    }
+  }
+  vQueueDelete(sHttpJobQueue);
+  sHttpJobQueue = nullptr;
+}
+
+void settleAfterNetworkTeardown() {
+  const size_t freeBefore = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+  const size_t largestBefore = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  // Allow async socket/task teardown paths to complete before next layout starts
+  // issuing fresh TLS connections.
+  for (int i = 0; i < 3; ++i) {
+    vTaskDelay(pdMS_TO_TICKS(25));
+  }
+  (void)reclaimRuntimeCachesLowHeap("layout-switch");
+  const size_t freeAfter = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+  const size_t largestAfter = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  ESP_LOGI(kTag, "reset settle net free=%u->%u largest=%u->%u", static_cast<unsigned>(freeBefore),
+           static_cast<unsigned>(freeAfter), static_cast<unsigned>(largestBefore),
+           static_cast<unsigned>(largestAfter));
 }
 
 bool httpGet(std::string url, std::vector<KeyValue> headers, int& statusCode, std::string& body,
@@ -4937,19 +4363,16 @@ bool executeTapAction(std::string& reasonOut) {
     return true;
   }
 
-  if (s.tapAction == TapActionType::kHaWsService) {
+  if (s.tapAction == TapActionType::kWsPublish) {
     const std::string url = bindRuntimeTemplate(s.tapUrlTemplate);
     std::string domain;
     std::string service;
-    if (!parseHaServiceFromUrl(url, domain, service)) {
-      reasonOut = "ha_ws tap_url invalid";
-      return false;
+    if (!url.empty() && parseHaServiceFromUrl(url, domain, service)) {
+      const std::string body = bindRuntimeTemplate(s.tapBodyTemplate);
+      return wsCallService(domain, service, body, reasonOut);
     }
-    const std::string body = bindRuntimeTemplate(s.tapBodyTemplate);
-    if (!haWsCallService(domain, service, body, reasonOut)) {
-      return false;
-    }
-    return true;
+    const std::string msg = bindRuntimeTemplatePreserveUnknown(s.tapBodyTemplate);
+    return wsPublishMessage(msg, reasonOut);
   }
 
   if (s.tapAction != TapActionType::kHttp) {
@@ -5148,36 +4571,116 @@ bool fetchAndResolve(uint32_t nowMs) {
     return true;
   }
 
-  if (s.source == DataSource::kHaWs) {
-    const std::string entityId = bindRuntimeTemplate(s.wsEntityTemplate.empty() ? "{{setting.entity_id}}"
-                                                                                 : s.wsEntityTemplate);
-    const std::string token = bindRuntimeTemplate(readSetting("ha_token", ""));
-    const std::string wsBase = bindRuntimeTemplate(readSetting("ha_ws_url", ""));
-    const std::string baseUrl = bindRuntimeTemplate(readSetting("ha_base_url", ""));
-    const std::string wsPath = bindRuntimeTemplate(readSetting("ha_ws_path", "/api/websocket"));
-    std::string wsUrl;
-    if (wsBase.empty()) {
-      (void)normalizeHaWsUrl(baseUrl, wsPath, wsUrl);
-    } else {
-      (void)normalizeHaWsUrl(wsBase, wsPath, wsUrl);
+  if (s.source == DataSource::kWebSocket) {
+    // Guard against heap exhaustion before allocating template strings and WS
+    // client buffers. A failed TLS reconnect loop can leave heap fragmented;
+    // deferring here prevents std::bad_alloc / abort() deep in template binding.
+    // Once the WS connection is established the TLS context is already resident
+    // in heap and won't go away — apply only a modest guard for string allocs.
+    {
+      // Use a longer lock timeout here — the first tick after auth_ok can race
+      // with the WS event handler still holding the lock. If we fail to read
+      // the connected state and fall back to the TLS guard (20KB/40KB), we'll
+      // incorrectly defer on a heap level that's permanently below that threshold.
+      bool wsAlreadyConnected = false;
+      if (takeWsLock(100)) {
+        wsAlreadyConnected = sWs.client != nullptr && sWs.ready && sWs.authOk && sWs.started;
+        giveWsLock();
+      }
+      const size_t wsMinLargest = wsAlreadyConnected ? kWsActiveMinLargest8Bit : kTlsMinLargest8Bit;
+      const size_t wsMinFree = wsAlreadyConnected ? kWsActiveMinFree8Bit : kTlsMinFree8Bit;
+      size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+      size_t freeHeap = esp_get_free_heap_size();
+      if (largest < wsMinLargest || freeHeap < wsMinFree) {
+        (void)reclaimRuntimeCachesLowHeap("ws-fetch-guard");
+        largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+        freeHeap = esp_get_free_heap_size();
+      }
+      if (largest < wsMinLargest || freeHeap < wsMinFree) {
+        noteFetchDeferred(nowMs, "ws low heap");
+        return false;
+      }
     }
+    const std::string profileName =
+        bindRuntimeTemplate(s.wsConnectionProfileTemplate.empty() ? readSetting("connection_profile", "")
+                                                                  : s.wsConnectionProfileTemplate);
+    WsProfileConfig profile = {};
+    const bool hasProfile = parseWsProfileFromSettings(profileName, profile);
+
+    const std::string cacheKey = bindRuntimeTemplate(
+        s.wsCacheKeyTemplate.empty() ? s.widgetId : s.wsCacheKeyTemplate);
+    const std::string bootstrapTemplate = bindRuntimeTemplatePreserveUnknown(s.wsBootstrapTemplate);
+    const std::string subscribeTemplate = bindRuntimeTemplatePreserveUnknown(s.wsSubscribeTemplate);
+    const std::string resultPath = bindRuntimeTemplate(s.wsResultPath);
+    const std::string eventPath = bindRuntimeTemplate(s.wsEventPath);
+    const std::string token = bindRuntimeTemplate(
+        s.wsTokenTemplate.empty()
+            ? (hasProfile ? profile.token : readSetting("ws_token", ""))
+            : s.wsTokenTemplate);
+    const std::string authTemplate = bindRuntimeTemplate(
+        s.wsAuthTemplate.empty()
+            ? (hasProfile ? profile.authMessage : readSetting("ws_auth_template", ""))
+            : s.wsAuthTemplate);
+    const std::string wsBase = bindRuntimeTemplate(
+        s.wsUrlTemplate.empty()
+            ? (hasProfile ? profile.url : readSetting("ws_url", ""))
+            : s.wsUrlTemplate);
+    const std::string wsPath = bindRuntimeTemplate(
+        s.wsPathTemplate.empty() ? (hasProfile ? profile.path : readSetting("ws_path", ""))
+                                 : s.wsPathTemplate);
+    const std::string authRequiredType =
+        bindRuntimeTemplate(hasProfile ? profile.authRequiredType : readSetting("ws_auth_required_type", "auth_required"));
+    const std::string authOkType =
+        bindRuntimeTemplate(hasProfile ? profile.authOkType : readSetting("ws_auth_ok_type", "auth_ok"));
+    const std::string authInvalidType =
+        bindRuntimeTemplate(hasProfile ? profile.authInvalidType : readSetting("ws_auth_invalid_type", "auth_invalid"));
+    const std::string readyType =
+        bindRuntimeTemplate(hasProfile ? profile.readyType : readSetting("ws_ready_type", "ready"));
+    std::vector<std::string> initMessages = profile.initMessages;
+    for (std::string& msg : initMessages) {
+      msg = bindRuntimeTemplatePreserveUnknown(msg);
+    }
+
+    std::string wsUrl;
+    if (!normalizeWsUrl(wsBase, wsPath, wsUrl)) {
+      noteFetchDeferred(nowMs, "ws url invalid");
+      return false;
+    }
+
     std::string wsReason;
-    const bool wsReady = ensureHaWsConnected(wsUrl, token, s.widgetId, wsReason);
-    std::string entityJson;
-    if (!readHaWsEntityJson(entityId, entityJson)) {
+    const bool wsReady =
+        ensureWsConnected(profileName, wsUrl, token, authTemplate, authRequiredType, authOkType,
+                          authInvalidType, readyType, initMessages, s.widgetId, wsReason);
+    std::string payloadJson;
+    if (!readWsPayloadJson(cacheKey, payloadJson)) {
       if (!wsReady) {
         noteFetchDeferred(nowMs, wsReason.c_str());
       } else {
-        std::string ignoredTriggerReason;
-        (void)requestHaWsEntitySubscription(entityId, ignoredTriggerReason);
+        std::string subscribeReason;
+        (void)requestWsSubscription(cacheKey, subscribeTemplate, resultPath, eventPath, subscribeReason);
         std::string bootstrapReason;
-        (void)requestHaWsEntityBootstrap(entityId, bootstrapReason);
-        noteFetchDeferred(nowMs, bootstrapReason.c_str());
+        (void)requestWsBootstrap(cacheKey, bootstrapTemplate, resultPath, eventPath, bootstrapReason);
+        if (!trimCopy(bootstrapTemplate).empty()) {
+          noteFetchDeferred(nowMs, bootstrapReason.c_str());
+        } else if (!trimCopy(subscribeTemplate).empty()) {
+          noteFetchDeferred(nowMs, subscribeReason.c_str());
+        } else {
+          noteFetchDeferred(nowMs, "ws no bootstrap/subscribe");
+        }
       }
       return false;
     }
-    if (!resolveFieldsFromHttp(std::move(entityJson))) {
-      noteFetchFailure(nowMs, "ha_ws parse unresolved");
+
+    if (wsReady) {
+      std::string ignoredReason;
+      (void)requestWsSubscription(cacheKey, subscribeTemplate, resultPath, eventPath, ignoredReason);
+    }
+    if (!resolveFieldsFromHttp(std::move(payloadJson))) {
+      const size_t previewLen = std::min<size_t>(payloadJson.size(), 160U);
+      ESP_LOGW(kTag, "ws parse unresolved key=%s bytes=%u preview=%.*s", cacheKey.c_str(),
+               static_cast<unsigned>(payloadJson.size()), static_cast<int>(previewLen),
+               payloadJson.c_str());
+      noteFetchFailure(nowMs, "ws parse unresolved");
       return false;
     }
     prefetchRemoteIconsForCurrentState();
@@ -5332,7 +4835,7 @@ void drawGlyph(int x, int y, char ch, uint16_t fg, uint16_t bg, int scale) {
   const size_t base = static_cast<size_t>(c) * 5U;
   for (int col = 0; col < 5; ++col) {
     const uint8_t bits = font[base + static_cast<size_t>(col)];
-    for (int row = 0; row < 7; ++row) {
+    for (int row = 0; row < 8; ++row) {
       const bool on = ((bits >> row) & 1U) != 0;
       const uint16_t color = on ? fg : bg;
       for (int sx = 0; sx < scale; ++sx) {
@@ -5442,6 +4945,35 @@ void drawLine(int x0, int y0, int x1, int y1, uint16_t color) {
   int err = dx + dy;
   while (true) {
     drawPixel(x0, y0, color);
+    if (x0 == x1 && y0 == y1) {
+      break;
+    }
+    const int e2 = 2 * err;
+    if (e2 >= dy) {
+      err += dy;
+      x0 += sx;
+    }
+    if (e2 <= dx) {
+      err += dx;
+      y0 += sy;
+    }
+  }
+}
+
+void drawLineThick(int x0, int y0, int x1, int y1, int thickness, uint16_t color) {
+  if (thickness <= 1) {
+    drawLine(x0, y0, x1, y1, color);
+    return;
+  }
+  const int brush = std::max(2, thickness);
+  const int half = brush / 2;
+  int dx = std::abs(x1 - x0);
+  int sx = x0 < x1 ? 1 : -1;
+  int dy = -std::abs(y1 - y0);
+  int sy = y0 < y1 ? 1 : -1;
+  int err = dx + dy;
+  while (true) {
+    drawSolidRect(x0 - half, y0 - half, brush, brush, color);
     if (x0 == x1 && y0 == y1) {
       break;
     }
@@ -5593,6 +5125,47 @@ void setIconRetryAfter(const std::string& key, uint32_t nowMs, uint32_t delayMs)
   sIconRetryAfterMs[key] = nowMs + delayMs;
 }
 
+bool reclaimRuntimeCachesLowHeap(const char* reason) {
+  const uint32_t nowMs = platform::millisMs();
+  if (nowMs - sLastLowHeapRecoverMs < kLowHeapRecoverCooldownMs) {
+    return false;
+  }
+  sLastLowHeapRecoverMs = nowMs;
+
+  const size_t freeBefore = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+  const size_t largestBefore = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  const size_t iconEntries = sIconMemCache.size();
+  const size_t iconBytes = sIconMemCacheBytes;
+  const size_t httpEntries = sSharedHttpCache.size();
+
+  sIconMemCache.clear();
+  sIconMemCacheBytes = 0;
+  sIconRetryAfterMs.clear();
+  std::map<std::string, IconMemEntry>().swap(sIconMemCache);
+  std::map<std::string, uint32_t>().swap(sIconRetryAfterMs);
+  sSharedHttpCache.clear();
+  std::map<std::string, SharedHttpResponse>().swap(sSharedHttpCache);
+
+  size_t wsCacheEntries = 0;
+  if (takeWsLock(10)) {
+    wsCacheEntries = sWs.cacheJsonByKey.size();
+    sWs.cacheJsonByKey.clear();
+    std::map<std::string, std::string>().swap(sWs.cacheJsonByKey);
+    giveWsLock();
+  }
+
+  const size_t freeAfter = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+  const size_t largestAfter = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  ESP_LOGW(kTag,
+           "low-heap reclaim reason=%s icon_entries=%u icon_bytes=%u http_entries=%u ws_cache=%u free=%u->%u largest=%u->%u",
+           reason != nullptr ? reason : "(unknown)", static_cast<unsigned>(iconEntries),
+           static_cast<unsigned>(iconBytes), static_cast<unsigned>(httpEntries),
+           static_cast<unsigned>(wsCacheEntries),
+           static_cast<unsigned>(freeBefore), static_cast<unsigned>(freeAfter),
+           static_cast<unsigned>(largestBefore), static_cast<unsigned>(largestAfter));
+  return largestAfter > largestBefore || freeAfter > freeBefore;
+}
+
 void iconMemCachePut(const std::string& key, std::vector<uint16_t>&& pixels) {
   const size_t bytes = pixels.size() * sizeof(uint16_t);
   if (bytes > kIconMemCacheBudgetBytes) {
@@ -5627,13 +5200,18 @@ bool iconFileCacheGet(const std::string& key, int w, int h, std::vector<uint16_t
   if (!ensureIconCacheDir()) {
     return false;
   }
+  const size_t needPixels = static_cast<size_t>(w) * static_cast<size_t>(h);
+  const size_t needBytes = needPixels * sizeof(uint16_t);
+  const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  if (largest < needBytes + 1024U) {
+    return false;
+  }
   const std::string path = iconCacheFilePath(key);
   std::FILE* fp = std::fopen(path.c_str(), "rb");
   if (fp == nullptr) {
     return false;
   }
-  const size_t needPixels = static_cast<size_t>(w) * static_cast<size_t>(h);
-  outPixels.assign(needPixels, 0);
+  outPixels.resize(needPixels);
   const size_t got = std::fread(outPixels.data(), sizeof(uint16_t), needPixels, fp);
   std::fclose(fp);
   return got == needPixels;
@@ -5681,10 +5259,28 @@ bool loadIconRemote(const std::string& url, int w, int h, bool allowNetwork = tr
   int status = 0;
   std::string body;
   std::string reason;
+  // The HTTP client connection needs ~12KB contiguous (socket + internal
+  // buffers). If the worker task doesn't exist yet, httpGet will create it
+  // first, consuming kHttpWorkerStack (~8KB) from the largest block before the
+  // HTTP client runs. Post-WS-TLS, largest is ~19KB — 19 - 8 = 11KB, not
+  // enough margin. Require the full combined amount when no worker exists so
+  // the guard fires and the icon is skipped rather than fragmenting the heap
+  // permanently (which would block all subsequent WS fetch-guard checks).
+  // Plain-HTTP icon server (no TLS): client needs ~4-6KB contiguous for socket
+  // + internal buffers. Use 8KB as a safe floor with worker present.
+  // Without the worker, httpGet creates it first (8KB stack), so require the
+  // combined amount. Post-WS-TLS the worker should already be pre-created by
+  // the auth_ok handler, so the no-worker branch is a fallback only.
+  const size_t kIconFetchMinLargest =
+      (sHttpWorkerTask != nullptr) ? 8U * 1024U : (8U * 1024U + kHttpWorkerStack);
+  // Do NOT call reclaimRuntimeCachesLowHeap here — it clears the WS JSON
+  // cache which contains live subscription data. Losing that cache means the
+  // widget shows "Loading..." until the next WS event arrives, which is worse
+  // than simply deferring the icon fetch.
   const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-  if (largest < 8192U) {
+  if (largest < kIconFetchMinLargest) {
     setIconRetryAfter(key, nowMs, kIconFetchRetryMs);
-    ESP_LOGE(kTag, "icon fetch skipped low_heap url=%s largest=%u", url.c_str(),
+    ESP_LOGW(kTag, "icon fetch skipped low_heap url=%s largest=%u", url.c_str(),
              static_cast<unsigned>(largest));
     return false;
   }
@@ -5706,6 +5302,13 @@ bool loadIconRemote(const std::string& url, int w, int h, bool allowNetwork = tr
     return false;
   }
   const size_t needPixels = static_cast<size_t>(w) * static_cast<size_t>(h);
+  const size_t largestBeforePixels = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  if (largestBeforePixels < needBytes + 1024U) {
+    setIconRetryAfter(key, nowMs, kIconFetchRetryMs);
+    ESP_LOGW(kTag, "icon decode skipped low_heap url=%s largest=%u need=%u", url.c_str(),
+             static_cast<unsigned>(largestBeforePixels), static_cast<unsigned>(needBytes));
+    return false;
+  }
   std::vector<uint16_t> pixels(needPixels);
   std::memcpy(pixels.data(), body.data(), needBytes);
   iconFileCachePut(key, pixels);
@@ -5724,7 +5327,14 @@ void prefetchRemoteIconsForCurrentState() {
     if (!isHttpUrl(iconPath)) {
       continue;
     }
+    const std::string key = iconCacheKey(iconPath, node.w, node.h);
+    const std::vector<uint16_t>* cachedPixels = nullptr;
+    if (iconMemCacheGetPtr(key, cachedPixels) && cachedPixels != nullptr) {
+      continue;
+    }
+    // Avoid allocator spikes by attempting at most one missing remote icon per pass.
     (void)loadIconRemote(iconPath, node.w, node.h, true);
+    break;
   }
 }
 
@@ -5976,19 +5586,7 @@ void renderNodes() {
         y2 = y + static_cast<int>(std::sin(rad) * length);
       }
       const int thickness = std::max(1, node.thickness);
-      const float dx = static_cast<float>(x2 - x);
-      const float dy = static_cast<float>(y2 - y);
-      const float len = std::sqrt(dx * dx + dy * dy);
-      if (len < 0.0001f) {
-        continue;
-      }
-      const float nx = -dy / len;
-      const float ny = dx / len;
-      for (int i = -(thickness / 2); i <= (thickness / 2); ++i) {
-        const int ox = static_cast<int>(nx * i);
-        const int oy = static_cast<int>(ny * i);
-        drawLine(x + ox, y + oy, x2 + ox, y2 + oy, node.color565);
-      }
+      drawLineThick(x, y, x2, y2, thickness, node.color565);
       continue;
     }
 
@@ -6163,6 +5761,21 @@ void render() {
   if (bytesPerRow == 0) {
     return;
   }
+  // Don't allocate the canvas during the initial LOADING render — defer until
+  // we have real data. This keeps the large contiguous block available for the
+  // first TLS handshake, which needs at least 20KB contiguous.
+  if (!s.hasData && sCanvas == nullptr) {
+    drawSolidRect(s.x, s.y, s.w, s.h, kBg);
+    if (s.drawBorder) {
+      drawSolidRect(s.x, s.y, s.w, 1, kBorder);
+      drawSolidRect(s.x, static_cast<int>(s.y + s.h - 1), s.w, 1, kBorder);
+      drawSolidRect(s.x, s.y, 1, s.h, kBorder);
+      drawSolidRect(static_cast<int>(s.x + s.w - 1), s.y, 1, s.h, kBorder);
+    }
+    drawText(static_cast<int>(s.x) + 6, static_cast<int>(s.y) + 22, "LOADING...", kText, kBg, 1);
+    return;
+  }
+
   const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
   const size_t targetBytes = (largest * 3U) / 4U;
   uint16_t desiredRows =
@@ -6202,10 +5815,12 @@ void render() {
     ESP_LOGW(kTag, "widget=%s canvas alloc failed largest=%u row_bytes=%u; using direct draw",
              s.widgetId.c_str(), static_cast<unsigned>(largest), static_cast<unsigned>(bytesPerRow));
     drawSolidRect(s.x, s.y, s.w, s.h, kBg);
-    drawSolidRect(s.x, s.y, s.w, 1, kBorder);
-    drawSolidRect(s.x, static_cast<int>(s.y + s.h - 1), s.w, 1, kBorder);
-    drawSolidRect(s.x, s.y, 1, s.h, kBorder);
-    drawSolidRect(static_cast<int>(s.x + s.w - 1), s.y, 1, s.h, kBorder);
+    if (s.drawBorder) {
+      drawSolidRect(s.x, s.y, s.w, 1, kBorder);
+      drawSolidRect(s.x, static_cast<int>(s.y + s.h - 1), s.w, 1, kBorder);
+      drawSolidRect(s.x, s.y, 1, s.h, kBorder);
+      drawSolidRect(static_cast<int>(s.x + s.w - 1), s.y, 1, s.h, kBorder);
+    }
     drawText(static_cast<int>(s.x) + 4, static_cast<int>(s.y) + 4, s.widgetId, kAccent, kBg, 1);
     if (!s.hasData) {
       drawText(static_cast<int>(s.x) + 6, static_cast<int>(s.y) + 22, "LOADING...", kText, kBg, 1);
@@ -6226,11 +5841,16 @@ void render() {
     sCanvasY0 = static_cast<uint16_t>(s.y + row);
     std::fill(sCanvas, sCanvas + static_cast<size_t>(sCanvasW) * static_cast<size_t>(sCanvasH), kBg);
 
-    drawSolidRect(s.x, s.y, s.w, 1, kBorder);
-    drawSolidRect(s.x, static_cast<int>(s.y + s.h - 1), s.w, 1, kBorder);
-    drawSolidRect(s.x, s.y, 1, s.h, kBorder);
-    drawSolidRect(static_cast<int>(s.x + s.w - 1), s.y, 1, s.h, kBorder);
-    drawText(static_cast<int>(s.x) + 4, static_cast<int>(s.y) + 4, s.widgetId, kAccent, kBg, 1);
+    if (s.drawBorder) {
+      drawSolidRect(s.x, s.y, s.w, 1, kBorder);
+      drawSolidRect(s.x, static_cast<int>(s.y + s.h - 1), s.w, 1, kBorder);
+      drawSolidRect(s.x, s.y, 1, s.h, kBorder);
+      drawSolidRect(static_cast<int>(s.x + s.w - 1), s.y, 1, s.h, kBorder);
+    }
+    if (s.showTitle && !s.uiTitle.empty()) {
+      drawText(static_cast<int>(s.x) + 4, static_cast<int>(s.y) + 4, bindRuntimeTemplate(s.uiTitle),
+               kAccent, kBg, 1);
+    }
 
     if (!s.hasData) {
       drawText(static_cast<int>(s.x) + 6, static_cast<int>(s.y) + 22, "LOADING...", kText, kBg, 1);
@@ -6254,10 +5874,15 @@ void reset() {
   const size_t iconEntries = sIconMemCache.size();
   const size_t iconBytes = sIconMemCacheBytes;
   const size_t httpReuseEntries = sSharedHttpCache.size();
+  const size_t instances = sInstances.size();
   const size_t canvasBytes = sCanvasCapacityBytes;
+  const size_t freeBefore = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+  const size_t largestBefore = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  teardownHttpWorker();
   sIconMemCache.clear();
   sIconMemCacheBytes = 0;
   sIconRetryAfterMs.clear();
+  sLastLowHeapRecoverMs = 0;
   sSharedHttpCache.clear();
   if (sCanvas != nullptr) {
     heap_caps_free(sCanvas);
@@ -6267,18 +5892,37 @@ void reset() {
   sCanvasW = 0;
   sCanvasH = 0;
   sCanvasY0 = 0;
-  teardownHaWsClient();
+  teardownWsClient();
+  if (sWs.lock != nullptr) {
+    vSemaphoreDelete(sWs.lock);
+    sWs.lock = nullptr;
+  }
+  settleAfterNetworkTeardown();
   s = {};
   sInstances.clear();
-  if (iconEntries > 0 || iconBytes > 0 || httpReuseEntries > 0 || canvasBytes > 0) {
-    ESP_LOGI(kTag, "reset cleared ws+icons+http+canvas icon_entries=%u icon_bytes=%u http_reuse=%u canvas_bytes=%u",
-             static_cast<unsigned>(iconEntries), static_cast<unsigned>(iconBytes),
-             static_cast<unsigned>(httpReuseEntries), static_cast<unsigned>(canvasBytes));
+  std::vector<State>().swap(sInstances);
+  std::map<std::string, IconMemEntry>().swap(sIconMemCache);
+  std::map<std::string, uint32_t>().swap(sIconRetryAfterMs);
+  std::map<std::string, SharedHttpResponse>().swap(sSharedHttpCache);
+  const size_t freeAfter = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+  const size_t largestAfter = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  if (iconEntries > 0 || iconBytes > 0 || httpReuseEntries > 0 || canvasBytes > 0 || instances > 0) {
+    ESP_LOGI(kTag,
+             "reset cleared ws+http+icons+canvas+instances instances=%u icon_entries=%u icon_bytes=%u "
+             "http_reuse=%u canvas_bytes=%u free=%u->%u largest=%u->%u",
+             static_cast<unsigned>(instances), static_cast<unsigned>(iconEntries), static_cast<unsigned>(iconBytes),
+             static_cast<unsigned>(httpReuseEntries), static_cast<unsigned>(canvasBytes),
+             static_cast<unsigned>(freeBefore), static_cast<unsigned>(freeAfter),
+             static_cast<unsigned>(largestBefore), static_cast<unsigned>(largestAfter));
+  } else {
+    ESP_LOGI(kTag, "reset complete free=%u->%u largest=%u->%u", static_cast<unsigned>(freeBefore),
+             static_cast<unsigned>(freeAfter), static_cast<unsigned>(largestBefore),
+             static_cast<unsigned>(largestAfter));
   }
 }
 
 bool begin(const char* widgetId, const char* dslPath, uint16_t x, uint16_t y, uint16_t w, uint16_t h,
-           const char* settingsJson, const char* sharedSettingsJson) {
+           const char* settingsJson, const char* sharedSettingsJson, bool drawBorder) {
   State previous = std::move(s);
   s = {};
   s.active = true;
@@ -6288,6 +5932,7 @@ bool begin(const char* widgetId, const char* dslPath, uint16_t x, uint16_t y, ui
   s.y = y;
   s.w = w;
   s.h = h;
+  s.drawBorder = drawBorder;
   loadWidgetSettings(settingsJson, sharedSettingsJson);
 
   const std::string dslJson = readFile(s.dslPath.c_str());
@@ -6308,6 +5953,17 @@ bool begin(const char* widgetId, const char* dslPath, uint16_t x, uint16_t y, ui
            static_cast<unsigned>(s.touchRegions.size()), static_cast<unsigned>(s.settingValues.size()),
            static_cast<unsigned>(s.httpMaxBytes), s.retainSourceJson ? 1 : 0);
 
+  // Pre-create the HTTP worker task when the first HTTP-source widget is
+  // registered so its stack is carved from the large contiguous heap block at
+  // init time, before any TLS allocations fragment it.
+  // Do NOT pre-create for WebSocket widgets with remote icons: those connect
+  // WS+TLS first (~40KB), and the HTTP worker must be created lazily afterward
+  // from the ~20KB remaining — pre-creating it beforehand steals heap the WS
+  // TLS handshake needs, pushing largest below the recovery threshold.
+  if (s.source == DataSource::kHttp) {
+    (void)ensureHttpWorker();
+  }
+
   render();
   sInstances.push_back(std::move(s));
   s = std::move(previous);
@@ -6316,25 +5972,34 @@ bool begin(const char* widgetId, const char* dslPath, uint16_t x, uint16_t y, ui
 
 bool tick(uint32_t nowMs) {
   bool drew = false;
-  bool triggerHaWsBootstrap = false;
-  if (takeHaWsLock(20)) {
-    if (sHaWs.bootstrapTriggerPending) {
-      triggerHaWsBootstrap = true;
-      sHaWs.bootstrapTriggerPending = false;
+  bool triggerWsBootstrap = false;
+  if (takeWsLock(20)) {
+    if (sWs.bootstrapTriggerPending) {
+      triggerWsBootstrap = true;
+      sWs.bootstrapTriggerPending = false;
     }
-    giveHaWsLock();
+    for (auto it = sWs.pendingReqById.begin(); it != sWs.pendingReqById.end();) {
+      if (nowMs - it->second.sentAtMs > kWsPendingReqTimeoutMs) {
+        sWs.cacheKeyToPendingBootstrapReq.erase(it->second.cacheKey);
+        sWs.cacheKeyToPendingSubscribeReq.erase(it->second.cacheKey);
+        it = sWs.pendingReqById.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    giveWsLock();
   }
-  if (triggerHaWsBootstrap) {
+  if (triggerWsBootstrap) {
     int triggered = 0;
     for (State& inst : sInstances) {
-      if (!inst.active || inst.source != DataSource::kHaWs) {
+      if (!inst.active || inst.source != DataSource::kWebSocket) {
         continue;
       }
       inst.lastFetchMs = 0;
       inst.backoffUntilMs = 0;
       ++triggered;
     }
-    ESP_LOGI(kTag, "ha_ws bootstrap trigger widgets=%d", triggered);
+    ESP_LOGI(kTag, "ws refresh trigger widgets=%d", triggered);
   }
   for (State& instance : sInstances) {
     s = std::move(instance);
@@ -6455,6 +6120,38 @@ bool onTap(const char* widgetId, uint16_t localX, uint16_t localY) {
         }
         s.tapRefreshDueMs = platform::millisMs() + kTapPostHttpRefreshDelayMs;
         ESP_LOGI(kTag, "tap touch_region http ok widget=%s", s.widgetId.c_str());
+        instance = std::move(s);
+        s = {};
+        return true;
+      }
+      if (tr.action == TouchActionType::kWsPublish) {
+        const std::string url = bindRuntimeTemplate(tr.wsUrl);
+        std::string reason;
+        std::string domain;
+        std::string service;
+        if (!url.empty() && parseHaServiceFromUrl(url, domain, service)) {
+          const std::string body = bindRuntimeTemplate(tr.wsBody);
+          const bool ok = wsCallService(domain, service, body, reason);
+          if (!ok) {
+            ESP_LOGW(kTag, "tap touch_region ws fail widget=%s reason=%s",
+                     s.widgetId.c_str(), reason.c_str());
+            instance = std::move(s);
+            s = {};
+            return false;
+          }
+        } else {
+          const std::string body = bindRuntimeTemplatePreserveUnknown(tr.wsBody);
+          ESP_LOGI(kTag, "tap touch_region ws publish widget=%s body=%s", s.widgetId.c_str(), body.c_str());
+          const bool ok = wsPublishMessage(body, reason);
+          if (!ok) {
+            ESP_LOGW(kTag, "tap touch_region ws fail widget=%s reason=%s",
+                     s.widgetId.c_str(), reason.c_str());
+            instance = std::move(s);
+            s = {};
+            return false;
+          }
+        }
+        ESP_LOGI(kTag, "tap touch_region ws ok widget=%s", s.widgetId.c_str());
         instance = std::move(s);
         s = {};
         return true;

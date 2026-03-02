@@ -1,8 +1,28 @@
 {
   "version": 1,
   "data": {
-    "source": "ha_ws",
-    "entity_id": "{{setting.entity_id}}",
+    "source": "websocket",
+    "connection_profile": "{{setting.connection_profile}}",
+    "cache_key": "{{setting.entity_id}}",
+    "bootstrap": {
+      "type": "render_template",
+      "template": "{% set s = states[entity_id] %}{{ {'entity_id': entity_id,'state': (s.state if s else ''),'last_updated': (s.last_updated.isoformat() if s and s.last_updated else ''),'last_changed': (s.last_changed.isoformat() if s and s.last_changed else ''),'attributes': {'friendly_name': (s.attributes.friendly_name if s else ''),'icon': (s.attributes.icon if s else '')}} | tojson }}",
+      "report_errors": true,
+      "variables": {
+        "entity_id": "{{setting.entity_id}}"
+      }
+    },
+    "subscribe": {
+      "type": "subscribe_trigger",
+      "trigger": [
+        {
+          "platform": "state",
+          "entity_id": "{{setting.entity_id}}"
+        }
+      ]
+    },
+    "result_path": "result",
+    "event_path": "event.variables.trigger.to_state",
     "poll_ms": 3000,
     "fields": {
       "name": "attributes.friendly_name",

@@ -67,29 +67,29 @@
         ]
       },
       {
-        "type": "hand",
+        "type": "line",
         "x": 80,
         "y": 60,
         "length": 30,
-        "thickness": 3,
+        "width": 3,
         "color": "#FFFFFF",
         "angle_expr": "(hour % 12) * 30 + minute * 0.5"
       },
       {
-        "type": "hand",
+        "type": "line",
         "x": 80,
         "y": 60,
         "length": 42,
-        "thickness": 2,
+        "width": 2,
         "color": "#9FD3FF",
         "angle_expr": "minute * 6"
       },
       {
-        "type": "hand",
+        "type": "line",
         "x": 80,
         "y": 60,
         "length": 50,
-        "thickness": 1,
+        "width": 1,
         "color": "#F5E663",
         "angle_expr": "second * 6"
       },

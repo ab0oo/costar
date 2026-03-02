@@ -4,11 +4,23 @@ CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=12288
+# TimeSync.cpp registers two NTP servers (pool.ntp.org + time.nist.gov);
+# default MAX_SERVERS=1 silently drops the second. Allow both.
+CONFIG_LWIP_SNTP_MAX_SERVERS=2
 CONFIG_LV_BUILD_EXAMPLES=n
 CONFIG_LV_USE_DEMO_WIDGETS=n
 CONFIG_LV_USE_DEMO_STRESS=n
 CONFIG_LV_USE_DEMO_MUSIC=n
 CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=y
-CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=2048
+# TLS 1.3 certificate records from api.open-meteo.com and homeassistant can be
+# 3.0-3.5KB. With DYNAMIC_BUFFER=y the buffer grows at handshake time, but it
+# needs at least this much as a base allocation. 4096 covers the cert record
+# with headroom; OUT stays at 2048 (our sends are small).
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=4096
 CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=2048
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+# Session tickets cache a ~10-20KB session struct in heap permanently after the
+# first TLS connection, fragmenting the largest contiguous block below the
+# threshold needed for a second TLS handshake. Disable since poll intervals
+# (180s+) are far longer than typical session ticket lifetimes anyway.
+CONFIG_MBEDTLS_CLIENT_SSL_SESSION_TICKETS=n

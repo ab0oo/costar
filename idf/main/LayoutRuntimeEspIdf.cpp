@@ -15,10 +15,7 @@ namespace {
 constexpr const char* kTag = "layout-runtime";
 constexpr uint16_t kBg = 0x0000;
 constexpr uint16_t kBorder = 0xFFFF;
-constexpr uint16_t kWeather = 0x7BEF;
-constexpr uint16_t kForecast = 0x07FF;
-constexpr uint16_t kClock = 0xFD20;
-constexpr uint16_t kGeneric = 0x4208;
+constexpr uint16_t kRegionBg = 0x4208;
 
 struct Region {
   std::string id;
@@ -27,8 +24,7 @@ struct Region {
   uint16_t y = 0;
   uint16_t w = 0;
   uint16_t h = 0;
-  std::string type;
-  std::string source;
+  bool drawBorder = true;
 };
 
 std::vector<Region> sRegions;
@@ -80,6 +76,31 @@ bool findIntField(const std::string& block, const char* key, int& out) {
     return false;
   }
   return parseIntAfterColon(block, keyPos, out);
+}
+
+bool findBoolField(const std::string& block, const char* key, bool& out) {
+  const std::string token = std::string("\"") + key + "\"";
+  const size_t keyPos = block.find(token);
+  if (keyPos == std::string::npos) {
+    return false;
+  }
+  size_t i = block.find(':', keyPos);
+  if (i == std::string::npos) {
+    return false;
+  }
+  i = skipWs(block, i + 1);
+  if (i >= block.size()) {
+    return false;
+  }
+  if (block.compare(i, 4, "true") == 0) {
+    out = true;
+    return true;
+  }
+  if (block.compare(i, 5, "false") == 0) {
+    out = false;
+    return true;
+  }
+  return false;
 }
 
 std::string findStringField(const std::string& block, const char* key) {
@@ -273,27 +294,13 @@ bool parseU16Checked(int value, uint16_t& out) {
   return true;
 }
 
-uint16_t colorForRegion(const Region& r) {
-  if (r.widget == "weather-now" || r.source.find("weather_now") != std::string::npos) {
-    return kWeather;
+void drawRegionFrame(const Region& r) {
+  (void)display_spi::fillRect(r.x, r.y, r.w, r.h, kRegionBg);
+  if (!r.drawBorder) {
+    return;
   }
-  if (r.source.find("forecast") != std::string::npos) {
-    return kForecast;
-  }
-  if (r.source.find("clock") != std::string::npos) {
-    return kClock;
-  }
-  if (r.type.find("dsl") != std::string::npos) {
-    return kGeneric;
-  }
-  return kGeneric;
-}
-
-void drawRegionFrame(const Region& r, uint16_t color) {
   const uint16_t x2 = static_cast<uint16_t>(r.x + r.w - 1);
   const uint16_t y2 = static_cast<uint16_t>(r.y + r.h - 1);
-
-  (void)display_spi::fillRect(r.x, r.y, r.w, r.h, color);
   // 1px border
   (void)display_spi::fillRect(r.x, r.y, r.w, 1, kBorder);
   (void)display_spi::fillRect(r.x, y2, r.w, 1, kBorder);
@@ -304,7 +311,7 @@ void drawRegionFrame(const Region& r, uint16_t color) {
 void drawScene() {
   (void)display_spi::clear(kBg);
   for (const Region& r : sRegions) {
-    drawRegionFrame(r, colorForRegion(r));
+    drawRegionFrame(r);
   }
   sDrawn = true;
 }
@@ -362,8 +369,7 @@ bool begin(const char* layoutPath) {
 
     r.id = findStringField(item, "id");
     r.widget = findStringField(item, "widget");
-    r.type = findStringField(item, "type");
-    r.source = findStringField(item, "source");
+    (void)findBoolField(item, "draw_border", r.drawBorder);
     sRegions.push_back(std::move(r));
   }
 
@@ -376,9 +382,8 @@ bool begin(const char* layoutPath) {
            layoutPath != nullptr ? layoutPath : "(null)");
   for (size_t i = 0; i < sRegions.size(); ++i) {
     const Region& r = sRegions[i];
-    ESP_LOGI(kTag, "region[%u] id=%s widget=%s type=%s src=%s rect=%u,%u %ux%u",
-             static_cast<unsigned>(i), r.id.c_str(), r.widget.c_str(), r.type.c_str(),
-             r.source.c_str(), r.x, r.y, r.w, r.h);
+    ESP_LOGI(kTag, "region[%u] id=%s widget=%s rect=%u,%u %ux%u",
+             static_cast<unsigned>(i), r.id.c_str(), r.widget.c_str(), r.x, r.y, r.w, r.h);
   }
 
   drawScene();
@@ -397,12 +402,12 @@ bool begin(const char* layoutPath) {
     } else {
       std::string dslName = r.widget;
       std::replace(dslName.begin(), dslName.end(), '-', '_');
-      dslPath = "/littlefs/dsl_active/" + dslName + ".json";
+      dslPath = "/littlefs/dsl_available/" + dslName + ".json";
       candidatePaths.push_back(dslPath);
       ESP_LOGW(kTag, "widget=%s missing widget_defs dsl_path, fallback=%s", r.widget.c_str(),
                dslPath.c_str());
       if (r.widget == "clock-full") {
-        candidatePaths.push_back("/littlefs/dsl_active/clock_analog_full.json");
+        candidatePaths.push_back("/littlefs/dsl_available/clock_analog_full.json");
       }
     }
 
@@ -411,7 +416,7 @@ bool begin(const char* layoutPath) {
       const char* settingsJson = settingsObj.empty() ? nullptr : settingsObj.c_str();
       const char* sharedSettingsJson = sSharedSettingsObj.empty() ? nullptr : sSharedSettingsObj.c_str();
       if (dsl_widget_runtime::begin(r.widget.c_str(), path.c_str(), r.x, r.y, r.w, r.h, settingsJson,
-                                    sharedSettingsJson)) {
+                                    sharedSettingsJson, r.drawBorder)) {
         widgetStarted = true;
         break;
       }
@@ -420,6 +425,12 @@ bool begin(const char* layoutPath) {
       ++started;
     }
   }
+  // Widget init complete; release layout-parsing strings that are no longer needed.
+  sWidgetDefsObj.clear();
+  sWidgetDefsObj.shrink_to_fit();
+  sSharedSettingsObj.clear();
+  sSharedSettingsObj.shrink_to_fit();
+
   sActive = started > 0;
   ESP_LOGI(kTag, "dsl widgets started=%d", started);
   return sActive;

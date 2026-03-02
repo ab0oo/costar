@@ -6,7 +6,11 @@ idf_component_register(
     "DisplayBootstrapEspIdf.cpp"
     "DisplaySpiEspIdf.cpp"
     "LayoutRuntimeEspIdf.cpp"
+    "DslJson.cpp"
+    "DslTime.cpp"
     "DslWidgetRuntimeEspIdf.cpp"
+    "GeoLocation.cpp"
+    "TouchCalibration.cpp"
     "ConfigScreenEspIdf.cpp"
     "TouchInputEspIdf.cpp"
     "TextEntryEspIdf.cpp"
@@ -20,6 +24,7 @@ idf_component_register(
     "."
     "../../include"
   REQUIRES
+    esp_app_format
     esp_event
     esp_timer
     esp_wifi

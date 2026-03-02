@@ -7,7 +7,8 @@
 #include "platform/Platform.h"
 
 namespace {
-constexpr time_t kUnixYear2000 = 946684800;
+// Require a modern UTC epoch before treating time as synced for TLS.
+constexpr time_t kUtcReadyMinUnix = 1704067200;  // 2024-01-01T00:00:00Z
 }  // namespace
 
 namespace timesync {
@@ -26,8 +27,7 @@ bool ensureUtcTime(uint32_t timeoutMs) {
   configureUtcNtp();
   const uint32_t startMs = platform::millisMs();
   while (platform::millisMs() - startMs < timeoutMs) {
-    const time_t nowUtc = time(nullptr);
-    if (nowUtc > kUnixYear2000) {
+    if (isUtcTimeReady()) {
       return true;
     }
     platform::sleepMs(120);
@@ -35,18 +35,24 @@ bool ensureUtcTime(uint32_t timeoutMs) {
   return false;
 }
 
+bool isUtcTimeReady() { return time(nullptr) >= kUtcReadyMinUnix; }
+
 void logUiTimeContext(const char* timezone, int offsetMinutes, bool hasOffset) {
   configureUtcNtp();
+  const bool ready = isUtcTimeReady();
   if (hasOffset) {
-    platform::logi("time", "NTP UTC sync; local UI offset=%d min tz='%s'", offsetMinutes,
-                   timezone == nullptr ? "" : timezone);
+    platform::logi("time", "UTC time %s; local UI offset=%d min tz='%s'",
+                   ready ? "ready" : "not yet synced",
+                   offsetMinutes, timezone == nullptr ? "" : timezone);
     return;
   }
   if (timezone != nullptr && *timezone != '\0') {
-    platform::logi("time", "NTP UTC sync; tz='%s' (offset unknown)", timezone);
+    platform::logi("time", "UTC time %s; tz='%s' (offset unknown)",
+                   ready ? "ready" : "not yet synced",
+                   timezone);
     return;
   }
-  platform::logi("time", "NTP UTC sync; timezone unavailable");
+  platform::logi("time", "UTC time %s; timezone unavailable", ready ? "ready" : "not yet synced");
 }
 
 }  // namespace timesync

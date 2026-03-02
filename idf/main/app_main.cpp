@@ -3,8 +3,9 @@
 #include "ConfigScreenEspIdf.h"
 #include "DisplayBootstrapEspIdf.h"
 #include "DisplaySpiEspIdf.h"
-#include "HttpTransportGate.h"
+#include "GeoLocation.h"
 #include "LayoutRuntimeEspIdf.h"
+#include "TouchCalibration.h"
 #include "TouchInputEspIdf.h"
 #include "TextEntryEspIdf.h"
 #include "LvglPasswordPrompt.h"
@@ -18,12 +19,11 @@
 
 #include "esp_err.h"
 #include "esp_event.h"
+#include "esp_app_desc.h"
 #include "esp_heap_caps.h"
-#include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
-#include "esp_crt_bundle.h"
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
@@ -33,8 +33,6 @@
 #include <cstring>
 #include <algorithm>
 #include <array>
-#include <cerrno>
-#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -59,9 +57,6 @@ constexpr const char* kLayoutNytPath = "/littlefs/screen_layout_nyt.json";
 constexpr const char* kLayoutQuakesPath = "/littlefs/screen_layout_quakes.json";
 constexpr EventBits_t kWifiConnectedBit = BIT0;
 constexpr EventBits_t kWifiFailedBit = BIT1;
-constexpr uint32_t kHttpTransportGateTimeoutMs = 7000U;
-constexpr size_t kHttpTextMaxBytes = 8192U;
-
 EventGroupHandle_t sWifiEventGroup = nullptr;
 bool sWifiStackReady = false;
 bool sWifiHandlersRegistered = false;
@@ -116,408 +111,24 @@ struct WifiApEntry {
   bool secure = true;
 };
 
-struct GeoContext {
-  float lat = NAN;
-  float lon = NAN;
-  std::string timezone;
-  int utcOffsetMinutes = 0;
-  bool hasUtcOffset = false;
-  std::string source = "none";
-  bool hasLocation = false;
-};
 
-struct HttpTextResponse {
-  int statusCode = 0;
-  std::string body;
-  std::string reason;
-};
-
-bool parseJsonStringLiteral(const std::string& text, size_t startQuote, std::string& out) {
-  if (startQuote >= text.size() || text[startQuote] != '"') {
-    return false;
+void logBuildFingerprint() {
+  const esp_app_desc_t* desc = esp_app_get_description();
+  if (desc == nullptr) {
+    ESP_LOGW(kBootTag, "build id unavailable");
+    return;
   }
-  out.clear();
-  out.reserve(64);
-  bool esc = false;
-  for (size_t i = startQuote + 1; i < text.size(); ++i) {
-    const char c = text[i];
-    if (esc) {
-      out.push_back(c);
-      esc = false;
-      continue;
-    }
-    if (c == '\\') {
-      esc = true;
-      continue;
-    }
-    if (c == '"') {
-      return true;
-    }
-    out.push_back(c);
+  char shaHex[65] = {};
+  for (size_t i = 0; i < 32; ++i) {
+    std::snprintf(shaHex + (i * 2), 3, "%02x", static_cast<unsigned>(desc->app_elf_sha256[i]));
   }
-  return false;
+  shaHex[64] = '\0';
+  ESP_LOGI(kBootTag, "build id=%s", shaHex);
+  ESP_LOGI(kBootTag, "build meta version=%s date=%s time=%s", desc->version, desc->date, desc->time);
 }
 
-bool findJsonKeyValueStart(const std::string& json, const char* key, size_t& valueStart) {
-  if (key == nullptr || *key == '\0') {
-    return false;
-  }
-  const std::string needle = std::string("\"") + key + "\"";
-  size_t pos = json.find(needle);
-  while (pos != std::string::npos) {
-    size_t colon = json.find(':', pos + needle.size());
-    if (colon == std::string::npos) {
-      return false;
-    }
-    size_t value = colon + 1;
-    while (value < json.size() &&
-           (json[value] == ' ' || json[value] == '\t' || json[value] == '\r' || json[value] == '\n')) {
-      ++value;
-    }
-    if (value < json.size()) {
-      valueStart = value;
-      return true;
-    }
-    pos = json.find(needle, pos + needle.size());
-  }
-  return false;
-}
 
-bool extractJsonString(const std::string& json, const char* key, std::string& out) {
-  size_t valueStart = 0;
-  if (!findJsonKeyValueStart(json, key, valueStart)) {
-    return false;
-  }
-  if (valueStart >= json.size() || json[valueStart] != '"') {
-    return false;
-  }
-  return parseJsonStringLiteral(json, valueStart, out);
-}
 
-bool extractJsonNumber(const std::string& json, const char* key, double& out) {
-  size_t valueStart = 0;
-  if (!findJsonKeyValueStart(json, key, valueStart)) {
-    return false;
-  }
-  char* end = nullptr;
-  errno = 0;
-  const double value = std::strtod(json.c_str() + valueStart, &end);
-  if (end == json.c_str() + valueStart || errno != 0) {
-    return false;
-  }
-  out = value;
-  return true;
-}
-
-bool extractNestedObjectValue(const std::string& json, const char* parentKey, const char* childKey,
-                              std::string& out) {
-  size_t valueStart = 0;
-  if (!findJsonKeyValueStart(json, parentKey, valueStart)) {
-    return false;
-  }
-  if (valueStart >= json.size() || json[valueStart] != '{') {
-    return false;
-  }
-  const size_t objEnd = json.find('}', valueStart + 1);
-  if (objEnd == std::string::npos || objEnd <= valueStart) {
-    return false;
-  }
-  const std::string view = json.substr(valueStart, objEnd - valueStart + 1);
-  return extractJsonString(view, childKey, out);
-}
-
-bool extractNestedObjectNumber(const std::string& json, const char* parentKey, const char* childKey,
-                               double& out) {
-  size_t valueStart = 0;
-  if (!findJsonKeyValueStart(json, parentKey, valueStart)) {
-    return false;
-  }
-  if (valueStart >= json.size() || json[valueStart] != '{') {
-    return false;
-  }
-  const size_t objEnd = json.find('}', valueStart + 1);
-  if (objEnd == std::string::npos || objEnd <= valueStart) {
-    return false;
-  }
-  const std::string view = json.substr(valueStart, objEnd - valueStart + 1);
-  return extractJsonNumber(view, childKey, out);
-}
-
-bool parseOffsetText(const std::string& rawText, int& outMinutes) {
-  std::string raw = rawText;
-  raw.erase(std::remove_if(raw.begin(), raw.end(), [](char c) {
-    return c == ' ' || c == '\t' || c == '\r' || c == '\n';
-  }), raw.end());
-  if (raw.empty()) {
-    return false;
-  }
-  if (raw.rfind("UTC", 0) == 0) {
-    raw = raw.substr(3);
-  }
-  if (raw.size() < 2) {
-    return false;
-  }
-  const char sign = raw[0];
-  if (sign != '+' && sign != '-') {
-    return false;
-  }
-  int hh = 0;
-  int mm = 0;
-  if (raw.size() == 6 && raw[3] == ':') {  // +05:30
-    hh = std::atoi(raw.substr(1, 2).c_str());
-    mm = std::atoi(raw.substr(4, 2).c_str());
-  } else if (raw.size() == 5) {  // +0530
-    hh = std::atoi(raw.substr(1, 2).c_str());
-    mm = std::atoi(raw.substr(3, 2).c_str());
-  } else if (raw.size() == 3) {  // +05
-    hh = std::atoi(raw.substr(1, 2).c_str());
-    mm = 0;
-  } else {
-    return false;
-  }
-  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) {
-    return false;
-  }
-  int total = hh * 60 + mm;
-  if (sign == '-') {
-    total = -total;
-  }
-  outMinutes = total;
-  return true;
-}
-
-bool httpGetText(const char* url, HttpTextResponse& out) {
-  out = {};
-  if (url == nullptr || *url == '\0') {
-    out.reason = "url-empty";
-    return false;
-  }
-  if (!http_transport_gate::take(kHttpTransportGateTimeoutMs)) {
-    out.reason = "transport-gate-timeout";
-    return false;
-  }
-
-  esp_http_client_config_t cfg = {};
-  cfg.url = url;
-  cfg.method = HTTP_METHOD_GET;
-  cfg.timeout_ms = 8000;
-  cfg.buffer_size = 1024;
-  cfg.crt_bundle_attach = esp_crt_bundle_attach;
-  cfg.user_agent = "CoStar-IDF/1.0";
-
-  esp_http_client_handle_t client = esp_http_client_init(&cfg);
-  if (client == nullptr) {
-    http_transport_gate::give();
-    out.reason = "client-init";
-    return false;
-  }
-
-  bool ok = false;
-  esp_err_t err = esp_http_client_open(client, 0);
-  if (err == ESP_OK) {
-    const int64_t contentLength = esp_http_client_fetch_headers(client);
-    out.statusCode = esp_http_client_get_status_code(client);
-    out.body.clear();
-    if (contentLength > 0) {
-      if (static_cast<size_t>(contentLength) > kHttpTextMaxBytes) {
-        out.reason = "body-too-large";
-      } else {
-        out.body.reserve(static_cast<size_t>(contentLength) + 1U);
-      }
-    } else {
-      out.body.reserve(1024);
-    }
-    if (out.reason.empty()) {
-      char buf[384];
-      for (;;) {
-        const int n = esp_http_client_read(client, buf, sizeof(buf));
-        if (n > 0) {
-          if (out.body.size() + static_cast<size_t>(n) > kHttpTextMaxBytes) {
-            out.reason = "body-too-large";
-            break;
-          }
-          out.body.append(buf, static_cast<size_t>(n));
-          continue;
-        }
-        if (n == 0) {
-          ok = true;
-        } else {
-          out.reason = "read";
-        }
-        break;
-      }
-    }
-  } else {
-    out.reason = esp_err_to_name(err);
-  }
-
-  esp_http_client_close(client);
-  esp_http_client_cleanup(client);
-  http_transport_gate::give();
-  return ok;
-}
-
-bool parseGeoPayload(const std::string& body, GeoContext& outGeo, std::string& outLabel) {
-  double lat = NAN;
-  double lon = NAN;
-  bool hasLat = extractJsonNumber(body, "latitude", lat);
-  bool hasLon = extractJsonNumber(body, "longitude", lon);
-  if (!hasLat) {
-    hasLat = extractJsonNumber(body, "lat", lat);
-  }
-  if (!hasLon) {
-    hasLon = extractJsonNumber(body, "lon", lon);
-  }
-  if (!hasLat || !hasLon) {
-    return false;
-  }
-
-  std::string tz;
-  if (!extractJsonString(body, "timezone", tz)) {
-    (void)extractNestedObjectValue(body, "timezone", "id", tz);
-  }
-  if (tz.empty()) {
-    return false;
-  }
-
-  int offsetMinutes = 0;
-  bool hasOffset = false;
-  std::string offsetText;
-  if (extractJsonString(body, "utc_offset", offsetText) && parseOffsetText(offsetText, offsetMinutes)) {
-    hasOffset = true;
-  }
-  if (!hasOffset && extractNestedObjectValue(body, "timezone", "utc", offsetText) &&
-      parseOffsetText(offsetText, offsetMinutes)) {
-    hasOffset = true;
-  }
-  if (!hasOffset) {
-    double tzOffsetSeconds = 0;
-    if (extractNestedObjectNumber(body, "timezone", "offset", tzOffsetSeconds)) {
-      offsetMinutes = static_cast<int>(tzOffsetSeconds / 60.0);
-      hasOffset = true;
-    }
-  }
-  if (!hasOffset) {
-    double utcOffsetSeconds = 0;
-    if (extractJsonNumber(body, "utc_offset_seconds", utcOffsetSeconds)) {
-      offsetMinutes = static_cast<int>(utcOffsetSeconds / 60.0);
-      hasOffset = true;
-    }
-  }
-
-  std::string city;
-  std::string region;
-  std::string country;
-  (void)extractJsonString(body, "city", city);
-  (void)extractJsonString(body, "region", region);
-  if (country.empty()) {
-    (void)extractJsonString(body, "country", country);
-  }
-  if (country.empty()) {
-    (void)extractJsonString(body, "country_name", country);
-  }
-  outLabel.clear();
-  if (!city.empty()) {
-    outLabel = city;
-  }
-  if (!region.empty()) {
-    if (!outLabel.empty()) {
-      outLabel += ", ";
-    }
-    outLabel += region;
-  }
-  if (!country.empty()) {
-    if (!outLabel.empty()) {
-      outLabel += ", ";
-    }
-    outLabel += country;
-  }
-
-  outGeo.lat = static_cast<float>(lat);
-  outGeo.lon = static_cast<float>(lon);
-  outGeo.timezone = tz;
-  outGeo.utcOffsetMinutes = offsetMinutes;
-  outGeo.hasUtcOffset = hasOffset;
-  outGeo.hasLocation = true;
-  return true;
-}
-
-bool fetchTimezoneOffsetMinutes(const std::string& timezone, int& outMinutes) {
-  if (timezone.empty()) {
-    return false;
-  }
-  const std::string url = "https://worldtimeapi.org/api/timezone/" + timezone;
-  HttpTextResponse resp;
-  if (!httpGetText(url.c_str(), resp)) {
-    return false;
-  }
-  if (resp.statusCode < 200 || resp.statusCode >= 300) {
-    return false;
-  }
-  std::string offsetText;
-  if (!extractJsonString(resp.body, "utc_offset", offsetText)) {
-    return false;
-  }
-  return parseOffsetText(offsetText, outMinutes);
-}
-
-bool refreshGeoContextFromInternet(GeoContext& geoOut) {
-  static constexpr std::array<const char*, 4> kGeoUrls = {
-      "https://ipwho.is/",
-      "https://ipapi.co/json/",
-      "https://ipinfo.io/json",
-      "http://ip-api.com/json/",
-  };
-
-  for (const char* url : kGeoUrls) {
-    HttpTextResponse resp;
-    if (!httpGetText(url, resp)) {
-      ESP_LOGW("geo", "fetch fail source=%s reason=%s", url, resp.reason.c_str());
-      continue;
-    }
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      ESP_LOGW("geo", "fetch fail source=%s status=%d", url, resp.statusCode);
-      continue;
-    }
-    std::string label;
-    GeoContext parsed;
-    if (!parseGeoPayload(resp.body, parsed, label)) {
-      ESP_LOGW("geo", "parse fail source=%s body_len=%u", url, static_cast<unsigned>(resp.body.size()));
-      continue;
-    }
-    if (!parsed.hasUtcOffset) {
-      int resolvedOffset = 0;
-      if (fetchTimezoneOffsetMinutes(parsed.timezone, resolvedOffset)) {
-        parsed.utcOffsetMinutes = resolvedOffset;
-        parsed.hasUtcOffset = true;
-        ESP_LOGI("geo", "timezone offset resolved from worldtimeapi tz=%s off_min=%d",
-                 parsed.timezone.c_str(), parsed.utcOffsetMinutes);
-      }
-    }
-    parsed.source = url;
-    geoOut = parsed;
-    constexpr const char* kGeoNs = "geo";
-    constexpr const char* kModeKey = "mode";
-    constexpr const char* kCachedLatKey = "lat";
-    constexpr const char* kCachedLonKey = "lon";
-    constexpr const char* kCachedTzKey = "tz";
-    constexpr const char* kCachedOffsetKey = "off_min";
-    constexpr const char* kCachedLabelKey = "label";
-    constexpr int kModeAuto = 0;
-    constexpr int kOffsetUnknown = -32768;
-    (void)platform::prefs::putInt(kGeoNs, kModeKey, kModeAuto);
-    (void)platform::prefs::putFloat(kGeoNs, kCachedLatKey, geoOut.lat);
-    (void)platform::prefs::putFloat(kGeoNs, kCachedLonKey, geoOut.lon);
-    (void)platform::prefs::putString(kGeoNs, kCachedTzKey, geoOut.timezone.c_str());
-    (void)platform::prefs::putInt(kGeoNs, kCachedOffsetKey,
-                                  geoOut.hasUtcOffset ? geoOut.utcOffsetMinutes : kOffsetUnknown);
-    if (!label.empty()) {
-      (void)platform::prefs::putString(kGeoNs, kCachedLabelKey, label.c_str());
-    }
-    return true;
-  }
-  return false;
-}
 
 void initNvs() {
   esp_err_t err = nvs_flash_init();
@@ -749,15 +360,21 @@ void drawTinyText(int x, int y, const char* text, uint16_t fg, uint16_t bg, int 
 RuntimeMenuRects calcRuntimeMenuRects() {
   RuntimeMenuRects out = {};
   const uint16_t w = display_spi::width();
+  const uint16_t h = display_spi::height();
   const uint16_t menuBtnW = 24;
   const uint16_t menuBtnH = 20;
   const uint16_t margin = 4;
-  out.button = {static_cast<uint16_t>(w - menuBtnW - margin), margin, menuBtnW, menuBtnH};
+  (void)w;
+  out.button = {margin, static_cast<uint16_t>(h - menuBtnH - margin), menuBtnW, menuBtnH};
 
   const uint16_t panelW = 160;
   const uint16_t rowH = 18;
-  out.panel = {static_cast<uint16_t>(w - panelW - margin), static_cast<uint16_t>(out.button.y + out.button.h + 4),
-               panelW, static_cast<uint16_t>(rowH * 6 + 6)};
+  const uint16_t panelH = static_cast<uint16_t>(rowH * 6 + 6);
+  int panelY = static_cast<int>(out.button.y) - static_cast<int>(panelH) - 4;
+  if (panelY < 0) {
+    panelY = 0;
+  }
+  out.panel = {margin, static_cast<uint16_t>(panelY), panelW, panelH};
   out.rowLayoutA = {static_cast<uint16_t>(out.panel.x + 3), static_cast<uint16_t>(out.panel.y + 3),
                     static_cast<uint16_t>(panelW - 6), rowH};
   out.rowLayoutB = {static_cast<uint16_t>(out.panel.x + 3), static_cast<uint16_t>(out.panel.y + 3 + rowH),
@@ -882,432 +499,10 @@ void savePreferredLayoutPath(const std::string& path) {
   (void)platform::prefs::putString(kLayoutPrefsNs, kLayoutPrefsKey, path.c_str());
 }
 
-void drawCalibrationTarget(uint16_t x, uint16_t y, uint16_t color) {
-  const uint16_t dot = 8;
-  const uint16_t arm = 16;
-  const uint16_t halfDot = dot / 2;
-  (void)display_spi::fillRect(static_cast<uint16_t>(x - halfDot), static_cast<uint16_t>(y - 1), dot, 3,
-                              color);
-  (void)display_spi::fillRect(static_cast<uint16_t>(x - 1), static_cast<uint16_t>(y - halfDot), 3, dot,
-                              color);
-  (void)display_spi::fillRect(static_cast<uint16_t>(x - 1), static_cast<uint16_t>(y - arm), 3,
-                              static_cast<uint16_t>(arm * 2), color);
-  (void)display_spi::fillRect(static_cast<uint16_t>(x - arm), static_cast<uint16_t>(y - 1),
-                              static_cast<uint16_t>(arm * 2), 3, color);
-}
 
-void showPostCalibrationColorCheck() {
-  const uint16_t w = display_spi::width();
-  const uint16_t h = display_spi::height();
-  if (w < 40 || h < 40) {
-    return;
-  }
-  const uint16_t halfW = w / 2;
-  const uint16_t halfH = h / 2;
-  const uint16_t cBlack = 0x0000;
-  const uint16_t cWhite = 0xFFFF;
-  const uint16_t cRed = 0xF800;
-  const uint16_t cGreen = 0x07E0;
-  const uint16_t cBlue = 0x001F;
 
-  (void)display_spi::fillRect(0, 0, halfW, halfH, cBlack);
-  (void)display_spi::fillRect(halfW, 0, static_cast<uint16_t>(w - halfW), halfH, cWhite);
 
-  const uint16_t lowerY = halfH;
-  const uint16_t lowerH = static_cast<uint16_t>(h - halfH);
-  const uint16_t third = w / 3;
-  (void)display_spi::fillRect(0, lowerY, third, lowerH, cRed);
-  (void)display_spi::fillRect(third, lowerY, third, lowerH, cGreen);
-  (void)display_spi::fillRect(static_cast<uint16_t>(third * 2), lowerY,
-                              static_cast<uint16_t>(w - third * 2), lowerH, cBlue);
 
-  ESP_LOGI(kTouchTag, "post-calibration color check shown (TL black, TR white, RGB bottom)");
-  platform::sleepMs(1200);
-}
-
-void drawDisplayModePattern(bool bgr, bool invert) {
-  const uint16_t w = display_spi::width();
-  const uint16_t h = display_spi::height();
-  if (w < 40 || h < 40) {
-    return;
-  }
-  const uint16_t cBlack = 0x0000;
-  const uint16_t cWhite = 0xFFFF;
-  const uint16_t cRed = 0xF800;
-  const uint16_t cGreen = 0x07E0;
-  const uint16_t cBlue = 0x001F;
-  const uint16_t cYellow = 0xFFE0;
-
-  (void)display_spi::clear(0x0000);
-  const uint16_t halfW = w / 2;
-  const uint16_t topH = h / 3;
-  const uint16_t midY = topH;
-  const uint16_t midH = h / 3;
-  const uint16_t botY = static_cast<uint16_t>(topH + midH);
-  const uint16_t botH = static_cast<uint16_t>(h - botY);
-
-  (void)display_spi::fillRect(0, 0, halfW, topH, cBlack);
-  (void)display_spi::fillRect(halfW, 0, static_cast<uint16_t>(w - halfW), topH, cWhite);
-
-  const uint16_t quarter = w / 4;
-  (void)display_spi::fillRect(0, midY, quarter, midH, cRed);
-  (void)display_spi::fillRect(quarter, midY, quarter, midH, cGreen);
-  (void)display_spi::fillRect(static_cast<uint16_t>(quarter * 2), midY, quarter, midH, cBlue);
-  (void)display_spi::fillRect(static_cast<uint16_t>(quarter * 3), midY,
-                              static_cast<uint16_t>(w - quarter * 3), midH, cYellow);
-
-  const uint16_t leftColor = bgr ? 0x001F : 0x07E0;
-  const uint16_t rightColor = invert ? 0xF800 : 0x07E0;
-  (void)display_spi::fillRect(0, botY, halfW, botH, leftColor);
-  (void)display_spi::fillRect(halfW, botY, static_cast<uint16_t>(w - halfW), botH, rightColor);
-}
-
-bool runDisplayModeCalibrationIfNeeded() {
-  constexpr const char* kDisplayPrefsNs = "display";
-  constexpr const char* kColorSetKey = "color_set";
-  constexpr const char* kColorBgrKey = "color_bgr";
-  constexpr const char* kInvertSetKey = "inv_set";
-  constexpr const char* kInvertOnKey = "inv_on";
-
-  const bool haveColor = platform::prefs::getBool(kDisplayPrefsNs, kColorSetKey, false);
-  const bool haveInvert = platform::prefs::getBool(kDisplayPrefsNs, kInvertSetKey, false);
-
-  bool bgr = platform::prefs::getBool(kDisplayPrefsNs, kColorBgrKey, false);
-  bool invert = platform::prefs::getBool(kDisplayPrefsNs, kInvertOnKey, true);
-  if (!display_spi::applyPanelTuning(bgr, invert, false)) {
-    return false;
-  }
-
-  if (haveColor && haveInvert) {
-    ESP_LOGI(kTouchTag, "display mode already calibrated; using saved bgr=%d invert=%d",
-             bgr ? 1 : 0, invert ? 1 : 0);
-    return true;
-  }
-
-  drawDisplayModePattern(bgr, invert);
-  ESP_LOGW(kTouchTag,
-           "display mode calibration: tap LEFT half toggles RGB/BGR, RIGHT half toggles invert, "
-           "BOTTOM third saves");
-
-  if (!AppConfig::kTouchEnabled) {
-    (void)display_spi::applyPanelTuning(bgr, invert, true);
-    return true;
-  }
-
-  const uint32_t start = platform::millisMs();
-  bool held = false;
-  while (platform::millisMs() - start < 45000U) {
-    touch_input::Point p;
-    if (!touch_input::read(p)) {
-      held = false;
-      platform::sleepMs(15);
-      continue;
-    }
-    if (held) {
-      platform::sleepMs(25);
-      continue;
-    }
-    held = true;
-    const uint16_t h = display_spi::height();
-    const uint16_t w = display_spi::width();
-    if (p.y >= (h * 2U) / 3U) {
-      (void)display_spi::applyPanelTuning(bgr, invert, true);
-      ESP_LOGI(kTouchTag, "display mode saved bgr=%d invert=%d", bgr ? 1 : 0, invert ? 1 : 0);
-      (void)display_spi::clear(0x0000);
-      return true;
-    }
-    if (p.x < (w / 2U)) {
-      bgr = !bgr;
-    } else {
-      invert = !invert;
-    }
-    (void)display_spi::applyPanelTuning(bgr, invert, false);
-    drawDisplayModePattern(bgr, invert);
-    ESP_LOGI(kTouchTag, "display mode trial bgr=%d invert=%d", bgr ? 1 : 0, invert ? 1 : 0);
-  }
-
-  (void)display_spi::applyPanelTuning(bgr, invert, true);
-  ESP_LOGW(kTouchTag, "display mode calibration timeout; saved current bgr=%d invert=%d", bgr ? 1 : 0,
-           invert ? 1 : 0);
-  (void)display_spi::clear(0x0000);
-  return true;
-}
-
-bool captureCalibrationPoint(uint16_t targetX, uint16_t targetY, uint16_t& rawX, uint16_t& rawY,
-                             bool requireNearTarget) {
-  const uint16_t cBg = 0x0000;
-  const uint16_t cTarget = 0xFFFF;
-
-  (void)display_spi::clear(cBg);
-  drawCalibrationTarget(targetX, targetY, cTarget);
-
-  const uint32_t timeoutMs = 20000;
-  const uint32_t start = platform::millisMs();
-  // Require release before starting this corner capture to avoid carrying
-  // a lingering previous press into the next point.
-  while (platform::millisMs() - start < 1500U) {
-    touch_input::Point p;
-    if (!touch_input::read(p)) {
-      break;
-    }
-    platform::sleepMs(12);
-  }
-
-  uint32_t sumX = 0;
-  uint32_t sumY = 0;
-  uint16_t count = 0;
-  bool touching = false;
-  uint16_t minRawX = 0xFFFF;
-  uint16_t maxRawX = 0;
-  uint16_t minRawY = 0xFFFF;
-  uint16_t maxRawY = 0;
-  constexpr uint16_t kMinSamples = 8;
-  constexpr uint16_t kMaxRawJitter = 180;
-  constexpr int32_t kNearRadiusPx = 40;
-
-  while (platform::millisMs() - start < timeoutMs) {
-    touch_input::Point p;
-    if (touch_input::read(p)) {
-      touching = true;
-      if (requireNearTarget) {
-        const int32_t dx = static_cast<int32_t>(p.x) - static_cast<int32_t>(targetX);
-        const int32_t dy = static_cast<int32_t>(p.y) - static_cast<int32_t>(targetY);
-        if (dx < -kNearRadiusPx || dx > kNearRadiusPx || dy < -kNearRadiusPx ||
-            dy > kNearRadiusPx) {
-          platform::sleepMs(20);
-          continue;
-        }
-      }
-      if (count < 24) {
-        sumX += p.rawX;
-        sumY += p.rawY;
-        minRawX = std::min<uint16_t>(minRawX, p.rawX);
-        maxRawX = std::max<uint16_t>(maxRawX, p.rawX);
-        minRawY = std::min<uint16_t>(minRawY, p.rawY);
-        maxRawY = std::max<uint16_t>(maxRawY, p.rawY);
-        ++count;
-      }
-      if (requireNearTarget) {
-        config_screen::markTouch(p.x, p.y);
-      }
-      platform::sleepMs(20);
-      continue;
-    }
-
-    if (touching) {
-      const uint16_t jitterX = static_cast<uint16_t>(maxRawX - minRawX);
-      const uint16_t jitterY = static_cast<uint16_t>(maxRawY - minRawY);
-      if (count >= kMinSamples && jitterX <= kMaxRawJitter && jitterY <= kMaxRawJitter) {
-        rawX = static_cast<uint16_t>(sumX / count);
-        rawY = static_cast<uint16_t>(sumY / count);
-        platform::sleepMs(120);
-        return true;
-      }
-      touching = false;
-      sumX = 0;
-      sumY = 0;
-      count = 0;
-      minRawX = 0xFFFF;
-      maxRawX = 0;
-      minRawY = 0xFFFF;
-      maxRawY = 0;
-    }
-    platform::sleepMs(12);
-  }
-  return false;
-}
-
-bool runTouchCalibration(bool force) {
-  touch_input::Calibration cal = {};
-  if (!force) {
-    if (touch_input::loadCalibration(cal)) {
-      ESP_LOGI(kTouchTag, "cal loaded minX=%u maxX=%u minY=%u maxY=%u invX=%d invY=%d", cal.rawMinX,
-               cal.rawMaxX, cal.rawMinY, cal.rawMaxY, cal.invertX ? 1 : 0, cal.invertY ? 1 : 0);
-      return true;
-    }
-  } else if (touch_input::loadCalibration(cal)) {
-    ESP_LOGI(kTouchTag, "forcing calibration over stored minX=%u maxX=%u minY=%u maxY=%u",
-             cal.rawMinX, cal.rawMaxX, cal.rawMinY, cal.rawMaxY);
-  }
-
-  ESP_LOGW(kTouchTag, "no persisted calibration; entering calibration");
-  const uint16_t w = AppConfig::kScreenWidth;
-  const uint16_t h = AppConfig::kScreenHeight;
-  const uint16_t m = 24;
-  const uint16_t ulX = m;
-  const uint16_t ulY = m;
-  const uint16_t urX = static_cast<uint16_t>(w - 1 - m);
-  const uint16_t urY = m;
-  const uint16_t llX = m;
-  const uint16_t llY = static_cast<uint16_t>(h - 1 - m);
-  const uint16_t lrX = static_cast<uint16_t>(w - 1 - m);
-  const uint16_t lrY = static_cast<uint16_t>(h - 1 - m);
-
-  auto solveCalibration = [&](uint16_t ulRawX, uint16_t ulRawY, uint16_t urRawX, uint16_t urRawY,
-                              uint16_t llRawX, uint16_t llRawY, uint16_t lrRawX, uint16_t lrRawY,
-                              touch_input::Calibration& calibrated) -> bool {
-    const int32_t horizDxX = std::abs(static_cast<int32_t>(urRawX) - static_cast<int32_t>(ulRawX)) +
-                             std::abs(static_cast<int32_t>(lrRawX) - static_cast<int32_t>(llRawX));
-    const int32_t horizDxY = std::abs(static_cast<int32_t>(urRawY) - static_cast<int32_t>(ulRawY)) +
-                             std::abs(static_cast<int32_t>(lrRawY) - static_cast<int32_t>(llRawY));
-    const bool swapXY = horizDxY > horizDxX;
-
-    const uint16_t srcUlX = swapXY ? ulRawY : ulRawX;
-    const uint16_t srcUrX = swapXY ? urRawY : urRawX;
-    const uint16_t srcLlX = swapXY ? llRawY : llRawX;
-    const uint16_t srcLrX = swapXY ? lrRawY : lrRawX;
-    const uint16_t srcUlY = swapXY ? ulRawX : ulRawY;
-    const uint16_t srcUrY = swapXY ? urRawX : urRawY;
-    const uint16_t srcLlY = swapXY ? llRawX : llRawY;
-    const uint16_t srcLrY = swapXY ? lrRawX : lrRawY;
-
-    const uint16_t minRawX = std::min(std::min(srcUlX, srcUrX), std::min(srcLlX, srcLrX));
-    const uint16_t maxRawX = std::max(std::max(srcUlX, srcUrX), std::max(srcLlX, srcLrX));
-    const uint16_t minRawY = std::min(std::min(srcUlY, srcUrY), std::min(srcLlY, srcLrY));
-    const uint16_t maxRawY = std::max(std::max(srcUlY, srcUrY), std::max(srcLlY, srcLrY));
-    const uint16_t spanX = static_cast<uint16_t>(maxRawX - minRawX);
-    const uint16_t spanY = static_cast<uint16_t>(maxRawY - minRawY);
-    if (spanX < 600 || spanY < 600) {
-      return false;
-    }
-
-    // Corner targets are inset by "m" pixels, so the measured raw min/max
-    // correspond to x=m..(w-1-m), y=m..(h-1-m). Extrapolate to true screen
-    // edges so mapped touch coordinates don't clip inward by ~m pixels.
-    const int32_t mPx = 24;
-    const int32_t wPx = static_cast<int32_t>(AppConfig::kScreenWidth);
-    const int32_t hPx = static_cast<int32_t>(AppConfig::kScreenHeight);
-    const int32_t innerW = wPx - 1 - 2 * mPx;
-    const int32_t innerH = hPx - 1 - 2 * mPx;
-    if (innerW <= 0 || innerH <= 0) {
-      return false;
-    }
-
-    const int32_t rawSpanX = static_cast<int32_t>(maxRawX) - static_cast<int32_t>(minRawX);
-    const int32_t rawSpanY = static_cast<int32_t>(maxRawY) - static_cast<int32_t>(minRawY);
-    const int32_t edgePadRawX = (rawSpanX * mPx) / innerW;
-    const int32_t edgePadRawY = (rawSpanY * mPx) / innerH;
-
-    int32_t effectiveMinX = static_cast<int32_t>(minRawX) - edgePadRawX;
-    int32_t effectiveMaxX = static_cast<int32_t>(maxRawX) + edgePadRawX;
-    int32_t effectiveMinY = static_cast<int32_t>(minRawY) - edgePadRawY;
-    int32_t effectiveMaxY = static_cast<int32_t>(maxRawY) + edgePadRawY;
-
-    effectiveMinX = std::max<int32_t>(0, effectiveMinX);
-    effectiveMinY = std::max<int32_t>(0, effectiveMinY);
-    effectiveMaxX = std::min<int32_t>(4095, effectiveMaxX);
-    effectiveMaxY = std::min<int32_t>(4095, effectiveMaxY);
-
-    calibrated.rawMinX = static_cast<uint16_t>(effectiveMinX);
-    calibrated.rawMaxX = static_cast<uint16_t>(effectiveMaxX);
-    calibrated.rawMinY = static_cast<uint16_t>(effectiveMinY);
-    calibrated.rawMaxY = static_cast<uint16_t>(effectiveMaxY);
-    calibrated.swapXY = swapXY;
-    const uint32_t leftAvgX = (static_cast<uint32_t>(srcUlX) + srcLlX) / 2U;
-    const uint32_t rightAvgX = (static_cast<uint32_t>(srcUrX) + srcLrX) / 2U;
-    const uint32_t topAvgY = (static_cast<uint32_t>(srcUlY) + srcUrY) / 2U;
-    const uint32_t bottomAvgY = (static_cast<uint32_t>(srcLlY) + srcLrY) / 2U;
-    calibrated.invertX = leftAvgX > rightAvgX;
-    calibrated.invertY = topAvgY > bottomAvgY;
-    calibrated.xCorrLeft = 0;
-    calibrated.xCorrRight = 0;
-    calibrated.yCorr = 0;
-    return true;
-  };
-
-  touch_input::Calibration pass1Cal = {};
-  touch_input::Calibration pass2Cal = {};
-  bool pass1Ok = false;
-  bool pass2Ok = false;
-
-  for (int pass = 1; pass <= 2; ++pass) {
-    const bool requireNearTarget = (pass == 2);
-    bool passSolved = false;
-    for (int attempt = 1; attempt <= 2; ++attempt) {
-      uint16_t ulRawX = 0, ulRawY = 0;
-      uint16_t urRawX = 0, urRawY = 0;
-      uint16_t llRawX = 0, llRawY = 0;
-      uint16_t lrRawX = 0, lrRawY = 0;
-      if (!captureCalibrationPoint(ulX, ulY, ulRawX, ulRawY, requireNearTarget) ||
-          !captureCalibrationPoint(urX, urY, urRawX, urRawY, requireNearTarget) ||
-          !captureCalibrationPoint(llX, llY, llRawX, llRawY, requireNearTarget) ||
-          !captureCalibrationPoint(lrX, lrY, lrRawX, lrRawY, requireNearTarget)) {
-        ESP_LOGE(kTouchTag, "cal capture timeout pass=%d attempt=%d", pass, attempt);
-        continue;
-      }
-      ESP_LOGI(kTouchTag,
-               "cal raw pass=%d attempt=%d UL=(%u,%u) UR=(%u,%u) LL=(%u,%u) LR=(%u,%u)", pass,
-               attempt, ulRawX, ulRawY, urRawX, urRawY, llRawX, llRawY, lrRawX, lrRawY);
-
-      touch_input::Calibration solved = {};
-      if (!solveCalibration(ulRawX, ulRawY, urRawX, urRawY, llRawX, llRawY, lrRawX, lrRawY,
-                            solved)) {
-        ESP_LOGE(kTouchTag, "cal spans invalid pass=%d attempt=%d", pass, attempt);
-        continue;
-      }
-
-      if (pass == 1) {
-        pass1Cal = solved;
-        pass1Ok = true;
-        touch_input::setCalibration(pass1Cal);
-        ESP_LOGI(kTouchTag,
-                 "cal pass1 solved minX=%u maxX=%u minY=%u maxY=%u swap=%d invX=%d invY=%d",
-                 pass1Cal.rawMinX, pass1Cal.rawMaxX, pass1Cal.rawMinY, pass1Cal.rawMaxY,
-                 pass1Cal.swapXY ? 1 : 0, pass1Cal.invertX ? 1 : 0, pass1Cal.invertY ? 1 : 0);
-      } else {
-        pass2Cal = solved;
-        pass2Cal.xCorrLeft = 0;
-        pass2Cal.xCorrRight = 0;
-        pass2Cal.yCorr = 0;
-        pass2Ok = true;
-        ESP_LOGI(kTouchTag,
-                 "cal pass2 solved minX=%u maxX=%u minY=%u maxY=%u swap=%d invX=%d invY=%d "
-                 "xCorrL=%d xCorrR=%d yCorr=%d",
-                 pass2Cal.rawMinX, pass2Cal.rawMaxX, pass2Cal.rawMinY, pass2Cal.rawMaxY,
-                 pass2Cal.swapXY ? 1 : 0, pass2Cal.invertX ? 1 : 0, pass2Cal.invertY ? 1 : 0,
-                 static_cast<int>(pass2Cal.xCorrLeft), static_cast<int>(pass2Cal.xCorrRight),
-                 static_cast<int>(pass2Cal.yCorr));
-      }
-      passSolved = true;
-      break;
-    }
-    if (!passSolved) {
-      ESP_LOGE(kTouchTag, "calibration pass %d failed", pass);
-      if (pass == 1) {
-        break;
-      }
-    }
-  }
-
-  if (pass2Ok) {
-    touch_input::setCalibration(pass2Cal);
-    if (!touch_input::saveCalibration(pass2Cal)) {
-      ESP_LOGW(kTouchTag, "failed to persist pass2 calibration");
-    }
-    ESP_LOGI(kTouchTag, "cal saved pass2 minX=%u maxX=%u minY=%u maxY=%u swap=%d invX=%d invY=%d",
-             pass2Cal.rawMinX, pass2Cal.rawMaxX, pass2Cal.rawMinY, pass2Cal.rawMaxY,
-             pass2Cal.swapXY ? 1 : 0, pass2Cal.invertX ? 1 : 0, pass2Cal.invertY ? 1 : 0);
-    showPostCalibrationColorCheck();
-    (void)display_spi::clear(0x0000);
-    return true;
-  }
-  if (pass1Ok) {
-    touch_input::setCalibration(pass1Cal);
-    if (!touch_input::saveCalibration(pass1Cal)) {
-      ESP_LOGW(kTouchTag, "failed to persist pass1 calibration fallback");
-    }
-    ESP_LOGW(kTouchTag,
-             "cal saved pass1 fallback minX=%u maxX=%u minY=%u maxY=%u swap=%d invX=%d invY=%d",
-             pass1Cal.rawMinX, pass1Cal.rawMaxX, pass1Cal.rawMinY, pass1Cal.rawMaxY,
-             pass1Cal.swapXY ? 1 : 0, pass1Cal.invertX ? 1 : 0, pass1Cal.invertY ? 1 : 0);
-    showPostCalibrationColorCheck();
-    (void)display_spi::clear(0x0000);
-    return true;
-  }
-
-  ESP_LOGE(kTouchTag, "calibration failed after retries; using defaults");
-  return false;
-}
 
 struct ConfigInteractionResult {
   bool offlineRequested = false;
@@ -1552,9 +747,9 @@ void verifyLittlefsAssets() {
       {"layout_b", "/littlefs/screen_layout_b.json"},
       {"layout_nyt", "/littlefs/screen_layout_nyt.json"},
       {"layout_quakes", "/littlefs/screen_layout_quakes.json"},
-      {"dsl_weather_now", "/littlefs/dsl_active/weather_now.json"},
-      {"dsl_forecast", "/littlefs/dsl_active/forecast.json"},
-      {"dsl_clock_analog_full", "/littlefs/dsl_active/clock_analog_full.json"},
+      {"dsl_weather_now", "/littlefs/dsl_available/weather_now.json"},
+      {"dsl_forecast", "/littlefs/dsl_available/forecast.json"},
+      {"dsl_clock_analog_full", "/littlefs/dsl_available/clock_analog_full.json"},
       {"dsl_ha_card", "/littlefs/dsl_available/homeassistant_control_card.json"},
   };
 
@@ -1574,10 +769,6 @@ void verifyLittlefsAssets() {
   } else {
     ESP_LOGE(kFsTag, "required assets missing=%d", missing);
   }
-}
-
-bool isGeoValid(float lat, float lon, const std::string& timezone) {
-  return !std::isnan(lat) && !std::isnan(lon) && !timezone.empty();
 }
 
 void logHeapLargest() {
@@ -1831,6 +1022,7 @@ extern "C" void app_main() {
   ESP_ERROR_CHECK(esp_netif_init());
 
   ESP_LOGI(kTag, "WidgetOS boot (ESP-IDF scaffold)");
+  logBuildFingerprint();
   ESP_LOGI(kBootTag, "setup start");
   boot::mark(baselineState, "setup_start", kBaselineEnabled);
   RuntimeSettings::load();
@@ -1938,7 +1130,9 @@ extern "C" void app_main() {
     }
   }
 
-  (void)timesync::ensureUtcTime();
+  // SNTP startup delay (CONFIG_LWIP_SNTP_MAXIMUM_STARTUP_DELAY) can be up to
+  // 5000ms, plus NTP round-trip. Use 15s to reliably cover both.
+  (void)timesync::ensureUtcTime(15000);
   timesync::logUiTimeContext(geo.timezone.empty() ? nullptr : geo.timezone.c_str(),
                              geo.utcOffsetMinutes, geo.hasUtcOffset);
   boot::mark(baselineState, "geo_time_ready", kBaselineEnabled);

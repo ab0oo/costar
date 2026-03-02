@@ -1,37 +1,42 @@
+# `include/` Header Map
 
-This directory is intended for project header files.
+This folder contains the shared public interfaces used by the ESP-IDF runtime.
+Implementations live under `idf/main/`.
 
-A header file is a file containing C declarations and macro definitions
-to be shared between several project source files. You request the use of a
-header file in your project source file (C, C++, etc)
-by including it, with the C preprocessing directive `#include'.
+## Current Files
 
-```cpp
+- `AppConfig.h`
+  - Compile-time device/runtime constants (pins, panel geometry, touch calibration, defaults).
+  - Consumed by display, touch, and app bootstrap paths.
+- `RuntimeSettings.h`
+  - Persisted user toggles/state loaded from NVS (12/24h, units, ADS-B radius).
+  - Backed by `idf/main/RuntimeSettings.cpp`.
+- `core/BootCommon.h`
+  - Boot/runtime baseline logging helpers.
+  - Backed by `idf/main/BootCommon.cpp`.
+- `core/TimeSync.h`
+  - NTP UTC sync helpers and UI time-context logging.
+  - Backed by `idf/main/TimeSync.cpp`.
+- `platform/Platform.h`
+  - Generic platform primitives (time, logging, heap stats, Wi-Fi RSSI).
+  - Backed by `idf/main/PlatformEspIdf.cpp`.
+- `platform/Fs.h`
+  - Filesystem abstraction (LittleFS begin/exists/mkdir/remove/rename).
+  - Backed by `idf/main/FsEspIdf.cpp`.
+- `platform/Net.h`
+  - Network abstraction (connectivity, SSID/IP lookup, DNS resolve).
+  - Backed by `idf/main/NetEspIdf.cpp`.
+- `platform/Prefs.h`
+  - NVS preference abstraction for typed get/put operations.
+  - Backed by `idf/main/PrefsEspIdf.cpp`.
 
-#include "header.h"
+## Usage Guidance
 
-int main()
-{
- ...
-}
-```
-
-Including a header file produces the same results as copying the header file
-into each source file that needs it. Such copying would be time-consuming
-and error-prone. With a header file, the related declarations appear
-in only one place. If they need to be changed, they can be changed in one
-place, and programs that include the header file will automatically use the
-new version when next recompiled. The header file eliminates the labor of
-finding and changing all the copies as well as the risk that a failure to
-find one copy will result in inconsistencies within a program.
-
-In C, the convention is to give header files names that end with `.h'.
-
-Read more about using header files in official GCC documentation:
-
-* Include Syntax
-* Include Operation
-* Once-Only Headers
-* Computed Includes
-
-https://gcc.gnu.org/onlinedocs/cpp/Header-Files.html
+- Put only stable cross-module interfaces in `include/`.
+- Keep ESP-IDF-specific implementation details in `idf/main/*EspIdf.cpp`.
+- Prefer adding new APIs to existing namespaces (`platform`, `boot`, `timesync`) before creating new top-level namespaces.
+- When adding a new header:
+  1. Add interface in `include/...`.
+  2. Add implementation in `idf/main/...`.
+  3. Include only what is needed (`<cstdint>`, `<string>`, etc.).
+  4. Keep header dependencies minimal to avoid compile-time bloat.

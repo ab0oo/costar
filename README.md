@@ -28,7 +28,14 @@ Almost anything that can be fetched as JSON (or computed locally), including:
 - Moon phase and day/date info
 - Any external image or icon converted to display-friendly format
 
-The system supports multiple layout profiles (`A/B`) and switches between them using the USER button on-device.
+The runtime supports four layout screens and switches between them from the on-screen touch menu:
+
+- `screen_layout_a.json`
+- `screen_layout_b.json`
+- `screen_layout_nyt.json`
+- `screen_layout_quakes.json`
+
+The selected layout is persisted in NVS (`ui/layout`).
 
 ## JSON DSL highlights
 
@@ -51,8 +58,19 @@ Data and UI are connected through template bindings and field extraction:
 
 ## Home Assistant support
 
-CoStar can query Home Assistant directly from the ESP32 over HTTPS.
-Use per-widget settings for base URL, token, entity ID, and render the returned state/icon in your card.
+CoStar can query Home Assistant directly from the ESP32 over HTTPS (`"source": "http"`), and supports a shared websocket mode (`"source": "websocket"`).
+Current HA card DSLs in `data/dsl_available/` are configured to use websocket.
+
+CoStar also supports a generic shared websocket data source (`"source": "websocket"`), so multiple widgets can:
+- Share one screen-level websocket connection
+- Authenticate (`ws_token` + optional `auth_message`)
+- Send bootstrap/subscribe JSON messages
+- Consume async server events via configurable `result_path` / `event_path`
+- Bind to shared connection profiles from `shared_settings.ws_profiles` using
+  `data.connection_profile` (or widget setting `connection_profile`) so backend-specific
+  init/auth protocol details stay out of widget DSL/UI definitions.
+
+Tap actions support `refresh`, `http`, and `ws_publish`.
 
 ## Quick start
 
@@ -60,8 +78,10 @@ Use per-widget settings for base URL, token, entity ID, and render the returned 
 2. Put your layout/DSL JSON files in `data/`.
 3. Flash assets and firmware:
    1. `pio run -t uploadfs`
-   2. `pio run -t upload`
+   2. `pio run -e esp32dev_idf -t upload`
    3. `pio device monitor`
+
+Note: if you changed anything in `data/` (layouts, DSL, icons), run `uploadfs` before flashing firmware.
 
 ## Browser editor (fast iteration)
 
@@ -83,10 +103,11 @@ This is useful for MDI icons and external logos without embedding image decoders
 
 ## Project docs
 
-- `CONTEXT.md`: deep technical reference and current runtime details
-- `docs/HANDOFF.md`: AI-agent handoff/runbook for continuing work safely
+- `HANDOFF.md`: current handoff/runbook and runtime status
+- `docs/ws_connection_profiles.md`: websocket profile schema and resolution behavior
+- `CONTEXT.md`: older deep context notes (parts may be stale)
 
-If you are hacking on internals, use those two files as the authoritative technical source.
+If you are hacking on internals, start with `HANDOFF.md` and then use the focused docs under `docs/`.
 
 ## Third-party assets
 

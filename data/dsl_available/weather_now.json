@@ -5,7 +5,7 @@
   },
   "data": {
     "source": "http",
-    "url": "https://api.open-meteo.com/v1/forecast?latitude={{geo.lat}}&longitude={{geo.lon}}&current=temperature_2m,relative_humidity_2m,pressure_msl,wind_speed_10m,wind_direction_10m,weather_code&daily=sunrise,sunset&timezone=UTC&forecast_days=1&wind_speed_unit=mph&temperature_unit=fahrenheit",
+    "url": "https://api.open-meteo.com/v1/forecast?latitude={{geo.lat}}&longitude={{geo.lon}}&current=temperature_2m,relative_humidity_2m,pressure_msl,wind_speed_10m,wind_direction_10m,weather_code&daily=sunrise,sunset&timezone=UTC&forecast_days=1&wind_speed_unit=mph&temperature_unit=celsius",
     "debug": true,
     "poll_ms": 180000,
     "fields": {
@@ -44,8 +44,7 @@
       "wind_dir": {
         "path": "current.wind_direction_10m",
         "format": {
-          "round": 0,
-          "suffix": " deg",
+          "unit": "compass_16",
           "locale": "en-US"
         }
       },
@@ -62,6 +61,9 @@
           "tz": "local",
           "time_format": "%H:%M"
         }
+      },
+      "moon_phase": {
+        "path": "computed.moon_phase"
       }
     }
   },
@@ -70,8 +72,8 @@
     "nodes": [
       {
         "type": "icon",
-        "x": 2,
-        "y": 0,
+        "x": 8,
+        "y": 6,
         "w": 28,
         "h": 28,
         "path": "{{icon_now}}"
@@ -79,7 +81,7 @@
       {
         "type": "label",
         "x": 36,
-        "y": 2,
+        "y": 8,
         "font": 4,
         "color": "#9FD3FF",
         "text": "{{temp_now}}"
@@ -87,7 +89,7 @@
       {
         "type": "label",
         "x": 36,
-        "y": 32,
+        "y": 34,
         "font": 2,
         "color": "#B0BEC5",
         "text": "{{cond_now}}"
@@ -98,7 +100,7 @@
         "y": 54,
         "font": 1,
         "color": "#C7D2D9",
-        "text": "Hum: {{humidity_now}} Press: {{pressure_now}}"
+        "text": "Hum: {{humidity_now}} Pr: {{pressure_now}}"
       },
       {
         "type": "label",
@@ -111,7 +113,7 @@
       {
         "type": "icon",
         "x": 6,
-        "y": 80,
+        "y": 76,
         "w": 28,
         "h": 28,
         "path": "/icons/meteocons/sunrise.raw"
@@ -119,26 +121,42 @@
       {
         "type": "label",
         "x": 38,
-        "y": 90,
+        "y": 85,
         "font": 1,
         "color": "#FFD54A",
         "text": "{{sunrise}}"
       },
       {
         "type": "icon",
-        "x": 98,
-        "y": 80,
+        "x": 90,
+        "y": 76,
         "w": 28,
         "h": 28,
         "path": "/icons/meteocons/sunset.raw"
       },
       {
         "type": "label",
-        "x": 130,
-        "y": 90,
+        "x": 120,
+        "y": 85,
         "font": 1,
         "color": "#F0625F",
         "text": "{{sunset}}"
+      },
+      {
+        "type": "label",
+        "x": 6,
+        "y": 102,
+        "font": 1,
+        "color": "#E0E0E0",
+        "text": "{{moon_phase}}"
+      },
+      {
+        "type": "moon_phase",
+        "x": 132,
+        "y": 106,
+        "r": 11,
+        "color": "#E0E0E0",
+        "bg": "#202020"
       }
     ]
   }
