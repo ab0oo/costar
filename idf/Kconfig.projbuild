@@ -1,0 +1,34 @@
+menu "CoStar DSL Runtime"
+
+config COSTAR_DSL_TLS_MIN_LARGEST_8BIT_KB
+    int "TLS guard minimum largest free block (KB)"
+    range 16 64
+    default 20
+    help
+        Minimum required largest contiguous MALLOC_CAP_8BIT block for new
+        TLS handshakes in DSL HTTP/WS flows.
+
+config COSTAR_DSL_TLS_MIN_FREE_8BIT_KB
+    int "TLS guard minimum free heap (KB)"
+    range 24 192
+    default 40
+    help
+        Minimum required total free heap for new TLS handshakes.
+
+config COSTAR_DSL_TLS_RELAXED_LARGEST_8BIT_KB
+    int "TLS guard relaxed largest free block (KB)"
+    range 16 64
+    default 19
+    help
+        Relaxed largest-block threshold used when total free heap is above
+        the relaxed-free threshold.
+
+config COSTAR_DSL_TLS_RELAXED_FREE_THRESHOLD_8BIT_KB
+    int "TLS guard relaxed mode free heap threshold (KB)"
+    range 32 256
+    default 60
+    help
+        If total free heap is at least this threshold, the runtime uses the
+        relaxed largest-block requirement above.
+
+endmenu

@@ -33,6 +33,7 @@
 #include <cstring>
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -49,6 +50,7 @@ constexpr uint32_t kConfigPostConnectMs = 2500;
 constexpr bool kBaselineEnabled = true;
 constexpr unsigned long kBaselineLoopPeriodMs = 30000UL;
 constexpr unsigned long kRuntimeTickPeriodMs = 33UL;
+constexpr uint32_t kBootTaskStackBytes = 16384;
 constexpr const char* kLayoutPrefsNs = "ui";
 constexpr const char* kLayoutPrefsKey = "layout";
 constexpr const char* kLayoutAPath = "/littlefs/screen_layout_a.json";
@@ -174,7 +176,7 @@ bool ensureWifiStackReady() {
     esp_netif_create_default_wifi_sta();
   }
 
-  wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+  static wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
   const esp_err_t initErr = esp_wifi_init(&cfg);
   if (initErr != ESP_OK && initErr != ESP_ERR_INVALID_STATE) {
     ESP_LOGE(kWifiTag, "wifi init failed err=0x%x", static_cast<unsigned>(initErr));
@@ -830,6 +832,135 @@ GeoContext loadGeoContextFromPrefs() {
   return geo;
 }
 
+constexpr const char* kGeoSsidNs = "geo_ssid";
+constexpr int kGeoSsidSlots = 4;
+
+std::string geoSsidSlotKey(int slot, const char* field) {
+  char buf[16];
+  std::snprintf(buf, sizeof(buf), "s%d_%s", slot, field);
+  return std::string(buf);
+}
+
+bool loadGeoContextFromSsidCache(const std::string& ssid, GeoContext& outGeo, std::string* outLabel = nullptr,
+                                 std::string* outCity = nullptr, std::string* outRegion = nullptr,
+                                 std::string* outCountry = nullptr) {
+  if (ssid.empty()) {
+    return false;
+  }
+  constexpr int kOffsetUnknown = -32768;
+  for (int slot = 0; slot < kGeoSsidSlots; ++slot) {
+    const std::string slotSsid = platform::prefs::getString(
+        kGeoSsidNs, geoSsidSlotKey(slot, "ssid").c_str(), "");
+    if (slotSsid.empty() || slotSsid != ssid) {
+      continue;
+    }
+    const float lat = platform::prefs::getFloat(kGeoSsidNs, geoSsidSlotKey(slot, "lat").c_str(), NAN);
+    const float lon = platform::prefs::getFloat(kGeoSsidNs, geoSsidSlotKey(slot, "lon").c_str(), NAN);
+    const std::string tz = platform::prefs::getString(
+        kGeoSsidNs, geoSsidSlotKey(slot, "tz").c_str(), "");
+    const int off = static_cast<int>(platform::prefs::getInt(
+        kGeoSsidNs, geoSsidSlotKey(slot, "off").c_str(), kOffsetUnknown));
+    if (!isGeoValid(lat, lon, tz)) {
+      continue;
+    }
+    outGeo = {};
+    outGeo.lat = lat;
+    outGeo.lon = lon;
+    outGeo.timezone = tz;
+    outGeo.hasUtcOffset = off != kOffsetUnknown;
+    outGeo.utcOffsetMinutes = outGeo.hasUtcOffset ? off : 0;
+    outGeo.hasLocation = true;
+    outGeo.source = "ssid-cache";
+    if (outLabel != nullptr) {
+      *outLabel = platform::prefs::getString(kGeoSsidNs, geoSsidSlotKey(slot, "lbl").c_str(), "");
+    }
+    if (outCity != nullptr) {
+      *outCity = platform::prefs::getString(kGeoSsidNs, geoSsidSlotKey(slot, "city").c_str(), "");
+    }
+    if (outRegion != nullptr) {
+      *outRegion = platform::prefs::getString(kGeoSsidNs, geoSsidSlotKey(slot, "reg").c_str(), "");
+    }
+    if (outCountry != nullptr) {
+      *outCountry = platform::prefs::getString(kGeoSsidNs, geoSsidSlotKey(slot, "cty").c_str(), "");
+    }
+    return true;
+  }
+  return false;
+}
+
+void persistGeoContextToGlobalPrefs(const GeoContext& geo, const std::string& label, const std::string& city,
+                                    const std::string& region, const std::string& country) {
+  constexpr const char* kGeoNs = "geo";
+  constexpr const char* kModeKey = "mode";
+  constexpr const char* kCachedLatKey = "lat";
+  constexpr const char* kCachedLonKey = "lon";
+  constexpr const char* kCachedTzKey = "tz";
+  constexpr const char* kCachedOffsetKey = "off_min";
+  constexpr const char* kCachedLabelKey = "label";
+  constexpr const char* kCachedCityKey = "city";
+  constexpr const char* kCachedRegionKey = "region";
+  constexpr const char* kCachedCountryKey = "country";
+  constexpr int kModeAuto = 0;
+  constexpr int kOffsetUnknown = -32768;
+  (void)platform::prefs::putInt(kGeoNs, kModeKey, kModeAuto);
+  (void)platform::prefs::putFloat(kGeoNs, kCachedLatKey, geo.lat);
+  (void)platform::prefs::putFloat(kGeoNs, kCachedLonKey, geo.lon);
+  (void)platform::prefs::putString(kGeoNs, kCachedTzKey, geo.timezone.c_str());
+  (void)platform::prefs::putInt(kGeoNs, kCachedOffsetKey,
+                                geo.hasUtcOffset ? geo.utcOffsetMinutes : kOffsetUnknown);
+  (void)platform::prefs::putString(kGeoNs, kCachedLabelKey, label.c_str());
+  (void)platform::prefs::putString(kGeoNs, kCachedCityKey, city.c_str());
+  (void)platform::prefs::putString(kGeoNs, kCachedRegionKey, region.c_str());
+  (void)platform::prefs::putString(kGeoNs, kCachedCountryKey, country.c_str());
+}
+
+void saveGeoContextToSsidCache(const std::string& ssid, const GeoContext& geo, const std::string& label,
+                               const std::string& city, const std::string& region,
+                               const std::string& country) {
+  if (ssid.empty() || !geo.hasLocation) {
+    return;
+  }
+  constexpr int kOffsetUnknown = -32768;
+  int targetSlot = -1;
+  int emptySlot = -1;
+  int oldestSlot = 0;
+  int oldestSeq = std::numeric_limits<int>::max();
+  int maxSeq = 0;
+  for (int slot = 0; slot < kGeoSsidSlots; ++slot) {
+    const std::string ssidKey = geoSsidSlotKey(slot, "ssid");
+    const std::string seqKey = geoSsidSlotKey(slot, "seq");
+    const std::string slotSsid = platform::prefs::getString(kGeoSsidNs, ssidKey.c_str(), "");
+    const int seq = static_cast<int>(platform::prefs::getInt(kGeoSsidNs, seqKey.c_str(), 0));
+    maxSeq = std::max(maxSeq, seq);
+    if (!slotSsid.empty() && slotSsid == ssid) {
+      targetSlot = slot;
+      break;
+    }
+    if (slotSsid.empty() && emptySlot < 0) {
+      emptySlot = slot;
+    }
+    if (seq < oldestSeq) {
+      oldestSeq = seq;
+      oldestSlot = slot;
+    }
+  }
+  if (targetSlot < 0) {
+    targetSlot = (emptySlot >= 0) ? emptySlot : oldestSlot;
+  }
+  const int nextSeq = maxSeq + 1;
+  (void)platform::prefs::putString(kGeoSsidNs, geoSsidSlotKey(targetSlot, "ssid").c_str(), ssid.c_str());
+  (void)platform::prefs::putFloat(kGeoSsidNs, geoSsidSlotKey(targetSlot, "lat").c_str(), geo.lat);
+  (void)platform::prefs::putFloat(kGeoSsidNs, geoSsidSlotKey(targetSlot, "lon").c_str(), geo.lon);
+  (void)platform::prefs::putString(kGeoSsidNs, geoSsidSlotKey(targetSlot, "tz").c_str(), geo.timezone.c_str());
+  (void)platform::prefs::putInt(kGeoSsidNs, geoSsidSlotKey(targetSlot, "off").c_str(),
+                                geo.hasUtcOffset ? geo.utcOffsetMinutes : kOffsetUnknown);
+  (void)platform::prefs::putString(kGeoSsidNs, geoSsidSlotKey(targetSlot, "lbl").c_str(), label.c_str());
+  (void)platform::prefs::putString(kGeoSsidNs, geoSsidSlotKey(targetSlot, "city").c_str(), city.c_str());
+  (void)platform::prefs::putString(kGeoSsidNs, geoSsidSlotKey(targetSlot, "reg").c_str(), region.c_str());
+  (void)platform::prefs::putString(kGeoSsidNs, geoSsidSlotKey(targetSlot, "cty").c_str(), country.c_str());
+  (void)platform::prefs::putInt(kGeoSsidNs, geoSsidSlotKey(targetSlot, "seq").c_str(), nextSeq);
+}
+
 GeoContext fallbackGeoContextGoogleHq() {
   constexpr const char* kGeoNs = "geo";
   constexpr const char* kModeKey = "mode";
@@ -1013,9 +1144,8 @@ void runtimeLoopTask(void* arg) {
     }
   }
 }
-}  // namespace
-
-extern "C" void app_main() {
+void bootTask(void* arg) {
+  (void)arg;
   boot::BaselineState baselineState;
   boot::start(baselineState);
   initNvs();
@@ -1114,19 +1244,51 @@ extern "C" void app_main() {
   }
 
   std::string ipText;
+  std::string connectedSsid;
   if (wifiReady && platform::net::getLocalIp(ipText) && !ipText.empty()) {
     ESP_LOGI(kWifiTag, "connected ip=%s", ipText.c_str());
   }
+  if (wifiReady) {
+    (void)platform::net::getSsid(connectedSsid);
+  }
 
   if (wifiReady && geo.source != "manual") {
-    GeoContext refreshedGeo;
-    if (refreshGeoContextFromInternet(refreshedGeo)) {
-      geo = refreshedGeo;
-      ESP_LOGI("geo", "online source=%s lat=%.4f lon=%.4f tz=%s off_min=%d known=%d",
-               geo.source.c_str(), geo.lat, geo.lon, geo.timezone.c_str(), geo.utcOffsetMinutes,
-               geo.hasUtcOffset ? 1 : 0);
+    bool usedSsidGeoCache = false;
+    if (!connectedSsid.empty()) {
+      GeoContext ssidCachedGeo;
+      std::string cachedLabel;
+      std::string cachedCity;
+      std::string cachedRegion;
+      std::string cachedCountry;
+      if (loadGeoContextFromSsidCache(connectedSsid, ssidCachedGeo, &cachedLabel, &cachedCity, &cachedRegion,
+                                      &cachedCountry)) {
+        geo = ssidCachedGeo;
+        persistGeoContextToGlobalPrefs(geo, cachedLabel, cachedCity, cachedRegion, cachedCountry);
+        usedSsidGeoCache = true;
+        ESP_LOGI("geo", "source=ssid-cache ssid=%s lat=%.4f lon=%.4f tz=%s off_min=%d known=%d",
+                 connectedSsid.c_str(), geo.lat, geo.lon, geo.timezone.c_str(), geo.utcOffsetMinutes,
+                 geo.hasUtcOffset ? 1 : 0);
+      }
+    }
+    if (!usedSsidGeoCache) {
+      GeoContext refreshedGeo;
+      if (refreshGeoContextFromInternet(refreshedGeo)) {
+        geo = refreshedGeo;
+        const std::string label = platform::prefs::getString("geo", "label", "");
+        const std::string city = platform::prefs::getString("geo", "city", "");
+        const std::string region = platform::prefs::getString("geo", "region", "");
+        const std::string country = platform::prefs::getString("geo", "country", "");
+        if (!connectedSsid.empty()) {
+          saveGeoContextToSsidCache(connectedSsid, geo, label, city, region, country);
+        }
+        ESP_LOGI("geo", "online source=%s lat=%.4f lon=%.4f tz=%s off_min=%d known=%d",
+                 geo.source.c_str(), geo.lat, geo.lon, geo.timezone.c_str(), geo.utcOffsetMinutes,
+                 geo.hasUtcOffset ? 1 : 0);
+      } else {
+        ESP_LOGW("geo", "online fetch failed; using cached timezone context");
+      }
     } else {
-      ESP_LOGW("geo", "online fetch failed; using cached timezone context");
+      ESP_LOGI("geo", "ssid cache hit; skipped online geolocation fetch");
     }
   }
 
@@ -1177,8 +1339,18 @@ extern "C" void app_main() {
     }
   }
 
-  ESP_LOGI(kTag, "runtime task pinned core=1; main task idling on core=%d", static_cast<int>(xPortGetCoreID()));
-  for (;;) {
-    platform::sleepMs(1000);
+  ESP_LOGI(kTag, "runtime task pinned core=1; boot task exiting on core=%d",
+           static_cast<int>(xPortGetCoreID()));
+  vTaskDelete(nullptr);
+}
+}  // namespace
+
+extern "C" void app_main() {
+  if (xTaskCreatePinnedToCore(bootTask, "costar_boot", kBootTaskStackBytes, nullptr, 5, nullptr, 0) !=
+      pdPASS) {
+    ESP_LOGE(kTag, "failed to start boot task");
+    for (;;) {
+      platform::sleepMs(1000);
+    }
   }
 }

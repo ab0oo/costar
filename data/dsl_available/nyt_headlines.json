@@ -2,6 +2,7 @@
   "version": 1,
   "data": {
     "source": "http",
+    "tls_skip_verify": true,
     "url": "{{setting.rss_proxy_base}}/rssj?url=https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml&limit={{setting.limit}}",
     "poll_ms": 300000,
     "fields": {

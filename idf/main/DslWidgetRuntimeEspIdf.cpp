@@ -22,6 +22,7 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
 
 #include <algorithm>
 #include <cctype>
@@ -32,6 +33,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <dirent.h>
 #include <limits>
 #include <map>
 #include <memory>
@@ -42,6 +44,36 @@
 #include <vector>
 
 namespace {
+#ifndef CONFIG_COSTAR_DSL_TLS_MIN_LARGEST_8BIT_KB
+#ifdef COSTAR_DSL_TLS_MIN_LARGEST_8BIT_KB
+#define CONFIG_COSTAR_DSL_TLS_MIN_LARGEST_8BIT_KB COSTAR_DSL_TLS_MIN_LARGEST_8BIT_KB
+#else
+#define CONFIG_COSTAR_DSL_TLS_MIN_LARGEST_8BIT_KB 19
+#endif
+#endif
+#ifndef CONFIG_COSTAR_DSL_TLS_MIN_FREE_8BIT_KB
+#ifdef COSTAR_DSL_TLS_MIN_FREE_8BIT_KB
+#define CONFIG_COSTAR_DSL_TLS_MIN_FREE_8BIT_KB COSTAR_DSL_TLS_MIN_FREE_8BIT_KB
+#else
+#define CONFIG_COSTAR_DSL_TLS_MIN_FREE_8BIT_KB 40
+#endif
+#endif
+#ifndef CONFIG_COSTAR_DSL_TLS_RELAXED_LARGEST_8BIT_KB
+#ifdef COSTAR_DSL_TLS_RELAXED_LARGEST_8BIT_KB
+#define CONFIG_COSTAR_DSL_TLS_RELAXED_LARGEST_8BIT_KB COSTAR_DSL_TLS_RELAXED_LARGEST_8BIT_KB
+#else
+#define CONFIG_COSTAR_DSL_TLS_RELAXED_LARGEST_8BIT_KB 18
+#endif
+#endif
+#ifndef CONFIG_COSTAR_DSL_TLS_RELAXED_FREE_THRESHOLD_8BIT_KB
+#ifdef COSTAR_DSL_TLS_RELAXED_FREE_THRESHOLD_8BIT_KB
+#define CONFIG_COSTAR_DSL_TLS_RELAXED_FREE_THRESHOLD_8BIT_KB \
+  COSTAR_DSL_TLS_RELAXED_FREE_THRESHOLD_8BIT_KB
+#else
+#define CONFIG_COSTAR_DSL_TLS_RELAXED_FREE_THRESHOLD_8BIT_KB 56
+#endif
+#endif
+
 constexpr const char* kTag = "dsl-widget";
 constexpr uint16_t kBg = 0x0000;
 constexpr uint16_t kText = 0xFFFF;
@@ -52,7 +84,7 @@ constexpr uint32_t kInitialPollMs = 15000U;
 constexpr uint32_t kHttpGateTimeoutMs = 7000U;
 constexpr uint32_t kHttpTimeoutMs = 6500U;
 constexpr uint32_t kHttpWorkerQueueLen = 4U;
-constexpr uint32_t kHttpWorkerReplyTimeoutMs = 9000U;
+constexpr uint32_t kHttpWorkerReplyTimeoutMs = 20000U;
 constexpr uint32_t kHttpWorkerStack = 8192U;
 constexpr uint32_t kHttpResponseMaxBytesDefault = 16384U;
 constexpr uint32_t kHttpResponseMaxBytesMin = 1024U;
@@ -67,6 +99,8 @@ constexpr size_t kWsDiagLargeFrameBytes = 3000U;
 constexpr uint32_t kTapPostHttpRefreshDelayMs = 750U;
 constexpr size_t kIconMemCacheBudgetBytes = 24U * 1024U;
 constexpr const char* kIconCacheDir = "/littlefs/icon_cache";
+constexpr size_t kIconFileCacheBudgetBytes = 256U * 1024U;
+constexpr size_t kIconFileCacheMaxEntries = 96U;
 constexpr uint32_t kIconFetchRetryMs = 30000U;
 constexpr size_t kIconRetryMaxEntries = 64U;
 constexpr uint32_t kLowHeapRecoverCooldownMs = 1500U;
@@ -79,8 +113,16 @@ constexpr size_t kUiCriticalLargest8Bit = 12288U;
 constexpr size_t kUiCriticalFree8Bit = 24576U;
 // Guard against fragmentation before TLS setup. mbedtls_ssl_setup needs more
 // than 16KB contiguous even with dynamic buffers; 20KB gives reliable headroom.
-constexpr size_t kTlsMinLargest8Bit = 20U * 1024U;
-constexpr size_t kTlsMinFree8Bit = 40U * 1024U;
+constexpr size_t kTlsMinLargest8Bit =
+    static_cast<size_t>(CONFIG_COSTAR_DSL_TLS_MIN_LARGEST_8BIT_KB) * 1024U;
+constexpr size_t kTlsMinFree8Bit =
+    static_cast<size_t>(CONFIG_COSTAR_DSL_TLS_MIN_FREE_8BIT_KB) * 1024U;
+// When total free heap is high, allow a slightly smaller contiguous block.
+// This helps fragmented-but-healthy states proceed without disabling the guard.
+constexpr size_t kTlsRelaxedLargest8Bit =
+    static_cast<size_t>(CONFIG_COSTAR_DSL_TLS_RELAXED_LARGEST_8BIT_KB) * 1024U;
+constexpr size_t kTlsRelaxedFreeThreshold8Bit =
+    static_cast<size_t>(CONFIG_COSTAR_DSL_TLS_RELAXED_FREE_THRESHOLD_8BIT_KB) * 1024U;
 // Once a WS connection is up, its TLS context is permanently resident. Only
 // need enough heap for template string allocations (~3-5KB).
 // Post-WS steady state is ~12-20KB largest / ~15-20KB free depending on the
@@ -88,9 +130,11 @@ constexpr size_t kTlsMinFree8Bit = 40U * 1024U;
 constexpr size_t kWsActiveMinLargest8Bit = 8U * 1024U;
 constexpr size_t kWsActiveMinFree8Bit = 12U * 1024U;
 constexpr uint32_t kHttpReuseWindowMs = 500U;
-constexpr size_t kHttpReuseMaxEntries = 3U;
+constexpr size_t kHttpReuseMaxEntries = 8U;
 constexpr size_t kCanvasPersistentMaxBytes = 16U * 1024U;
 constexpr size_t kWsCacheJsonMaxEntries = 16U;
+constexpr uint32_t kHttpStartupStaggerMs = 3000U;
+constexpr uint32_t kHttpStartupStaggerMaxMs = 12000U;
 
 enum class DataSource : uint8_t {
   kHttp,
@@ -106,12 +150,17 @@ struct FieldSpec {
   FormatSpec format;
 };
 
+size_t tlsMinLargestForFreeHeap(size_t freeHeap) {
+  return (freeHeap >= kTlsRelaxedFreeThreshold8Bit) ? kTlsRelaxedLargest8Bit : kTlsMinLargest8Bit;
+}
+
 enum class NodeType : uint8_t {
   kLabel,
   kValueBox,
   kProgress,
   kSparkline,
   kIcon,
+  kBitmap1,
   kMoonPhase,
   kArc,
   kLine,
@@ -153,6 +202,8 @@ struct Node {
   NodeType type = NodeType::kLabel;
   int x = 0;
   int y = 0;
+  std::string xExpr;
+  std::string yExpr;
   int w = 0;
   int h = 0;
   int x2 = 0;
@@ -163,6 +214,7 @@ struct Node {
   std::string text;
   std::string key;
   std::string path;
+  std::string visibleIf;
   std::string angleExpr;
   bool wrap = false;
   int lineHeight = 0;
@@ -242,6 +294,7 @@ struct HttpJob {
   std::string body;
   std::vector<KeyValue> headers;
   uint32_t maxResponseBytes = kHttpResponseMaxBytesDefault;
+  bool tlsSkipVerify = false;
   QueueHandle_t replyQueue = nullptr;
 };
 
@@ -302,6 +355,7 @@ struct State {
   uint32_t backoffUntilMs = 0;
   uint32_t lastDeferredLogMs = 0;
   uint8_t failureStreak = 0;
+  bool tlsRetryGuard = false;
   TapActionType tapAction = TapActionType::kNone;
   std::string tapUrlTemplate;
   std::string tapMethod;
@@ -338,8 +392,10 @@ struct State {
   std::string sourceJson;
   bool retainSourceJson = false;
   std::string transformJson;
+  std::vector<std::pair<std::string, std::string>> transformScratch;
   uint32_t tapRefreshDueMs = 0;
   uint32_t httpMaxBytes = kHttpResponseMaxBytesDefault;
+  bool tlsSkipVerify = false;
 };
 
 State s;
@@ -347,6 +403,7 @@ std::vector<State> sInstances;
 QueueHandle_t sHttpJobQueue = nullptr;
 TaskHandle_t sHttpWorkerTask = nullptr;
 std::map<std::string, SharedHttpResponse> sSharedHttpCache;
+uint32_t sHttpStartupOrdinal = 0;
 uint16_t* sCanvas = nullptr;
 size_t sCanvasCapacityBytes = 0;
 uint16_t sCanvasW = 0;
@@ -377,6 +434,7 @@ struct WsState {
   esp_websocket_client_handle_t client = nullptr;
   std::string profileKey;
   std::string wsUrl;
+  bool tlsSkipVerify = false;
   std::string token;
   std::string authTemplate;
   std::string authRequiredType = "auth_required";
@@ -879,6 +937,15 @@ std::string resolveKnownToken(const std::string& key, bool* found) {
     *found = true;
   }
 
+  if (key == "geo.city") {
+    return platform::prefs::getString("geo", "city", "");
+  }
+  if (key == "geo.region") {
+    return platform::prefs::getString("geo", "region", "");
+  }
+  if (key == "geo.country") {
+    return platform::prefs::getString("geo", "country", "");
+  }
   if (key == "geo.lat") {
     char buf[32];
     std::snprintf(buf, sizeof(buf), "%.4f", loadGeoLat());
@@ -893,6 +960,10 @@ std::string resolveKnownToken(const std::string& key, bool* found) {
     return loadGeoTimezone();
   }
   if (key == "geo.label") {
+    const std::string label = platform::prefs::getString("geo", "label", "");
+    if (!label.empty()) {
+      return label;
+    }
     const std::string tz = loadGeoTimezone();
     return tz.empty() ? std::string("Unknown") : tz;
   }
@@ -1644,6 +1715,7 @@ NodeType parseNodeType(std::string_view nodeObj, bool& known) {
   if (type == "progress") return NodeType::kProgress;
   if (type == "sparkline") return NodeType::kSparkline;
   if (type == "icon") return NodeType::kIcon;
+  if (type == "bitmap1" || type == "bitmap_1" || type == "mono_bitmap") return NodeType::kBitmap1;
   if (type == "moon_phase") return NodeType::kMoonPhase;
   if (type == "arc" || type == "circle") return NodeType::kArc;
   // "hand" is a deprecated alias retained for backward compatibility.
@@ -1818,6 +1890,8 @@ void applyNode(std::string_view nodeObj, const VarContext* vars, std::vector<Nod
     return;
   }
 
+  node.xExpr = readStringValue(nodeObj, "x", vars, "");
+  node.yExpr = readStringValue(nodeObj, "y", vars, "");
   (void)readIntValue(nodeObj, "x", vars, node.x);
   (void)readIntValue(nodeObj, "y", vars, node.y);
   (void)readIntValue(nodeObj, "w", vars, node.w);
@@ -1852,6 +1926,7 @@ void applyNode(std::string_view nodeObj, const VarContext* vars, std::vector<Nod
   if (node.path.empty()) {
     node.path = readStringValue(nodeObj, "icon", vars, "");
   }
+  node.visibleIf = readStringValue(nodeObj, "visible_if", vars, "");
   node.angleExpr = readStringValue(nodeObj, "angle_expr", vars, "");
 
   std::string overflow = readStringValue(nodeObj, "overflow", vars, "");
@@ -2100,6 +2175,46 @@ bool rowNumeric(const TransformRow& row, const std::string& key, double& out) {
   return parseStrictDouble(it->second, out);
 }
 
+bool parseTransformNumericArg(std::string_view trObj, const char* key, double& out) {
+  std::string_view valueText;
+  if (!objectMemberValue(trObj, key, valueText)) {
+    return false;
+  }
+  valueText = trimView(valueText);
+  if (valueText.empty()) {
+    return false;
+  }
+  if (valueText.front() != '"') {
+    return viewToDouble(valueText, out);
+  }
+  std::string arg;
+  if (!viewToString(valueText, arg)) {
+    return false;
+  }
+  arg = bindRuntimeTemplate(arg);
+  if (arg.empty()) {
+    return false;
+  }
+  float exprValue = 0.0f;
+  if (evalNumericExpr(arg, nullptr, exprValue)) {
+    out = static_cast<double>(exprValue);
+    return true;
+  }
+  return parseStrictDouble(arg, out);
+}
+
+void applyDistanceUnitScaleIfRequested(std::string_view trObj, double& value) {
+  std::string unit = readStringValue(trObj, "unit", nullptr, "km");
+  std::transform(unit.begin(), unit.end(), unit.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+  if (unit == "mi" || unit == "mile" || unit == "miles") {
+    value *= 1.609344;
+  } else if (unit == "nm") {
+    value *= 1.852;
+  }
+}
+
 bool transformComputeDistance(std::string_view trObj, std::map<std::string, std::vector<TransformRow>>& arrays) {
   const std::string from = readStringValue(trObj, "from", nullptr, "");
   const std::string toField = readStringValue(trObj, "to_field", nullptr, "");
@@ -2206,25 +2321,11 @@ bool transformFilterLte(std::string_view trObj, std::map<std::string, std::vecto
     return false;
   }
 
-  std::string maxText = readStringValue(trObj, "max", nullptr, "");
-  maxText = bindRuntimeTemplate(maxText);
-  if (maxText.empty()) {
-    return false;
-  }
   double maxValue = 0.0;
-  if (!parseStrictDouble(maxText, maxValue)) {
+  if (!parseTransformNumericArg(trObj, "max", maxValue)) {
     return false;
   }
-
-  std::string unit = readStringValue(trObj, "unit", nullptr, "km");
-  std::transform(unit.begin(), unit.end(), unit.begin(), [](unsigned char c) {
-    return static_cast<char>(std::tolower(c));
-  });
-  if (unit == "mi" || unit == "mile" || unit == "miles") {
-    maxValue *= 1.609344;
-  } else if (unit == "nm") {
-    maxValue *= 1.852;
-  }
+  applyDistanceUnitScaleIfRequested(trObj, maxValue);
 
   std::vector<TransformRow> filtered;
   filtered.reserve(it->second.size());
@@ -2238,6 +2339,153 @@ bool transformFilterLte(std::string_view trObj, std::map<std::string, std::vecto
     }
   }
   it->second = std::move(filtered);
+  return true;
+}
+
+bool transformFilterGte(std::string_view trObj, std::map<std::string, std::vector<TransformRow>>& arrays) {
+  const std::string from = readStringValue(trObj, "from", nullptr, "");
+  const std::string by = readStringValue(trObj, "by", nullptr, "");
+  if (from.empty() || by.empty()) {
+    return false;
+  }
+  auto it = arrays.find(from);
+  if (it == arrays.end()) {
+    return false;
+  }
+
+  double minValue = 0.0;
+  if (!parseTransformNumericArg(trObj, "min", minValue)) {
+    return false;
+  }
+  applyDistanceUnitScaleIfRequested(trObj, minValue);
+
+  std::vector<TransformRow> filtered;
+  filtered.reserve(it->second.size());
+  for (const TransformRow& row : it->second) {
+    double value = 0.0;
+    if (!rowNumeric(row, by, value)) {
+      continue;
+    }
+    if (value >= minValue) {
+      filtered.push_back(row);
+    }
+  }
+  it->second = std::move(filtered);
+  return true;
+}
+
+bool transformFilterBetween(std::string_view trObj, std::map<std::string, std::vector<TransformRow>>& arrays) {
+  const std::string from = readStringValue(trObj, "from", nullptr, "");
+  const std::string by = readStringValue(trObj, "by", nullptr, "");
+  if (from.empty() || by.empty()) {
+    return false;
+  }
+  auto it = arrays.find(from);
+  if (it == arrays.end()) {
+    return false;
+  }
+
+  double minValue = 0.0;
+  double maxValue = 0.0;
+  if (!parseTransformNumericArg(trObj, "min", minValue) ||
+      !parseTransformNumericArg(trObj, "max", maxValue)) {
+    return false;
+  }
+  applyDistanceUnitScaleIfRequested(trObj, minValue);
+  applyDistanceUnitScaleIfRequested(trObj, maxValue);
+  if (minValue > maxValue) {
+    std::swap(minValue, maxValue);
+  }
+
+  bool inclusive = true;
+  (void)objectMemberBool(trObj, "inclusive", inclusive);
+
+  std::vector<TransformRow> filtered;
+  filtered.reserve(it->second.size());
+  for (const TransformRow& row : it->second) {
+    double value = 0.0;
+    if (!rowNumeric(row, by, value)) {
+      continue;
+    }
+    const bool inRange = inclusive ? (value >= minValue && value <= maxValue)
+                                   : (value > minValue && value < maxValue);
+    if (inRange) {
+      filtered.push_back(row);
+    }
+  }
+  it->second = std::move(filtered);
+  return true;
+}
+
+bool transformProjectLatLon(std::string_view trObj, std::map<std::string, std::vector<TransformRow>>& arrays) {
+  const std::string from = readStringValue(trObj, "from", nullptr, "");
+  if (from.empty()) {
+    return false;
+  }
+  auto it = arrays.find(from);
+  if (it == arrays.end()) {
+    return false;
+  }
+
+  const std::string latPath = readStringValue(trObj, "lat_path", nullptr, "lat");
+  const std::string lonPath = readStringValue(trObj, "lon_path", nullptr, "lon");
+  const std::string xField = readStringValue(
+      trObj, "x_field", nullptr, readStringValue(trObj, "to_x_field", nullptr, "x"));
+  const std::string yField = readStringValue(
+      trObj, "y_field", nullptr, readStringValue(trObj, "to_y_field", nullptr, "y"));
+  if (latPath.empty() || lonPath.empty() || xField.empty() || yField.empty()) {
+    return false;
+  }
+
+  double lonMin = 0.0;
+  double lonMax = 0.0;
+  double latMin = 0.0;
+  double latMax = 0.0;
+  double xMin = 0.0;
+  double xMax = 319.0;
+  double yMin = 0.0;
+  double yMax = 239.0;
+  if (!parseTransformNumericArg(trObj, "lon_min", lonMin) ||
+      !parseTransformNumericArg(trObj, "lon_max", lonMax) ||
+      !parseTransformNumericArg(trObj, "lat_min", latMin) ||
+      !parseTransformNumericArg(trObj, "lat_max", latMax)) {
+    return false;
+  }
+  (void)parseTransformNumericArg(trObj, "x_min", xMin);
+  (void)parseTransformNumericArg(trObj, "x_max", xMax);
+  (void)parseTransformNumericArg(trObj, "y_min", yMin);
+  (void)parseTransformNumericArg(trObj, "y_max", yMax);
+
+  if (std::fabs(lonMax - lonMin) < 0.000001 || std::fabs(latMax - latMin) < 0.000001) {
+    return false;
+  }
+
+  bool clamp = true;
+  (void)objectMemberBool(trObj, "clamp", clamp);
+
+  for (TransformRow& row : it->second) {
+    double lat = 0.0;
+    double lon = 0.0;
+    if (!rowNumeric(row, latPath, lat) || !rowNumeric(row, lonPath, lon)) {
+      continue;
+    }
+
+    double nx = (lon - lonMin) / (lonMax - lonMin);
+    double ny = (latMax - lat) / (latMax - latMin);
+    if (clamp) {
+      nx = std::clamp(nx, 0.0, 1.0);
+      ny = std::clamp(ny, 0.0, 1.0);
+    }
+    const double x = xMin + nx * (xMax - xMin);
+    const double y = yMin + ny * (yMax - yMin);
+
+    char xb[32];
+    char yb[32];
+    std::snprintf(xb, sizeof(xb), "%.3f", x);
+    std::snprintf(yb, sizeof(yb), "%.3f", y);
+    row.fields[xField] = xb;
+    row.fields[yField] = yb;
+  }
   return true;
 }
 
@@ -2338,7 +2586,41 @@ std::string synthesizeLine(const TransformRow& row) {
 }
 
 bool transformIndexRows(std::string_view trObj, std::map<std::string, std::vector<TransformRow>>& arrays,
-                        std::map<std::string, std::string>& outFlat) {
+                        std::vector<std::pair<std::string, std::string>>& outFlat) {
+  constexpr size_t kNpos = static_cast<size_t>(-1);
+  const auto findFlat = [&](std::string_view key) {
+    for (size_t i = 0; i < outFlat.size(); ++i) {
+      if (outFlat[i].first == key) {
+        return i;
+      }
+    }
+    return kNpos;
+  };
+  const auto upsertFlat = [&](const std::string& key, std::string value) {
+    const size_t idx = findFlat(key);
+    if (idx == kNpos) {
+      outFlat.emplace_back(key, std::move(value));
+    } else {
+      outFlat[idx].second = std::move(value);
+    }
+  };
+  const auto uniqueFlatCount = [&]() {
+    size_t unique = 0;
+    for (size_t i = 0; i < outFlat.size(); ++i) {
+      bool duplicate = false;
+      for (size_t j = 0; j < i; ++j) {
+        if (outFlat[j].first == outFlat[i].first) {
+          duplicate = true;
+          break;
+        }
+      }
+      if (!duplicate) {
+        ++unique;
+      }
+    }
+    return unique;
+  };
+
   const std::string from = readStringValue(trObj, "from", nullptr, "");
   if (from.empty()) {
     return false;
@@ -2377,7 +2659,34 @@ bool transformIndexRows(std::string_view trObj, std::map<std::string, std::vecto
     });
   }
 
-  outFlat[countKey] = std::to_string(static_cast<int>(std::min<size_t>(it->second.size(), static_cast<size_t>(count))));
+  // Guard against generating more transform keys than runtime value slots allow.
+  // This prevents setValue(max_slots) churn when index_rows count/fields are oversized.
+  std::vector<std::string> prefixes;
+  prefixes.reserve(fields.size());
+  for (const std::string& field : fields) {
+    const std::string prefix = prefixMap.count(field) != 0 ? prefixMap[field] : field;
+    if (std::find(prefixes.begin(), prefixes.end(), prefix) == prefixes.end()) {
+      prefixes.push_back(prefix);
+    }
+  }
+  const size_t perRowKeys = prefixes.empty() ? 1U : prefixes.size();
+  const size_t currentKeys = uniqueFlatCount();
+  const size_t countKeyCost = (countKey.empty() || findFlat(countKey) != kNpos) ? 0U : 1U;
+  const size_t availableAfterCountKey =
+      (kRuntimeValueSlotsMax > currentKeys + countKeyCost) ? (kRuntimeValueSlotsMax - currentKeys - countKeyCost) : 0U;
+  const size_t maxRowsBySlots = availableAfterCountKey / perRowKeys;
+  const int requestedCount = count;
+  if (static_cast<size_t>(count) > maxRowsBySlots) {
+    count = static_cast<int>(maxRowsBySlots);
+    ESP_LOGW(kTag,
+             "index_rows cap from=%s requested=%d capped=%d fields=%u per_row=%u flat_keys=%u max_slots=%u",
+             from.c_str(), requestedCount, count, static_cast<unsigned>(fields.size()),
+             static_cast<unsigned>(perRowKeys), static_cast<unsigned>(currentKeys),
+             static_cast<unsigned>(kRuntimeValueSlotsMax));
+  }
+
+  upsertFlat(countKey,
+             std::to_string(static_cast<int>(std::min<size_t>(it->second.size(), static_cast<size_t>(count)))));
   for (int i = 0; i < count; ++i) {
     const bool have = static_cast<size_t>(i) < it->second.size();
     const TransformRow* row = have ? &it->second[static_cast<size_t>(i)] : nullptr;
@@ -2396,7 +2705,7 @@ bool transformIndexRows(std::string_view trObj, std::map<std::string, std::vecto
       if (row == nullptr && !fillEmpty) {
         continue;
       }
-      outFlat[key] = value;
+      upsertFlat(key, std::move(value));
     }
   }
   return true;
@@ -2404,7 +2713,10 @@ bool transformIndexRows(std::string_view trObj, std::map<std::string, std::vecto
 
 void applyTransforms(std::string_view rootJson) {
   std::map<std::string, std::vector<TransformRow>> arrays;
-  std::map<std::string, std::string> outFlat;
+  s.transformScratch.clear();
+  if (s.transformScratch.capacity() < kRuntimeValueSlotsMax) {
+    s.transformScratch.reserve(kRuntimeValueSlotsMax);
+  }
 
   for (const std::string& raw : s.transforms) {
     std::string_view trObj = trimView(raw);
@@ -2424,25 +2736,41 @@ void applyTransforms(std::string_view rootJson) {
       ok = transformComputeOffset(trObj, arrays);
     } else if (op == "filter_lte") {
       ok = transformFilterLte(trObj, arrays);
+    } else if (op == "filter_gte") {
+      ok = transformFilterGte(trObj, arrays);
+    } else if (op == "filter_between") {
+      ok = transformFilterBetween(trObj, arrays);
+    } else if (op == "project_latlon") {
+      ok = transformProjectLatLon(trObj, arrays);
     } else if (op == "sort") {
       ok = transformSort(trObj, arrays);
     } else if (op == "take") {
       ok = transformTake(trObj, arrays);
     } else if (op == "index_rows") {
-      ok = transformIndexRows(trObj, arrays, outFlat);
+      ok = transformIndexRows(trObj, arrays, s.transformScratch);
     }
     if (!ok && s.debug) {
       ESP_LOGW(kTag, "transform op failed: %s", op.c_str());
     }
   }
 
-  for (const auto& prev : s.transformValues) {
-    if (outFlat.find(prev.first) == outFlat.end()) {
+  const auto hasFlatKey = [&](const std::string& key) {
+    for (const auto& kv : s.transformScratch) {
+      if (kv.first == key) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  for (auto& prev : s.transformValues) {
+    if (!hasFlatKey(prev.first) && !prev.second.empty()) {
       (void)setValue(prev.first, "");
       s.numericValues.erase(prev.first);
+      prev.second.clear();
     }
   }
-  for (const auto& kv : outFlat) {
+  for (const auto& kv : s.transformScratch) {
     (void)setValue(kv.first, kv.second);
     double numeric = 0.0;
     if (parseStrictDouble(kv.second, numeric)) {
@@ -2450,8 +2778,13 @@ void applyTransforms(std::string_view rootJson) {
     } else {
       s.numericValues.erase(kv.first);
     }
+    auto it = s.transformValues.find(kv.first);
+    if (it == s.transformValues.end()) {
+      s.transformValues.emplace(kv.first, kv.second);
+    } else {
+      it->second = kv.second;
+    }
   }
-  s.transformValues = std::move(outFlat);
 }
 
 bool loadDslConfig(const std::string& dslJson) {
@@ -2554,6 +2887,22 @@ bool loadDslConfig(const std::string& dslJson) {
     s.pollMs = kDefaultPollMs;
   }
 
+  int httpMaxFromData = 0;
+  bool tlsSkipVerifyFromData = false;
+  bool hasTlsSkipVerifyFromData = false;
+  if (objectMemberInt(dataObj, "http_max_bytes", httpMaxFromData) ||
+      objectMemberInt(dataObj, "max_response_bytes", httpMaxFromData)) {
+    if (httpMaxFromData > 0) {
+      s.httpMaxBytes =
+          std::clamp<uint32_t>(static_cast<uint32_t>(httpMaxFromData),
+                               kHttpResponseMaxBytesMin, kHttpResponseMaxBytesMax);
+    }
+  }
+  if (objectMemberBool(dataObj, "tls_skip_verify", tlsSkipVerifyFromData) ||
+      objectMemberBool(dataObj, "tls_insecure", tlsSkipVerifyFromData)) {
+    hasTlsSkipVerifyFromData = true;
+  }
+
   bool debug = false;
   if (objectMemberBool(dataObj, "debug", debug)) {
     s.debug = debug;
@@ -2568,7 +2917,11 @@ bool loadDslConfig(const std::string& dslJson) {
   s.touchRegions.clear();
   s.activeModalId.clear();
   s.httpMaxBytes = kHttpResponseMaxBytesDefault;
+  s.tlsSkipVerify = false;
   s.retainSourceJson = false;
+  if (hasTlsSkipVerifyFromData) {
+    s.tlsSkipVerify = tlsSkipVerifyFromData;
+  }
 
   std::string_view fieldsObj;
   if (!objectMemberObject(dataObj, "fields", fieldsObj)) {
@@ -2692,10 +3045,22 @@ bool loadDslConfig(const std::string& dslJson) {
       s.httpMaxBytes = std::clamp<uint32_t>(v, kHttpResponseMaxBytesMin, kHttpResponseMaxBytesMax);
     }
   }
+  if (auto it = s.settingValues.find("tls_skip_verify"); it != s.settingValues.end()) {
+    const std::string v = trimCopy(it->second);
+    std::string low = v;
+    std::transform(low.begin(), low.end(), low.begin(), [](unsigned char c) {
+      return static_cast<char>(std::tolower(c));
+    });
+    if (low == "1" || low == "true" || low == "yes" || low == "on") {
+      s.tlsSkipVerify = true;
+    } else if (low == "0" || low == "false" || low == "no" || low == "off") {
+      s.tlsSkipVerify = false;
+    }
+  }
 
   for (const Node& n : s.nodes) {
-    // Icon node paths are filesystem/URL paths, never looked up in sourceJson.
-    if (n.type != NodeType::kIcon && !n.path.empty()) {
+    // Icon/bitmap node paths are filesystem/URL paths, never looked up in sourceJson.
+    if (n.type != NodeType::kIcon && n.type != NodeType::kBitmap1 && !n.path.empty()) {
       s.retainSourceJson = true;
       break;
     }
@@ -2915,6 +3280,13 @@ bool ensureHttpCaptureCapacity(HttpCapture* cap, size_t needBytes) {
   }
   if (grown == nullptr) {
     cap->oom = true;
+    const size_t freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    ESP_LOGW(kTag,
+             "http capture alloc fail need=%u target=%u cap=%u free=%u largest=%u",
+             static_cast<unsigned>(needBytes), static_cast<unsigned>(target),
+             static_cast<unsigned>(cap->maxBytes), static_cast<unsigned>(freeHeap),
+             static_cast<unsigned>(largest));
     return false;
   }
   cap->data = static_cast<char*>(grown);
@@ -3473,6 +3845,7 @@ void teardownWsClient() {
     sWs.client = nullptr;
     sWs.profileKey.clear();
     sWs.wsUrl.clear();
+    sWs.tlsSkipVerify = false;
     sWs.token.clear();
     sWs.authTemplate.clear();
     sWs.authRequiredType = "auth_required";
@@ -3524,6 +3897,7 @@ bool ensureWsConnected(const std::string& profileKey, const std::string& wsUrl, 
     return false;
   }
   if (sWs.client == nullptr || sWs.wsUrl != wsUrl || sWs.profileKey != profileKey ||
+      sWs.tlsSkipVerify != s.tlsSkipVerify ||
       sWs.token != token || sWs.authTemplate != authTemplate ||
       sWs.authRequiredType != authRequiredType || sWs.authOkType != authOkType ||
       sWs.authInvalidType != authInvalidType || sWs.readyType != readyType ||
@@ -3537,14 +3911,17 @@ bool ensureWsConnected(const std::string& profileKey, const std::string& wsUrl, 
     if (urlUsesTls(wsUrl)) {
       size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
       size_t freeHeap = esp_get_free_heap_size();
-      if (largest < kTlsMinLargest8Bit || freeHeap < kTlsMinFree8Bit) {
+      size_t minLargest = tlsMinLargestForFreeHeap(freeHeap);
+      if (largest < minLargest || freeHeap < kTlsMinFree8Bit) {
         (void)reclaimRuntimeCachesLowHeap("ws-tls-guard");
         largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
         freeHeap = esp_get_free_heap_size();
+        minLargest = tlsMinLargestForFreeHeap(freeHeap);
       }
-      if (largest < kTlsMinLargest8Bit || freeHeap < kTlsMinFree8Bit) {
-        ESP_LOGE(kTag, "ws tls guard defer free=%u largest=%u", static_cast<unsigned>(freeHeap),
-                 static_cast<unsigned>(largest));
+      if (largest < minLargest || freeHeap < kTlsMinFree8Bit) {
+        ESP_LOGE(kTag, "ws tls guard defer free=%u largest=%u min_free=%u min_largest=%u",
+                 static_cast<unsigned>(freeHeap), static_cast<unsigned>(largest),
+                 static_cast<unsigned>(kTlsMinFree8Bit), static_cast<unsigned>(minLargest));
         reasonOut = "ws tls low heap";
         return false;
       }
@@ -3556,6 +3933,7 @@ bool ensureWsConnected(const std::string& profileKey, const std::string& wsUrl, 
     }
     sWs.profileKey = profileKey;
     sWs.wsUrl = wsUrl;
+    sWs.tlsSkipVerify = s.tlsSkipVerify;
     sWs.token = token;
     sWs.authTemplate = authTemplate;
     sWs.authRequiredType = trimCopy(authRequiredType.empty() ? "auth_required" : authRequiredType);
@@ -3580,7 +3958,19 @@ bool ensureWsConnected(const std::string& profileKey, const std::string& wsUrl, 
     cfg.keep_alive_interval = 10;
     cfg.keep_alive_count = 3;
     cfg.buffer_size = static_cast<int>(kWsMaxFrameBytes);
-    cfg.crt_bundle_attach = esp_crt_bundle_attach;
+    if (sWs.tlsSkipVerify) {
+#if CONFIG_ESP_TLS_INSECURE && CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY
+      cfg.crt_bundle_attach = nullptr;
+      cfg.skip_cert_common_name_check = true;
+#else
+      ESP_LOGW(kTag,
+               "ws tls_skip_verify requested but CONFIG_ESP_TLS_INSECURE and "
+               "CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY are required");
+      cfg.crt_bundle_attach = esp_crt_bundle_attach;
+#endif
+    } else {
+      cfg.crt_bundle_attach = esp_crt_bundle_attach;
+    }
     sWs.client = esp_websocket_client_init(&cfg);
     if (sWs.client == nullptr) {
       giveWsLock();
@@ -3588,7 +3978,8 @@ bool ensureWsConnected(const std::string& profileKey, const std::string& wsUrl, 
       return false;
     }
     (void)esp_websocket_register_events(sWs.client, WEBSOCKET_EVENT_ANY, wsClientEventHandler, nullptr);
-    ESP_LOGI(kTag, "ws connect widget=%s url=%s", widgetId.c_str(), sWs.wsUrl.c_str());
+    ESP_LOGI(kTag, "ws connect widget=%s url=%s tls_skip_verify=%d", widgetId.c_str(), sWs.wsUrl.c_str(),
+             sWs.tlsSkipVerify ? 1 : 0);
     if (esp_websocket_client_start(sWs.client) != ESP_OK) {
       esp_websocket_client_destroy(sWs.client);
       sWs.client = nullptr;
@@ -3928,7 +4319,7 @@ void loadTapActionFromSettings() {
 bool httpRequestDirect(const std::string& method, const std::string& url,
                        const std::vector<KeyValue>& headers, const std::string& reqBody, int& statusCode,
                        std::string& body, std::string& reason, uint32_t& durationMs, std::string& hostOut,
-                       bool& viaProxy, uint32_t maxResponseBytes) {
+                       bool& viaProxy, uint32_t maxResponseBytes, bool tlsSkipVerify) {
   statusCode = 0;
   body.clear();
   reason.clear();
@@ -3942,19 +4333,21 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
   if (urlUsesTls(url)) {
     size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
     size_t freeHeap = esp_get_free_heap_size();
-    if (largest < kTlsMinLargest8Bit || freeHeap < kTlsMinFree8Bit) {
+    size_t minLargest = tlsMinLargestForFreeHeap(freeHeap);
+    if (largest < minLargest || freeHeap < kTlsMinFree8Bit) {
       (void)reclaimRuntimeCachesLowHeap("tls-guard");
       largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
       freeHeap = esp_get_free_heap_size();
+      minLargest = tlsMinLargestForFreeHeap(freeHeap);
     }
-    if (largest < kTlsMinLargest8Bit || freeHeap < kTlsMinFree8Bit) {
+    if (largest < minLargest || freeHeap < kTlsMinFree8Bit) {
       char lowHeapReason[96];
       std::snprintf(lowHeapReason, sizeof(lowHeapReason), "tls low heap free=%u largest=%u",
                     static_cast<unsigned>(freeHeap), static_cast<unsigned>(largest));
       reason = lowHeapReason;
       ESP_LOGE(kTag, "tls guard defer host=%s free=%u largest=%u min_free=%u min_largest=%u",
                hostOut.c_str(), static_cast<unsigned>(freeHeap), static_cast<unsigned>(largest),
-               static_cast<unsigned>(kTlsMinFree8Bit), static_cast<unsigned>(kTlsMinLargest8Bit));
+               static_cast<unsigned>(kTlsMinFree8Bit), static_cast<unsigned>(minLargest));
       return false;
     }
   }
@@ -3970,15 +4363,47 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
 
   HttpCapture cap;
   cap.maxBytes = std::clamp<uint32_t>(maxResponseBytes, kHttpResponseMaxBytesMin, kHttpResponseMaxBytesMax);
+  int64_t responseContentLength = -1;
+  int chunkedResponse = 0;
   esp_http_client_config_t cfg = {};
   cfg.url = url.c_str();
+  cfg.host = hostOut.empty() ? nullptr : hostOut.c_str();
   cfg.timeout_ms = static_cast<int>(kHttpTimeoutMs);
-  cfg.crt_bundle_attach = esp_crt_bundle_attach;
+  const bool isTls = urlUsesTls(url);
+  esp_http_client_proto_ver_t tlsVersion = ESP_HTTP_CLIENT_TLS_VER_ANY;
+  if (isTls && hostOut == "earthquake.usgs.gov") {
+    // USGS can reject some TLS1.2 cipher mixes from constrained clients.
+    // Prefer TLS1.3 for this endpoint.
+    tlsVersion = ESP_HTTP_CLIENT_TLS_VER_TLS_1_3;
+  }
+  if (urlUsesTls(url)) {
+    // Allow normal TLS version negotiation for broad endpoint compatibility.
+    cfg.tls_version = tlsVersion;
+    ESP_LOGI(kTag, "http tls host=%s ver=%d", hostOut.c_str(), static_cast<int>(tlsVersion));
+  }
+  if (tlsSkipVerify) {
+#if CONFIG_ESP_TLS_INSECURE && CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY
+    cfg.crt_bundle_attach = nullptr;
+    cfg.skip_cert_common_name_check = true;
+#else
+    ESP_LOGW(kTag,
+             "tls_skip_verify requested but CONFIG_ESP_TLS_INSECURE and "
+             "CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY are required");
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
+#endif
+  } else {
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
+  }
   cfg.disable_auto_redirect = false;
   cfg.max_redirection_count = 5;
   cfg.keep_alive_enable = false;
-  cfg.event_handler = httpEventHandler;
-  cfg.user_data = &cap;
+  if (method == "GET") {
+    cfg.event_handler = nullptr;
+    cfg.user_data = nullptr;
+  } else {
+    cfg.event_handler = httpEventHandler;
+    cfg.user_data = &cap;
+  }
   cfg.buffer_size = 1024;
   cfg.buffer_size_tx = 512;
 
@@ -3989,66 +4414,135 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
     return false;
   }
 
-  esp_http_client_method_t m = HTTP_METHOD_GET;
-  if (method == "POST") {
-    m = HTTP_METHOD_POST;
-  } else if (method == "PUT") {
-    m = HTTP_METHOD_PUT;
-  } else if (method == "PATCH") {
-    m = HTTP_METHOD_PATCH;
-  } else if (method == "DELETE") {
-    m = HTTP_METHOD_DELETE;
-  } else if (method == "HEAD") {
-    m = HTTP_METHOD_HEAD;
-  }
-  esp_http_client_set_method(client, m);
-  esp_http_client_set_header(client, "Accept", "application/json");
-  esp_http_client_set_header(client, "User-Agent", "CoStar-ESP32/1.0");
-  esp_http_client_set_header(client, "Accept-Encoding", "identity");
-  if (!reqBody.empty()) {
-    esp_http_client_set_header(client, "Content-Type", "application/json");
-    esp_http_client_set_post_field(client, reqBody.c_str(), static_cast<int>(reqBody.size()));
-  }
-  for (const KeyValue& kv : headers) {
-    const std::string key = trimCopy(kv.key);
-    if (key.empty()) {
-      continue;
+  auto configureClientRequest = [&](esp_http_client_handle_t h) {
+    esp_http_client_method_t m = HTTP_METHOD_GET;
+    if (method == "POST") {
+      m = HTTP_METHOD_POST;
+    } else if (method == "PUT") {
+      m = HTTP_METHOD_PUT;
+    } else if (method == "PATCH") {
+      m = HTTP_METHOD_PATCH;
+    } else if (method == "DELETE") {
+      m = HTTP_METHOD_DELETE;
+    } else if (method == "HEAD") {
+      m = HTTP_METHOD_HEAD;
     }
-    const std::string value = bindRuntimeTemplate(kv.value);
-    if (value.empty()) {
-      continue;
+    esp_http_client_set_method(h, m);
+    esp_http_client_set_header(h, "Accept", "application/json");
+    esp_http_client_set_header(h, "User-Agent", "CoStar-ESP32/1.0");
+    esp_http_client_set_header(h, "Accept-Encoding", "identity");
+    if (!reqBody.empty()) {
+      esp_http_client_set_header(h, "Content-Type", "application/json");
+      esp_http_client_set_post_field(h, reqBody.c_str(), static_cast<int>(reqBody.size()));
     }
-    esp_http_client_set_header(client, key.c_str(), value.c_str());
-    std::string keyLower = key;
-    std::transform(keyLower.begin(), keyLower.end(), keyLower.begin(), [](unsigned char c) {
-      return static_cast<char>(std::tolower(c));
-    });
-    const bool sensitive = keyLower == "authorization" || keyLower == "cookie" ||
-                           keyLower == "x-api-key" || keyLower == "proxy-authorization";
-    std::string shown = value;
-    if (sensitive) {
-      if (shown.size() > 16) {
-        shown = shown.substr(0, 8) + "...(" + std::to_string(static_cast<unsigned>(value.size())) +
-                " bytes)";
-      } else if (!shown.empty()) {
-        shown = "***";
+    for (const KeyValue& kv : headers) {
+      const std::string key = trimCopy(kv.key);
+      if (key.empty()) {
+        continue;
+      }
+      const std::string value = bindRuntimeTemplate(kv.value);
+      if (value.empty()) {
+        continue;
+      }
+      esp_http_client_set_header(h, key.c_str(), value.c_str());
+      std::string keyLower = key;
+      std::transform(keyLower.begin(), keyLower.end(), keyLower.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+      });
+      const bool sensitive = keyLower == "authorization" || keyLower == "cookie" ||
+                             keyLower == "x-api-key" || keyLower == "proxy-authorization";
+      std::string shown = value;
+      if (sensitive) {
+        if (shown.size() > 16) {
+          shown = shown.substr(0, 8) + "...(" + std::to_string(static_cast<unsigned>(value.size())) +
+                  " bytes)";
+        } else if (!shown.empty()) {
+          shown = "***";
+        }
+      }
+      ESP_LOGD(kTag, "http hdr host=%s key=%s value=%s", hostOut.c_str(), key.c_str(), shown.c_str());
+    }
+  };
+
+  configureClientRequest(client);
+
+  esp_err_t reqErr = ESP_OK;
+  if (method == "GET") {
+    reqErr = esp_http_client_open(client, 0);
+    if (reqErr == ESP_OK) {
+      const int64_t contentLen = esp_http_client_fetch_headers(client);
+      responseContentLength = contentLen;
+      statusCode = esp_http_client_get_status_code(client);
+      chunkedResponse = esp_http_client_is_chunked_response(client) ? 1 : 0;
+      if (contentLen > 0) {
+        if (static_cast<size_t>(contentLen) > cap.maxBytes) {
+          cap.overflow = true;
+        } else {
+          (void)ensureHttpCaptureCapacity(&cap, static_cast<size_t>(contentLen));
+        }
+      }
+      int zeroReadStreak = 0;
+      while (reqErr == ESP_OK) {
+        char tmp[512];
+        const int got = esp_http_client_read(client, tmp, sizeof(tmp));
+        if (got == -ESP_ERR_HTTP_EAGAIN) {
+          if (++zeroReadStreak >= 5) {
+            reqErr = ESP_FAIL;
+            reason = "http read timeout";
+            break;
+          }
+          vTaskDelay(pdMS_TO_TICKS(20));
+          continue;
+        }
+        if (got < 0) {
+          reqErr = ESP_FAIL;
+          reason = "http read failed";
+          break;
+        }
+        if (got == 0) {
+          if (esp_http_client_is_complete_data_received(client)) {
+            break;
+          }
+          if (++zeroReadStreak >= 5) {
+            reqErr = ESP_FAIL;
+            reason = "http read incomplete";
+            break;
+          }
+          vTaskDelay(pdMS_TO_TICKS(20));
+          continue;
+        }
+        zeroReadStreak = 0;
+        const size_t needBytes = cap.size + static_cast<size_t>(got);
+        if (!ensureHttpCaptureCapacity(&cap, needBytes)) {
+          break;
+        }
+        std::memcpy(cap.data + cap.size, tmp, static_cast<size_t>(got));
+        cap.size += static_cast<size_t>(got);
+        cap.data[cap.size] = '\0';
       }
     }
-    ESP_LOGD(kTag, "http hdr host=%s key=%s value=%s", hostOut.c_str(), key.c_str(), shown.c_str());
+  } else {
+    reqErr = esp_http_client_perform(client);
+    if (reqErr == ESP_OK) {
+      statusCode = esp_http_client_get_status_code(client);
+      responseContentLength = esp_http_client_get_content_length(client);
+      chunkedResponse = esp_http_client_is_chunked_response(client) ? 1 : 0;
+    }
   }
 
-  const esp_err_t err = esp_http_client_perform(client);
-  if (err == ESP_OK) {
-    statusCode = esp_http_client_get_status_code(client);
-  }
   // Release TLS/client allocations before attempting to allocate std::string body storage.
-  esp_http_client_cleanup(client);
+  if (client != nullptr) {
+    esp_http_client_cleanup(client);
+    client = nullptr;
+  }
   http_transport_gate::give();
   durationMs = platform::millisMs() - startMs;
 
-  if (err != ESP_OK) {
-    logTlsFailureEpoch(url, err);
-    reason = esp_err_to_name(err);
+  if (reqErr != ESP_OK) {
+    logTlsFailureEpoch(url, reqErr);
+    if (reason.empty()) {
+      reason = esp_err_to_name(reqErr);
+    }
     ESP_LOGW(kTag, "http fail host=%s proxy=%d dur_ms=%u reason=%s", hostOut.c_str(), viaProxy ? 1 : 0,
              static_cast<unsigned>(durationMs), reason.c_str());
     if (cap.data != nullptr) {
@@ -4097,8 +4591,10 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
                "http fail host=%s proxy=%d dur_ms=%u reason=%s body=%u largest=%u",
                hostOut.c_str(), viaProxy ? 1 : 0, static_cast<unsigned>(durationMs), reason.c_str(),
                static_cast<unsigned>(cap.size), static_cast<unsigned>(largestBeforeCopy));
-      heap_caps_free(cap.data);
-      cap.data = nullptr;
+      if (cap.data != nullptr) {
+        heap_caps_free(cap.data);
+        cap.data = nullptr;
+      }
       return false;
     }
     body.assign(cap.data, cap.size);
@@ -4106,6 +4602,14 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
   if (cap.data != nullptr) {
     heap_caps_free(cap.data);
     cap.data = nullptr;
+  }
+
+  if (statusCode >= 200 && statusCode < 300 && body.empty()) {
+    ESP_LOGW(kTag,
+             "http empty body host=%s proxy=%d status=%d content_len=%lld chunked=%d dur_ms=%u",
+             hostOut.c_str(), viaProxy ? 1 : 0, statusCode,
+             static_cast<long long>(responseContentLength), chunkedResponse,
+             static_cast<unsigned>(durationMs));
   }
 
   ESP_LOGD(kTag, "http done method=%s host=%s proxy=%d status=%d bytes=%u dur_ms=%u", method.c_str(),
@@ -4132,7 +4636,7 @@ void httpWorkerTask(void* /*arg*/) {
     result->ok =
         httpRequestDirect(job->method, job->url, job->headers, job->body, result->statusCode, result->body,
                           result->reason, result->durationMs, result->host, result->viaProxy,
-                          job->maxResponseBytes);
+                          job->maxResponseBytes, job->tlsSkipVerify);
     if (job->replyQueue != nullptr) {
       if (xQueueSend(job->replyQueue, &result, pdMS_TO_TICKS(100)) != pdTRUE) {
         delete result;
@@ -4223,7 +4727,7 @@ bool httpGet(std::string url, std::vector<KeyValue> headers, int& statusCode, st
     std::string host;
     bool viaProxy = false;
     return httpRequestDirect("GET", url, headers, "", statusCode, body, reason, durationMs, host, viaProxy,
-                             s.httpMaxBytes);
+                             s.httpMaxBytes, s.tlsSkipVerify);
   }
 
   QueueHandle_t replyQueue = xQueueCreate(1, sizeof(HttpResult*));
@@ -4242,6 +4746,7 @@ bool httpGet(std::string url, std::vector<KeyValue> headers, int& statusCode, st
   job->body.clear();
   job->headers = std::move(headers);
   job->maxResponseBytes = s.httpMaxBytes;
+  job->tlsSkipVerify = s.tlsSkipVerify;
   job->replyQueue = replyQueue;
 
   if (xQueueSend(sHttpJobQueue, &job, pdMS_TO_TICKS(kHttpGateTimeoutMs)) != pdTRUE) {
@@ -4252,7 +4757,11 @@ bool httpGet(std::string url, std::vector<KeyValue> headers, int& statusCode, st
   }
 
   HttpResult* result = nullptr;
-  const BaseType_t got = xQueueReceive(replyQueue, &result, pdMS_TO_TICKS(kHttpWorkerReplyTimeoutMs));
+  BaseType_t got = xQueueReceive(replyQueue, &result, pdMS_TO_TICKS(kHttpWorkerReplyTimeoutMs));
+  if (got != pdTRUE || result == nullptr) {
+    // Avoid queue lifetime race with httpWorkerTask on slow network paths.
+    got = xQueueReceive(replyQueue, &result, pdMS_TO_TICKS(kHttpTimeoutMs + 4000U));
+  }
   vQueueDelete(replyQueue);
   if (got != pdTRUE || result == nullptr) {
     reason = "http worker timeout";
@@ -4278,7 +4787,7 @@ bool httpRequest(std::string method, std::string url, std::vector<KeyValue> head
     std::string host;
     bool viaProxy = false;
     return httpRequestDirect(method, url, headers, reqBody, statusCode, body, reason, durationMs, host,
-                             viaProxy, s.httpMaxBytes);
+                             viaProxy, s.httpMaxBytes, s.tlsSkipVerify);
   }
 
   QueueHandle_t replyQueue = xQueueCreate(1, sizeof(HttpResult*));
@@ -4297,6 +4806,7 @@ bool httpRequest(std::string method, std::string url, std::vector<KeyValue> head
   job->body = std::move(reqBody);
   job->headers = std::move(headers);
   job->maxResponseBytes = s.httpMaxBytes;
+  job->tlsSkipVerify = s.tlsSkipVerify;
   job->replyQueue = replyQueue;
 
   if (xQueueSend(sHttpJobQueue, &job, pdMS_TO_TICKS(kHttpGateTimeoutMs)) != pdTRUE) {
@@ -4307,7 +4817,11 @@ bool httpRequest(std::string method, std::string url, std::vector<KeyValue> head
   }
 
   HttpResult* result = nullptr;
-  const BaseType_t got = xQueueReceive(replyQueue, &result, pdMS_TO_TICKS(kHttpWorkerReplyTimeoutMs));
+  BaseType_t got = xQueueReceive(replyQueue, &result, pdMS_TO_TICKS(kHttpWorkerReplyTimeoutMs));
+  if (got != pdTRUE || result == nullptr) {
+    // Avoid queue lifetime race with httpWorkerTask on slow network paths.
+    got = xQueueReceive(replyQueue, &result, pdMS_TO_TICKS(kHttpTimeoutMs + 4000U));
+  }
   vQueueDelete(replyQueue);
   if (got != pdTRUE || result == nullptr) {
     reason = "http worker timeout";
@@ -4694,6 +5208,20 @@ bool fetchAndResolve(uint32_t nowMs) {
   }
 
   std::string url = bindRuntimeTemplate(s.urlTemplate);
+  const bool requestUsesTls = urlUsesTls(url);
+  if (s.tlsRetryGuard && requestUsesTls) {
+    const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    const size_t freeHeap = esp_get_free_heap_size();
+    const size_t minLargest = tlsMinLargestForFreeHeap(freeHeap);
+    if (largest < minLargest || freeHeap < kTlsMinFree8Bit) {
+      noteFetchDeferred(nowMs, "tls retry guard wait heap recovery");
+      return false;
+    }
+    s.tlsRetryGuard = false;
+    ESP_LOGI(kTag, "tls retry guard cleared widget=%s free=%u largest=%u", s.widgetId.c_str(),
+             static_cast<unsigned>(freeHeap), static_cast<unsigned>(largest));
+  }
+
   std::vector<KeyValue> resolvedHeaders;
   resolvedHeaders.reserve(s.headers.size());
   for (const KeyValue& kv : s.headers) {
@@ -4734,6 +5262,16 @@ bool fetchAndResolve(uint32_t nowMs) {
   }
 
   if (!requestOk) {
+    if (requestUsesTls && reason == "ESP_ERR_HTTP_CONNECT") {
+      const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+      const size_t freeHeap = esp_get_free_heap_size();
+      const size_t minLargest = tlsMinLargestForFreeHeap(freeHeap);
+      if (largest < minLargest || freeHeap < kTlsMinFree8Bit) {
+        s.tlsRetryGuard = true;
+        noteFetchDeferred(nowMs, "tls connect failed; waiting for heap recovery");
+        return false;
+      }
+    }
     noteFetchFailure(nowMs, reason.c_str());
     return false;
   }
@@ -4746,7 +5284,9 @@ bool fetchAndResolve(uint32_t nowMs) {
 
   const std::string* parseBody = (shared != nullptr) ? &shared->body : &body;
   if (parseBody->empty()) {
-    noteFetchFailure(nowMs, "empty body");
+    char emptyBuf[64];
+    std::snprintf(emptyBuf, sizeof(emptyBuf), "empty body status=%d", statusCode);
+    noteFetchFailure(nowMs, emptyBuf);
     return false;
   }
 
@@ -5028,7 +5568,17 @@ bool loadIcon(const std::string& path, int w, int h, std::vector<uint16_t>& outP
   if (path.empty() || w <= 0 || h <= 0) {
     return false;
   }
-  std::string fullPath = path;
+  std::string localPath = path;
+  if (localPath.rfind("/littlefs/", 0) == 0) {
+    localPath = localPath.substr(9);
+  } else if (localPath == "/littlefs") {
+    localPath = "/";
+  }
+  if (!localPath.empty() && localPath.front() != '/') {
+    localPath.insert(localPath.begin(), '/');
+  }
+
+  std::string fullPath = localPath;
   if (fullPath.rfind("/littlefs/", 0) != 0) {
     if (!fullPath.empty() && fullPath.front() == '/') {
       fullPath = "/littlefs" + fullPath;
@@ -5045,6 +5595,30 @@ bool loadIcon(const std::string& path, int w, int h, std::vector<uint16_t>& outP
   const size_t got = std::fread(outPixels.data(), sizeof(uint16_t), needPixels, fp);
   std::fclose(fp);
   return got == needPixels;
+}
+
+bool loadBitmap1(const std::string& path, int w, int h, std::vector<uint8_t>& outBits) {
+  if (path.empty() || w <= 0 || h <= 0) {
+    return false;
+  }
+  std::string fullPath = path;
+  if (fullPath.rfind("/littlefs/", 0) != 0) {
+    if (!fullPath.empty() && fullPath.front() == '/') {
+      fullPath = "/littlefs" + fullPath;
+    } else {
+      fullPath = "/littlefs/" + fullPath;
+    }
+  }
+  std::FILE* fp = std::fopen(fullPath.c_str(), "rb");
+  if (fp == nullptr) {
+    return false;
+  }
+  const size_t stride = static_cast<size_t>((w + 7) / 8);
+  const size_t needBytes = stride * static_cast<size_t>(h);
+  outBits.assign(needBytes, 0);
+  const size_t got = std::fread(outBits.data(), 1, needBytes, fp);
+  std::fclose(fp);
+  return got == needBytes;
 }
 
 bool isHttpUrl(const std::string& path) {
@@ -5078,6 +5652,12 @@ std::string iconCacheFilePath(const std::string& cacheKey) {
   return std::string(kIconCacheDir) + "/" + hex64(fnv1a64(cacheKey)) + ".raw";
 }
 
+struct IconFileCacheEntry {
+  std::string path;
+  size_t bytes = 0;
+  std::time_t mtime = 0;
+};
+
 bool ensureIconCacheDir() {
   if (sIconCacheDirReady) {
     return true;
@@ -5088,6 +5668,95 @@ bool ensureIconCacheDir() {
   }
   ESP_LOGW(kTag, "icon cache dir create failed path=%s errno=%d", kIconCacheDir, errno);
   return false;
+}
+
+bool gatherIconFileCacheEntries(std::vector<IconFileCacheEntry>& out, size_t& totalBytes) {
+  out.clear();
+  totalBytes = 0;
+  DIR* dir = ::opendir(kIconCacheDir);
+  if (dir == nullptr) {
+    return false;
+  }
+  while (dirent* de = ::readdir(dir)) {
+    if (de->d_name[0] == '.') {
+      continue;
+    }
+    const std::string name(de->d_name);
+    if (name.size() < 4 || name.rfind(".raw") != name.size() - 4) {
+      continue;
+    }
+    const std::string path = std::string(kIconCacheDir) + "/" + name;
+    struct stat st = {};
+    if (::stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) {
+      continue;
+    }
+    IconFileCacheEntry entry;
+    entry.path = path;
+    entry.bytes = static_cast<size_t>(st.st_size >= 0 ? st.st_size : 0);
+    entry.mtime = st.st_mtime;
+    totalBytes += entry.bytes;
+    out.push_back(std::move(entry));
+  }
+  ::closedir(dir);
+  return true;
+}
+
+bool enforceIconFileCacheBudget(const std::string& keepPath, size_t incomingBytes) {
+  if (incomingBytes == 0 || incomingBytes > kIconFileCacheBudgetBytes) {
+    return false;
+  }
+  std::vector<IconFileCacheEntry> entries;
+  size_t totalBytes = 0;
+  if (!gatherIconFileCacheEntries(entries, totalBytes)) {
+    return false;
+  }
+
+  size_t keepExistingBytes = 0;
+  for (const auto& e : entries) {
+    if (e.path == keepPath) {
+      keepExistingBytes = e.bytes;
+      break;
+    }
+  }
+  size_t projected = totalBytes - keepExistingBytes + incomingBytes;
+  if (projected <= kIconFileCacheBudgetBytes && entries.size() <= kIconFileCacheMaxEntries) {
+    return true;
+  }
+
+  std::sort(entries.begin(), entries.end(), [](const IconFileCacheEntry& a, const IconFileCacheEntry& b) {
+    if (a.mtime != b.mtime) {
+      return a.mtime < b.mtime;
+    }
+    return a.path < b.path;
+  });
+
+  size_t evictedFiles = 0;
+  size_t evictedBytes = 0;
+  for (const auto& e : entries) {
+    if (projected <= kIconFileCacheBudgetBytes &&
+        (entries.size() - evictedFiles) <= kIconFileCacheMaxEntries) {
+      break;
+    }
+    if (e.path == keepPath) {
+      continue;
+    }
+    if (::unlink(e.path.c_str()) != 0) {
+      continue;
+    }
+    projected = projected > e.bytes ? projected - e.bytes : 0;
+    ++evictedFiles;
+    evictedBytes += e.bytes;
+  }
+
+  if (evictedFiles > 0) {
+    ESP_LOGI(kTag, "icon file cache evict files=%u bytes=%u projected=%u budget=%u entries=%u",
+             static_cast<unsigned>(evictedFiles), static_cast<unsigned>(evictedBytes),
+             static_cast<unsigned>(projected), static_cast<unsigned>(kIconFileCacheBudgetBytes),
+             static_cast<unsigned>(kIconFileCacheMaxEntries));
+  }
+
+  return projected <= kIconFileCacheBudgetBytes &&
+         (entries.size() - evictedFiles) <= kIconFileCacheMaxEntries;
 }
 
 bool iconMemCacheGetPtr(const std::string& key, const std::vector<uint16_t>*& outPixels) {
@@ -5198,6 +5867,7 @@ void iconMemCachePut(const std::string& key, std::vector<uint16_t>&& pixels) {
 
 bool iconFileCacheGet(const std::string& key, int w, int h, std::vector<uint16_t>& outPixels) {
   if (!ensureIconCacheDir()) {
+    ESP_LOGI(kTag, "icon file cache miss key=%s reason=dir_unavailable", key.c_str());
     return false;
   }
   const size_t needPixels = static_cast<size_t>(w) * static_cast<size_t>(h);
@@ -5209,25 +5879,44 @@ bool iconFileCacheGet(const std::string& key, int w, int h, std::vector<uint16_t
   const std::string path = iconCacheFilePath(key);
   std::FILE* fp = std::fopen(path.c_str(), "rb");
   if (fp == nullptr) {
+    ESP_LOGI(kTag, "icon file cache miss key=%s path=%s reason=no_file", key.c_str(), path.c_str());
     return false;
   }
   outPixels.resize(needPixels);
   const size_t got = std::fread(outPixels.data(), sizeof(uint16_t), needPixels, fp);
   std::fclose(fp);
-  return got == needPixels;
+  if (got == needPixels) {
+    ESP_LOGI(kTag, "icon file cache hit key=%s path=%s bytes=%u", key.c_str(), path.c_str(),
+             static_cast<unsigned>(needBytes));
+    return true;
+  }
+  ESP_LOGW(kTag, "icon file cache miss key=%s path=%s reason=size_mismatch got=%u expect=%u",
+           key.c_str(), path.c_str(), static_cast<unsigned>(got * sizeof(uint16_t)),
+           static_cast<unsigned>(needBytes));
+  return false;
 }
 
 void iconFileCachePut(const std::string& key, const std::vector<uint16_t>& pixels) {
   if (!ensureIconCacheDir()) {
+    ESP_LOGW(kTag, "icon file cache skip key=%s reason=dir_unavailable", key.c_str());
     return;
   }
   const std::string path = iconCacheFilePath(key);
+  const size_t bytes = pixels.size() * sizeof(uint16_t);
+  if (!enforceIconFileCacheBudget(path, bytes)) {
+    ESP_LOGW(kTag, "icon file cache skip key=%s reason=budget path=%s bytes=%u", key.c_str(),
+             path.c_str(), static_cast<unsigned>(bytes));
+    return;
+  }
   std::FILE* fp = std::fopen(path.c_str(), "wb");
   if (fp == nullptr) {
+    ESP_LOGW(kTag, "icon file cache skip key=%s reason=open_failed path=%s", key.c_str(), path.c_str());
     return;
   }
   (void)std::fwrite(pixels.data(), sizeof(uint16_t), pixels.size(), fp);
   std::fclose(fp);
+  ESP_LOGI(kTag, "icon file cache store key=%s path=%s bytes=%u", key.c_str(), path.c_str(),
+           static_cast<unsigned>(bytes));
 }
 
 bool loadIconRemote(const std::string& url, int w, int h, bool allowNetwork = true) {
@@ -5237,10 +5926,6 @@ bool loadIconRemote(const std::string& url, int w, int h, bool allowNetwork = tr
   const std::string key = iconCacheKey(url, w, h);
   const uint32_t nowMs = platform::millisMs();
   pruneIconRetryMap(nowMs);
-  auto retryIt = sIconRetryAfterMs.find(key);
-  if (retryIt != sIconRetryAfterMs.end() && nowMs < retryIt->second) {
-    return false;
-  }
   const std::vector<uint16_t>* cachedPixels = nullptr;
   if (iconMemCacheGetPtr(key, cachedPixels) && cachedPixels != nullptr) {
     sIconRetryAfterMs.erase(key);
@@ -5251,6 +5936,10 @@ bool loadIconRemote(const std::string& url, int w, int h, bool allowNetwork = tr
     iconMemCachePut(key, std::move(filePixels));
     sIconRetryAfterMs.erase(key);
     return true;
+  }
+  auto retryIt = sIconRetryAfterMs.find(key);
+  if (retryIt != sIconRetryAfterMs.end() && nowMs < retryIt->second) {
+    return false;
   }
   if (!allowNetwork) {
     return false;
@@ -5356,6 +6045,97 @@ bool getNumeric(const std::string& key, float& out) {
   return true;
 }
 
+bool nodeVisible(const Node& node) {
+  if (node.visibleIf.empty()) {
+    return true;
+  }
+  const std::string expr = bindRuntimeTemplate(node.visibleIf);
+  const std::string trimmed = trimCopy(expr);
+  if (trimmed.empty()) {
+    return true;
+  }
+  std::string lowered = trimmed;
+  std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+  if (lowered == "true" || lowered == "yes" || lowered == "on") {
+    return true;
+  }
+  if (lowered == "false" || lowered == "no" || lowered == "off") {
+    return false;
+  }
+  float numeric = 0.0f;
+  if (evalNumericExpr(trimmed, nullptr, numeric)) {
+    return std::fabs(numeric) > 0.000001f;
+  }
+  double parsed = 0.0;
+  if (parseStrictDouble(trimmed, parsed)) {
+    return std::fabs(parsed) > 0.000001;
+  }
+  if (const std::string* value = getValue(trimmed); value != nullptr) {
+    const std::string vtrim = trimCopy(*value);
+    if (vtrim.empty()) {
+      return false;
+    }
+    std::string vlow = vtrim;
+    std::transform(vlow.begin(), vlow.end(), vlow.begin(), [](unsigned char c) {
+      return static_cast<char>(std::tolower(c));
+    });
+    if (vlow == "false" || vlow == "no" || vlow == "off") {
+      return false;
+    }
+    if (vlow == "true" || vlow == "yes" || vlow == "on") {
+      return true;
+    }
+    double vnum = 0.0;
+    if (parseStrictDouble(vtrim, vnum)) {
+      return std::fabs(vnum) > 0.000001;
+    }
+    return true;
+  }
+  bool known = false;
+  const std::string knownValue = resolveKnownToken(trimmed, &known);
+  if (known) {
+    const std::string ktrim = trimCopy(knownValue);
+    if (ktrim.empty()) {
+      return false;
+    }
+    double knum = 0.0;
+    if (parseStrictDouble(ktrim, knum)) {
+      return std::fabs(knum) > 0.000001;
+    }
+    std::string klow = ktrim;
+    std::transform(klow.begin(), klow.end(), klow.begin(), [](unsigned char c) {
+      return static_cast<char>(std::tolower(c));
+    });
+    if (klow == "false" || klow == "no" || klow == "off") {
+      return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+int resolveNodeCoord(const std::string& expr, int fallback) {
+  if (expr.empty()) {
+    return fallback;
+  }
+  const std::string bound = bindRuntimeTemplate(expr);
+  const std::string trimmed = trimCopy(bound);
+  if (trimmed.empty()) {
+    return fallback;
+  }
+  float numeric = 0.0f;
+  if (evalNumericExpr(trimmed, nullptr, numeric)) {
+    return static_cast<int>(std::lround(numeric));
+  }
+  double parsed = 0.0;
+  if (parseStrictDouble(trimmed, parsed)) {
+    return static_cast<int>(std::lround(parsed));
+  }
+  return fallback;
+}
+
 bool datumIsCenter(TextDatum datum) {
   return datum == TextDatum::kTC || datum == TextDatum::kMC || datum == TextDatum::kBC ||
          datum == TextDatum::kCBaseline;
@@ -5413,8 +6193,13 @@ int datumTextY(int y, int textH, int scale, TextDatum datum) {
 
 void renderNodes() {
   for (Node& node : s.nodes) {
-    const int x = static_cast<int>(s.x) + node.x;
-    const int y = static_cast<int>(s.y) + node.y;
+    if (!nodeVisible(node)) {
+      continue;
+    }
+    const int localX = resolveNodeCoord(node.xExpr, node.x);
+    const int localY = resolveNodeCoord(node.yExpr, node.y);
+    const int x = static_cast<int>(s.x) + localX;
+    const int y = static_cast<int>(s.y) + localY;
     const int scale = std::max(1, std::min(3, node.font <= 1 ? 1 : (node.font >= 4 ? 2 : 1)));
 
     if (node.type == NodeType::kLabel) {
@@ -5626,6 +6411,33 @@ void renderNodes() {
       continue;
     }
 
+    if (node.type == NodeType::kBitmap1) {
+      const std::string rawPath = node.path.empty() ? node.text : node.path;
+      const std::string bitmapPath = bindRuntimeTemplate(rawPath);
+      if (bitmapPath.empty() || node.w <= 0 || node.h <= 0) {
+        continue;
+      }
+      if (isHttpUrl(bitmapPath)) {
+        // First pass: bitmap1 is local-file based to avoid repeated HTTP fetches.
+        continue;
+      }
+      std::vector<uint8_t> bits;
+      if (!loadBitmap1(bitmapPath, node.w, node.h, bits)) {
+        continue;
+      }
+      const size_t stride = static_cast<size_t>((node.w + 7) / 8);
+      for (int iy = 0; iy < node.h; ++iy) {
+        const size_t rowBase = static_cast<size_t>(iy) * stride;
+        for (int ix = 0; ix < node.w; ++ix) {
+          const size_t byteIndex = rowBase + static_cast<size_t>(ix / 8);
+          const uint8_t mask = static_cast<uint8_t>(0x80U >> (ix & 7));
+          const bool on = (bits[byteIndex] & mask) != 0;
+          drawPixel(x + ix, y + iy, on ? node.color565 : node.bg565);
+        }
+      }
+      continue;
+    }
+
     if (node.type == NodeType::kMoonPhase) {
       float phase = 0.0f;
       bool havePhase = false;
@@ -5638,19 +6450,30 @@ void renderNodes() {
       if (!havePhase) {
         continue;
       }
+      // Normalize phase to [0, 1): 0=new, 0.25=first quarter, 0.5=full, 0.75=last quarter.
+      phase = std::fmod(phase, 1.0f);
+      if (phase < 0.0f) {
+        phase += 1.0f;
+      }
       const int r = node.radius > 0 ? node.radius : (node.w > 0 ? node.w / 2 : 8);
       if (r <= 0) {
         continue;
       }
       drawCircle(x, y, r, node.bg565, true);
+      // Lit-side model using a moving vertical terminator:
+      // terminatorX(y) = cos(2*pi*phase) * sqrt(r^2 - y^2)
+      // Waxing lights the right side; waning lights the left side.
       const bool waxing = phase <= 0.5f;
-      const float threshold = waxing ? (r * (1.0f - 2.0f * phase)) : (-r * (2.0f * phase - 1.0f));
+      const float cosine = std::cos(2.0f * static_cast<float>(M_PI) * phase);
       for (int dy = -r; dy <= r; ++dy) {
+        const float chord = std::sqrt(static_cast<float>(r * r - dy * dy));
+        const float terminator = cosine * chord;
         for (int dx = -r; dx <= r; ++dx) {
           if (dx * dx + dy * dy > r * r) {
             continue;
           }
-          const bool lit = waxing ? (dx > threshold) : (dx < threshold);
+          const bool lit = waxing ? (static_cast<float>(dx) > terminator)
+                                  : (static_cast<float>(dx) < -terminator);
           if (lit) {
             drawPixel(x + dx, y + dy, node.color565);
           }
@@ -5884,6 +6707,7 @@ void reset() {
   sIconRetryAfterMs.clear();
   sLastLowHeapRecoverMs = 0;
   sSharedHttpCache.clear();
+  sHttpStartupOrdinal = 0;
   if (sCanvas != nullptr) {
     heap_caps_free(sCanvas);
     sCanvas = nullptr;
@@ -5946,12 +6770,12 @@ bool begin(const char* widgetId, const char* dslPath, uint16_t x, uint16_t y, ui
 
   ESP_LOGI(kTag,
            "begin widget=%s path=%s source=%d poll_ms=%u fields=%u nodes=%u modals=%u touch_regions=%u settings=%u "
-           "http_max=%u retain_source=%d",
+           "http_max=%u tls_skip_verify=%d retain_source=%d",
            s.widgetId.c_str(), s.dslPath.c_str(), static_cast<int>(s.source),
            static_cast<unsigned>(s.pollMs), static_cast<unsigned>(s.fields.size()),
            static_cast<unsigned>(s.nodes.size()), static_cast<unsigned>(s.modals.size()),
            static_cast<unsigned>(s.touchRegions.size()), static_cast<unsigned>(s.settingValues.size()),
-           static_cast<unsigned>(s.httpMaxBytes), s.retainSourceJson ? 1 : 0);
+           static_cast<unsigned>(s.httpMaxBytes), s.tlsSkipVerify ? 1 : 0, s.retainSourceJson ? 1 : 0);
 
   // Pre-create the HTTP worker task when the first HTTP-source widget is
   // registered so its stack is carved from the large contiguous heap block at
@@ -5961,6 +6785,15 @@ bool begin(const char* widgetId, const char* dslPath, uint16_t x, uint16_t y, ui
   // from the ~20KB remaining — pre-creating it beforehand steals heap the WS
   // TLS handshake needs, pushing largest below the recovery threshold.
   if (s.source == DataSource::kHttp) {
+    const uint32_t nowMs = platform::millisMs();
+    const uint32_t delayMs = std::min<uint32_t>(sHttpStartupOrdinal * kHttpStartupStaggerMs,
+                                                kHttpStartupStaggerMaxMs);
+    if (delayMs > 0) {
+      s.backoffUntilMs = nowMs + delayMs;
+      ESP_LOGI(kTag, "startup stagger widget=%s delay_ms=%u", s.widgetId.c_str(),
+               static_cast<unsigned>(delayMs));
+    }
+    ++sHttpStartupOrdinal;
     (void)ensureHttpWorker();
   }
 

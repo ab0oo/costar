@@ -2,6 +2,7 @@
   "version": 1,
   "data": {
     "source": "websocket",
+    "tls_skip_verify": true,
     "connection_profile": "{{setting.connection_profile}}",
     "cache_key": "{{setting.entity_id}}",
     "bootstrap": {

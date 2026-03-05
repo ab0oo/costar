@@ -2,6 +2,7 @@
   "version": 1,
   "data": {
     "source": "http",
+    "tls_skip_verify": false,
     "url": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/1.0_hour.geojson",
     "poll_ms": 75000,
     "debug": true,

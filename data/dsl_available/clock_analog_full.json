@@ -156,7 +156,7 @@
         "h": 40,
         "font": 2,
         "color": "#7FB1FF",
-        "text": "{{geo.label}}",
+        "text": "{{geo.city}}, {{geo.region}}",
         "wrap": true,
         "line_height": 14,
         "max_lines": 2,

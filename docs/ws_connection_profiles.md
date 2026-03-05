@@ -35,6 +35,7 @@ Widgets then reference a profile with `connection_profile` and keep only widget-
 {
   "data": {
     "source": "websocket",
+    "tls_skip_verify": true,
     "connection_profile": "{{setting.connection_profile}}",
     "cache_key": "{{setting.entity_id}}",
     "bootstrap": {...},
@@ -44,6 +45,12 @@ Widgets then reference a profile with `connection_profile` and keep only widget-
   }
 }
 ```
+
+`tls_skip_verify` notes:
+- Optional, default `false`.
+- Use `true` for private/self-signed `wss://` servers.
+- This weakens TLS security; keep `false` for endpoints with valid CA-signed certs.
+- This flag is defined at widget/data level (not inside `ws_profiles` object).
 
 ## Resolution Order
 

@@ -55,6 +55,7 @@ Data and UI are connected through template bindings and field extraction:
 - Sort and filter list data (`sort_num`, `sort_alpha`, `distance_sort`)
 - Use expressions (including distance math) for runtime positioning and calculations
 - Wrap long text labels with width/line controls
+- Control TLS verification per widget with `data.tls_skip_verify` (use carefully)
 
 ## Home Assistant support
 
@@ -71,6 +72,23 @@ CoStar also supports a generic shared websocket data source (`"source": "websock
   init/auth protocol details stay out of widget DSL/UI definitions.
 
 Tap actions support `refresh`, `http`, and `ws_publish`.
+
+### TLS skip-verify flag
+
+For private endpoints with self-signed certificates (common with Home Assistant),
+widgets can opt in to skipping TLS certificate verification:
+
+```json
+{
+  "data": {
+    "source": "websocket",
+    "tls_skip_verify": true
+  }
+}
+```
+
+This is a per-widget setting (not required globally). It reduces connection safety,
+so leave it `false` for public internet APIs.
 
 ## Quick start
 
@@ -104,7 +122,9 @@ This is useful for MDI icons and external logos without embedding image decoders
 ## Project docs
 
 - `HANDOFF.md`: current handoff/runbook and runtime status
+- `docs/dsl_user_guide.md`: DSL structure, source types, and `tls_skip_verify`
 - `docs/ws_connection_profiles.md`: websocket profile schema and resolution behavior
+- `docs/dsl_transforms_and_visibility.md`: transform ops, visibility rules, bitmap node notes
 - `CONTEXT.md`: older deep context notes (parts may be stale)
 
 If you are hacking on internals, start with `HANDOFF.md` and then use the focused docs under `docs/`.

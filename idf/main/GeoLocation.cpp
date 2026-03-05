@@ -8,6 +8,7 @@
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "sdkconfig.h"
 
 #include <algorithm>
 #include <array>
@@ -264,7 +265,9 @@ bool httpGetText(const char* url, HttpTextResponse& out) {
 // Geo parsing
 // ---------------------------------------------------------------------------
 
-bool parseGeoPayload(const std::string& body, GeoContext& outGeo, std::string& outLabel) {
+bool parseGeoPayload(const std::string& body, GeoContext& outGeo, std::string& outLabel,
+                     std::string* outCity = nullptr, std::string* outRegion = nullptr,
+                     std::string* outCountry = nullptr) {
   double lat = NAN;
   double lon = NAN;
   bool hasLat = extractJsonNumber(body, "latitude", lat);
@@ -311,12 +314,22 @@ bool parseGeoPayload(const std::string& body, GeoContext& outGeo, std::string& o
       hasOffset = true;
     }
   }
+  if (!hasOffset) {
+    double topLevelOffsetSeconds = 0;
+    if (extractJsonNumber(body, "offset", topLevelOffsetSeconds)) {
+      offsetMinutes = static_cast<int>(topLevelOffsetSeconds / 60.0);
+      hasOffset = true;
+    }
+  }
 
   std::string city;
   std::string region;
   std::string country;
   (void)extractJsonString(body, "city", city);
   (void)extractJsonString(body, "region", region);
+  if (region.empty()) {
+    (void)extractJsonString(body, "regionName", region);
+  }
   if (country.empty()) {
     (void)extractJsonString(body, "country", country);
   }
@@ -339,6 +352,15 @@ bool parseGeoPayload(const std::string& body, GeoContext& outGeo, std::string& o
     }
     outLabel += country;
   }
+  if (outCity != nullptr) {
+    *outCity = city;
+  }
+  if (outRegion != nullptr) {
+    *outRegion = region;
+  }
+  if (outCountry != nullptr) {
+    *outCountry = country;
+  }
 
   outGeo.lat = static_cast<float>(lat);
   outGeo.lon = static_cast<float>(lon);
@@ -349,25 +371,6 @@ bool parseGeoPayload(const std::string& body, GeoContext& outGeo, std::string& o
   return true;
 }
 
-bool fetchTimezoneOffsetMinutes(const std::string& timezone, int& outMinutes) {
-  if (timezone.empty()) {
-    return false;
-  }
-  const std::string url = "https://worldtimeapi.org/api/timezone/" + timezone;
-  HttpTextResponse resp;
-  if (!httpGetText(url.c_str(), resp)) {
-    return false;
-  }
-  if (resp.statusCode < 200 || resp.statusCode >= 300) {
-    return false;
-  }
-  std::string offsetText;
-  if (!extractJsonString(resp.body, "utc_offset", offsetText)) {
-    return false;
-  }
-  return parseOffsetText(offsetText, outMinutes);
-}
-
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -375,11 +378,9 @@ bool fetchTimezoneOffsetMinutes(const std::string& timezone, int& outMinutes) {
 // ---------------------------------------------------------------------------
 
 bool refreshGeoContextFromInternet(GeoContext& geoOut) {
-  static constexpr std::array<const char*, 4> kGeoUrls = {
-      "https://ipwho.is/",
-      "https://ipapi.co/json/",
-      "https://ipinfo.io/json",
-      "http://ip-api.com/json/",
+  static constexpr std::array<const char*, 1> kGeoUrls = {
+      // ip-api free endpoint is HTTP-only and includes timezone + UTC offset.
+      "http://ip-api.com/json/?fields=status,message,lat,lon,city,regionName,country,timezone,offset",
   };
 
   for (const char* url : kGeoUrls) {
@@ -393,20 +394,14 @@ bool refreshGeoContextFromInternet(GeoContext& geoOut) {
       continue;
     }
     std::string label;
+    std::string city;
+    std::string region;
+    std::string country;
     GeoContext parsed;
-    if (!parseGeoPayload(resp.body, parsed, label)) {
+    if (!parseGeoPayload(resp.body, parsed, label, &city, &region, &country)) {
       ESP_LOGW("geo", "parse fail source=%s body_len=%u", url,
                static_cast<unsigned>(resp.body.size()));
       continue;
-    }
-    if (!parsed.hasUtcOffset) {
-      int resolvedOffset = 0;
-      if (fetchTimezoneOffsetMinutes(parsed.timezone, resolvedOffset)) {
-        parsed.utcOffsetMinutes = resolvedOffset;
-        parsed.hasUtcOffset = true;
-        ESP_LOGI("geo", "timezone offset resolved from worldtimeapi tz=%s off_min=%d",
-                 parsed.timezone.c_str(), parsed.utcOffsetMinutes);
-      }
     }
     parsed.source = url;
     geoOut = parsed;
@@ -417,6 +412,9 @@ bool refreshGeoContextFromInternet(GeoContext& geoOut) {
     constexpr const char* kCachedTzKey = "tz";
     constexpr const char* kCachedOffsetKey = "off_min";
     constexpr const char* kCachedLabelKey = "label";
+    constexpr const char* kCachedCityKey = "city";
+    constexpr const char* kCachedRegionKey = "region";
+    constexpr const char* kCachedCountryKey = "country";
     constexpr int kModeAuto = 0;
     constexpr int kOffsetUnknown = -32768;
     (void)platform::prefs::putInt(kGeoNs, kModeKey, kModeAuto);
@@ -425,9 +423,10 @@ bool refreshGeoContextFromInternet(GeoContext& geoOut) {
     (void)platform::prefs::putString(kGeoNs, kCachedTzKey, geoOut.timezone.c_str());
     (void)platform::prefs::putInt(kGeoNs, kCachedOffsetKey,
                                   geoOut.hasUtcOffset ? geoOut.utcOffsetMinutes : kOffsetUnknown);
-    if (!label.empty()) {
-      (void)platform::prefs::putString(kGeoNs, kCachedLabelKey, label.c_str());
-    }
+    (void)platform::prefs::putString(kGeoNs, kCachedLabelKey, label.c_str());
+    (void)platform::prefs::putString(kGeoNs, kCachedCityKey, city.c_str());
+    (void)platform::prefs::putString(kGeoNs, kCachedRegionKey, region.c_str());
+    (void)platform::prefs::putString(kGeoNs, kCachedCountryKey, country.c_str());
     return true;
   }
   return false;

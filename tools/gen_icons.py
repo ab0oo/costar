@@ -199,16 +199,16 @@ def write_raw(path, img):
 
 
 ICONS = {
-    "weather_sun.raw": icon_sun,
-    "weather_cloud.raw": icon_cloud,
-    "weather_partly.raw": icon_partly,
-    "weather_rain.raw": icon_rain,
-    "weather_drizzle.raw": icon_drizzle,
-    "weather_snow.raw": icon_snow,
-    "weather_fog.raw": icon_fog,
-    "weather_storm.raw": icon_storm,
-    "sunrise.raw": icon_sunrise,
-    "sunset.raw": icon_sunset,
+    "meteocons/clear-day.raw": icon_sun,
+    "meteocons/cloudy.raw": icon_cloud,
+    "meteocons/partly-cloudy-day.raw": icon_partly,
+    "meteocons/rain.raw": icon_rain,
+    "meteocons/drizzle.raw": icon_drizzle,
+    "meteocons/snow.raw": icon_snow,
+    "meteocons/fog.raw": icon_fog,
+    "meteocons/thunderstorms-day.raw": icon_storm,
+    "meteocons/sunrise.raw": icon_sunrise,
+    "meteocons/sunset.raw": icon_sunset,
     "moon.raw": icon_moon,
 }
 
@@ -218,7 +218,9 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     for name, fn in ICONS.items():
         img = fn()
-        write_raw(os.path.join(out_dir, name), img)
+        out_path = os.path.join(out_dir, name)
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        write_raw(out_path, img)
 
 
 if __name__ == "__main__":

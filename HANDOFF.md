@@ -32,6 +32,8 @@ Updated: 2026-03-01
   - widget setting / `data.connection_profile`
 - Connection profile docs:
   - `docs/ws_connection_profiles.md`
+- DSL transform/node docs:
+  - `docs/dsl_transforms_and_visibility.md`
 - Tap actions supported in runtime:
   - `refresh`
   - `http`
