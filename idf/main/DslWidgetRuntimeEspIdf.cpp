@@ -48,14 +48,16 @@ namespace {
 #ifdef COSTAR_DSL_TLS_MIN_LARGEST_8BIT_KB
 #define CONFIG_COSTAR_DSL_TLS_MIN_LARGEST_8BIT_KB COSTAR_DSL_TLS_MIN_LARGEST_8BIT_KB
 #else
-#define CONFIG_COSTAR_DSL_TLS_MIN_LARGEST_8BIT_KB 19
+#define CONFIG_COSTAR_DSL_TLS_MIN_LARGEST_8BIT_KB 16
 #endif
 #endif
 #ifndef CONFIG_COSTAR_DSL_TLS_MIN_FREE_8BIT_KB
 #ifdef COSTAR_DSL_TLS_MIN_FREE_8BIT_KB
 #define CONFIG_COSTAR_DSL_TLS_MIN_FREE_8BIT_KB COSTAR_DSL_TLS_MIN_FREE_8BIT_KB
 #else
-#define CONFIG_COSTAR_DSL_TLS_MIN_FREE_8BIT_KB 40
+// 30KB keeps headroom for TLS + small JSON payloads, while avoiding false
+// guard defers in long-running fragmented states (~32KB free, 16KB largest).
+#define CONFIG_COSTAR_DSL_TLS_MIN_FREE_8BIT_KB 30
 #endif
 #endif
 #ifndef CONFIG_COSTAR_DSL_TLS_RELAXED_LARGEST_8BIT_KB
@@ -72,6 +74,42 @@ namespace {
 #else
 #define CONFIG_COSTAR_DSL_TLS_RELAXED_FREE_THRESHOLD_8BIT_KB 56
 #endif
+#endif
+
+#if defined(CONFIG_MBEDTLS_CLIENT_SSL_SESSION_TICKETS)
+constexpr int kMbedtlsClientSessionTicketsEnabled = 1;
+#else
+constexpr int kMbedtlsClientSessionTicketsEnabled = 0;
+#endif
+
+#if defined(CONFIG_MBEDTLS_SERVER_SSL_SESSION_TICKETS)
+constexpr int kMbedtlsServerSessionTicketsEnabled = 1;
+#else
+constexpr int kMbedtlsServerSessionTicketsEnabled = 0;
+#endif
+
+#if defined(CONFIG_ESP_TLS_INSECURE)
+constexpr int kEspTlsInsecureEnabled = 1;
+#else
+constexpr int kEspTlsInsecureEnabled = 0;
+#endif
+
+#if defined(CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY)
+constexpr int kEspTlsSkipServerVerifyEnabled = 1;
+#else
+constexpr int kEspTlsSkipServerVerifyEnabled = 0;
+#endif
+
+#if defined(CONFIG_MBEDTLS_DYNAMIC_BUFFER)
+constexpr int kMbedtlsDynamicBufferEnabled = 1;
+#else
+constexpr int kMbedtlsDynamicBufferEnabled = 0;
+#endif
+
+#if defined(CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE)
+constexpr int kMbedtlsKeepPeerCertificateEnabled = 1;
+#else
+constexpr int kMbedtlsKeepPeerCertificateEnabled = 0;
 #endif
 
 constexpr const char* kTag = "dsl-widget";
@@ -385,6 +423,7 @@ struct State {
   std::vector<KeyValue> values;
   std::map<std::string, double> numericValues;
   std::map<std::string, std::string> transformValues;
+  std::map<std::string, std::map<std::string, std::string>> localFormatLookups;
   std::map<std::string, std::string> settingValues;
   std::string activeModalId;
   uint32_t modalDismissDueMs = 0;
@@ -403,6 +442,8 @@ std::vector<State> sInstances;
 QueueHandle_t sHttpJobQueue = nullptr;
 TaskHandle_t sHttpWorkerTask = nullptr;
 std::map<std::string, SharedHttpResponse> sSharedHttpCache;
+std::string sSharedLookupsJsonCache;
+std::map<std::string, std::map<std::string, std::string>> sSharedFormatLookups;
 uint32_t sHttpStartupOrdinal = 0;
 uint16_t* sCanvas = nullptr;
 size_t sCanvasCapacityBytes = 0;
@@ -1174,8 +1215,15 @@ bool parsePathSegment(std::string_view segment, std::string& key, std::vector<in
 
 std::string valueViewToText(std::string_view valueView);
 bool ensureHttpWorker();
-bool httpGet(std::string url, std::vector<KeyValue> headers, int& statusCode, std::string& body,
+bool httpGet(const std::string& url, const std::vector<KeyValue>& headers, int& statusCode,
+             std::string& body, std::string& reason);
+bool httpGet(std::string&& url, std::vector<KeyValue>&& headers, int& statusCode, std::string& body,
              std::string& reason);
+bool httpRequest(const std::string& method, const std::string& url,
+                 const std::vector<KeyValue>& headers, const std::string& reqBody, int& statusCode,
+                 std::string& body, std::string& reason);
+bool httpRequest(std::string&& method, std::string&& url, std::vector<KeyValue>&& headers,
+                 std::string&& reqBody, int& statusCode, std::string& body, std::string& reason);
 
 float distanceKm(float lat1, float lon1, float lat2, float lon2) {
   constexpr float kDegToRad = 3.14159265f / 180.0f;
@@ -1519,41 +1567,6 @@ bool valueViewToNumeric(std::string_view valueView, double& out) {
   return viewToDouble(valueView, out);
 }
 
-void mapWeatherCode(int code, std::string& outText, std::string& outIcon) {
-  outText = "Unknown";
-  outIcon = "/icons/meteocons/cloudy.raw";
-
-  if (code == 0) {
-    outText = "Clear";
-    outIcon = "/icons/meteocons/clear-day.raw";
-  } else if (code == 1) {
-    outText = "Mostly Clear";
-    outIcon = "/icons/meteocons/partly-cloudy-day.raw";
-  } else if (code == 2) {
-    outText = "Partly Cloudy";
-    outIcon = "/icons/meteocons/partly-cloudy-day.raw";
-  } else if (code == 3) {
-    outText = "Overcast";
-    outIcon = "/icons/meteocons/cloudy.raw";
-  } else if (code == 45 || code == 48) {
-    outText = "Fog";
-    outIcon = "/icons/meteocons/fog.raw";
-  } else if (code == 51 || code == 53 || code == 55 || code == 56 || code == 57) {
-    outText = "Drizzle";
-    outIcon = "/icons/meteocons/drizzle.raw";
-  } else if (code == 61 || code == 63 || code == 65 || code == 66 || code == 67 || code == 80 ||
-             code == 81 || code == 82) {
-    outText = "Rain";
-    outIcon = "/icons/meteocons/rain.raw";
-  } else if (code == 71 || code == 73 || code == 75 || code == 77 || code == 85 || code == 86) {
-    outText = "Snow";
-    outIcon = "/icons/meteocons/snow.raw";
-  } else if (code == 95 || code == 96 || code == 99) {
-    outText = "Storm";
-    outIcon = "/icons/meteocons/thunderstorms-day.raw";
-  }
-}
-
 bool computeMoonPhaseFraction(float& out) {
   const time_t nowUtc = std::time(nullptr);
   if (nowUtc < 946684800) {
@@ -1621,6 +1634,21 @@ bool parseFormat(std::string_view formatObj, FormatSpec& out) {
 
   if (!objectMemberString(formatObj, "time_format", out.timeFormat)) {
     (void)objectMemberString(formatObj, "timeFormat", out.timeFormat);
+  }
+  if (!objectMemberString(formatObj, "map_lookup", out.valueMapLookup)) {
+    (void)objectMemberString(formatObj, "mapLookup", out.valueMapLookup);
+  }
+  std::string_view mapObj;
+  if (objectMemberObject(formatObj, "map", mapObj)) {
+    forEachObjectMember(mapObj, [&](const std::string& key, std::string_view valueText) {
+      std::string value;
+      if (viewToString(valueText, value)) {
+        out.valueMap[key] = value;
+      }
+    });
+  }
+  if (!objectMemberString(formatObj, "map_default", out.valueMapDefault)) {
+    (void)objectMemberString(formatObj, "default", out.valueMapDefault);
   }
   return true;
 }
@@ -2830,6 +2858,7 @@ bool loadDslConfig(const std::string& dslJson) {
   s.wsConnectionProfileTemplate.clear();
   s.headers.clear();
   s.transforms.clear();
+  s.localFormatLookups.clear();
   (void)objectMemberString(dataObj, "url", s.urlTemplate);
   (void)objectMemberString(dataObj, "entity_id", s.wsEntityTemplate);
   (void)objectMemberString(dataObj, "cache_key", s.wsCacheKeyTemplate);
@@ -2877,6 +2906,22 @@ bool loadDslConfig(const std::string& dslJson) {
         return;
       }
       s.transforms.emplace_back(valueText.data(), valueText.size());
+    });
+  }
+  std::string_view lookupsObj;
+  if (objectMemberObject(dataObj, "lookups", lookupsObj)) {
+    forEachObjectMember(lookupsObj, [&](const std::string& lookupName, std::string_view lookupValue) {
+      lookupValue = trimView(lookupValue);
+      if (lookupValue.empty() || lookupValue.front() != '{') {
+        return;
+      }
+      std::map<std::string, std::string> lookupMap;
+      forEachObjectMember(lookupValue, [&](const std::string& mapKey, std::string_view mapValue) {
+        lookupMap[mapKey] = valueViewToText(mapValue);
+      });
+      if (!lookupMap.empty()) {
+        s.localFormatLookups[lookupName] = std::move(lookupMap);
+      }
     });
   }
 
@@ -3218,37 +3263,6 @@ bool resolveLocalTimeValue(const LocalTimeContext& ctx, const std::string& path,
   return false;
 }
 
-void applyWeatherDerivedValues() {
-  const auto applyWeather = [](const char* codeKey, const char* textKey, const char* iconKey) {
-    const std::string* codeText = getValue(codeKey);
-    // If the source key isn't in this widget's value store at all, skip —
-    // calling setValue for textKey/iconKey would insert spurious new slots.
-    if (codeText == nullptr) {
-      return;
-    }
-    if (codeText->empty()) {
-      (void)setValue(textKey, "");
-      (void)setValue(iconKey, "");
-      return;
-    }
-
-    double codeValue = 0.0;
-    if (!parseStrictDouble(*codeText, codeValue)) {
-      return;
-    }
-
-    std::string text;
-    std::string icon;
-    mapWeatherCode(static_cast<int>(std::lround(codeValue)), text, icon);
-    (void)setValue(textKey, text);
-    (void)setValue(iconKey, icon);
-  };
-
-  applyWeather("code_now", "cond_now", "icon_now");
-  applyWeather("day1_code", "day1_cond", "day1_icon");
-  applyWeather("day2_code", "day2_cond", "day2_icon");
-}
-
 bool ensureHttpCaptureCapacity(HttpCapture* cap, size_t needBytes) {
   if (cap == nullptr) {
     return false;
@@ -3453,12 +3467,103 @@ void loadWidgetSettings(const char* settingsJson, const char* sharedSettingsJson
   parseSettingsJsonIntoMap(settingsJson, s.settingValues);
 }
 
+void parseLookupsJsonIntoMap(const char* lookupsJson,
+                             std::map<std::string, std::map<std::string, std::string>>& outMap) {
+  outMap.clear();
+  if (lookupsJson == nullptr || *lookupsJson == '\0') {
+    return;
+  }
+  const std::string_view root = trimView(lookupsJson);
+  if (root.empty() || root.front() != '{') {
+    return;
+  }
+  forEachObjectMember(root, [&](const std::string& lookupName, std::string_view lookupValue) {
+    lookupValue = trimView(lookupValue);
+    if (lookupValue.empty() || lookupValue.front() != '{') {
+      return;
+    }
+    std::map<std::string, std::string> lookupMap;
+    forEachObjectMember(lookupValue, [&](const std::string& mapKey, std::string_view mapValue) {
+      lookupMap[mapKey] = valueViewToText(mapValue);
+    });
+    if (!lookupMap.empty()) {
+      outMap[lookupName] = std::move(lookupMap);
+    }
+  });
+}
+
+void refreshSharedLookupsCache(const char* sharedLookupsJson) {
+  const char* raw = (sharedLookupsJson != nullptr) ? sharedLookupsJson : "";
+  if (sSharedLookupsJsonCache == raw) {
+    return;
+  }
+  sSharedLookupsJsonCache = raw;
+  parseLookupsJsonIntoMap(raw, sSharedFormatLookups);
+}
+
+const std::map<std::string, std::string>* findLookupMapByName(const std::string& lookupName) {
+  if (lookupName.empty()) {
+    return nullptr;
+  }
+  auto localIt = s.localFormatLookups.find(lookupName);
+  if (localIt != s.localFormatLookups.end()) {
+    return &localIt->second;
+  }
+  auto sharedIt = sSharedFormatLookups.find(lookupName);
+  if (sharedIt != sSharedFormatLookups.end()) {
+    return &sharedIt->second;
+  }
+  return nullptr;
+}
+
+bool resolveMappedLookupValue(const FormatSpec& fmt, const std::string& rawText, bool numeric, double numericValue,
+                              std::string& outValue) {
+  if (fmt.valueMapLookup.empty()) {
+    return false;
+  }
+  const std::map<std::string, std::string>* lookup = findLookupMapByName(fmt.valueMapLookup);
+  if (lookup == nullptr) {
+    if (fmt.valueMapDefault.empty()) {
+      return false;
+    }
+    outValue = fmt.valueMapDefault;
+    return true;
+  }
+
+  std::string key = trimCopy(rawText);
+  auto it = lookup->find(key);
+  if (it == lookup->end() && numeric && std::isfinite(numericValue)) {
+    const double rounded = std::round(numericValue);
+    if (std::fabs(numericValue - rounded) < 0.000001) {
+      key = std::to_string(static_cast<long long>(rounded));
+      it = lookup->find(key);
+    }
+  }
+  if (it != lookup->end()) {
+    outValue = it->second;
+    return true;
+  }
+  if (!fmt.valueMapDefault.empty()) {
+    outValue = fmt.valueMapDefault;
+    return true;
+  }
+  return false;
+}
+
 std::string readSetting(const std::string& key, const std::string& fallback) {
   auto it = s.settingValues.find(key);
   if (it == s.settingValues.end()) {
     return fallback;
   }
   return it->second;
+}
+
+const std::string* readSettingRef(const std::string& key) {
+  auto it = s.settingValues.find(key);
+  if (it == s.settingValues.end()) {
+    return nullptr;
+  }
+  return &it->second;
 }
 
 struct WsProfileConfig {
@@ -3804,8 +3909,11 @@ bool parseWsProfileFromSettings(const std::string& profileName, WsProfileConfig&
   if (trimmedName.empty()) {
     return false;
   }
-  const std::string profilesRaw = readSetting("ws_profiles", "");
-  const std::string_view profilesRoot = trimView(profilesRaw);
+  const std::string* profilesRaw = readSettingRef("ws_profiles");
+  if (profilesRaw == nullptr) {
+    return false;
+  }
+  const std::string_view profilesRoot = trimView(*profilesRaw);
   if (profilesRoot.empty() || profilesRoot.front() != '{') {
     return false;
   }
@@ -3958,6 +4066,18 @@ bool ensureWsConnected(const std::string& profileKey, const std::string& wsUrl, 
     cfg.keep_alive_interval = 10;
     cfg.keep_alive_count = 3;
     cfg.buffer_size = static_cast<int>(kWsMaxFrameBytes);
+    static bool sLoggedWsTlsBuildCfg = false;
+    if (!sLoggedWsTlsBuildCfg && sWs.wsUrl.rfind("wss://", 0) == 0) {
+      sLoggedWsTlsBuildCfg = true;
+      ESP_LOGI(kTag,
+               "ws tls build cfg insecure=%d skip_verify_cfg=%d mbedtls_client_tickets=%d "
+               "mbedtls_server_tickets=%d dyn_buf=%d keep_peer_cert=%d in_len=%u out_len=%u",
+               kEspTlsInsecureEnabled, kEspTlsSkipServerVerifyEnabled, kMbedtlsClientSessionTicketsEnabled,
+               kMbedtlsServerSessionTicketsEnabled, kMbedtlsDynamicBufferEnabled,
+               kMbedtlsKeepPeerCertificateEnabled,
+               static_cast<unsigned>(CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN),
+               static_cast<unsigned>(CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN));
+    }
     if (sWs.tlsSkipVerify) {
 #if CONFIG_ESP_TLS_INSECURE && CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY
       cfg.crt_bundle_attach = nullptr;
@@ -4331,6 +4451,22 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
     return false;
   }
   if (urlUsesTls(url)) {
+    static bool sLoggedTlsGuardConfig = false;
+    if (!sLoggedTlsGuardConfig) {
+      sLoggedTlsGuardConfig = true;
+      ESP_LOGI(kTag, "tls guard cfg min_free=%u min_largest=%u relaxed_largest=%u relaxed_free=%u",
+               static_cast<unsigned>(kTlsMinFree8Bit), static_cast<unsigned>(kTlsMinLargest8Bit),
+               static_cast<unsigned>(kTlsRelaxedLargest8Bit),
+               static_cast<unsigned>(kTlsRelaxedFreeThreshold8Bit));
+      ESP_LOGI(kTag,
+               "tls build cfg insecure=%d skip_verify_cfg=%d mbedtls_client_tickets=%d "
+               "mbedtls_server_tickets=%d dyn_buf=%d keep_peer_cert=%d in_len=%u out_len=%u",
+               kEspTlsInsecureEnabled, kEspTlsSkipServerVerifyEnabled, kMbedtlsClientSessionTicketsEnabled,
+               kMbedtlsServerSessionTicketsEnabled, kMbedtlsDynamicBufferEnabled,
+               kMbedtlsKeepPeerCertificateEnabled,
+               static_cast<unsigned>(CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN),
+               static_cast<unsigned>(CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN));
+    }
     size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
     size_t freeHeap = esp_get_free_heap_size();
     size_t minLargest = tlsMinLargestForFreeHeap(freeHeap);
@@ -4365,55 +4501,6 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
   cap.maxBytes = std::clamp<uint32_t>(maxResponseBytes, kHttpResponseMaxBytesMin, kHttpResponseMaxBytesMax);
   int64_t responseContentLength = -1;
   int chunkedResponse = 0;
-  esp_http_client_config_t cfg = {};
-  cfg.url = url.c_str();
-  cfg.host = hostOut.empty() ? nullptr : hostOut.c_str();
-  cfg.timeout_ms = static_cast<int>(kHttpTimeoutMs);
-  const bool isTls = urlUsesTls(url);
-  esp_http_client_proto_ver_t tlsVersion = ESP_HTTP_CLIENT_TLS_VER_ANY;
-  if (isTls && hostOut == "earthquake.usgs.gov") {
-    // USGS can reject some TLS1.2 cipher mixes from constrained clients.
-    // Prefer TLS1.3 for this endpoint.
-    tlsVersion = ESP_HTTP_CLIENT_TLS_VER_TLS_1_3;
-  }
-  if (urlUsesTls(url)) {
-    // Allow normal TLS version negotiation for broad endpoint compatibility.
-    cfg.tls_version = tlsVersion;
-    ESP_LOGI(kTag, "http tls host=%s ver=%d", hostOut.c_str(), static_cast<int>(tlsVersion));
-  }
-  if (tlsSkipVerify) {
-#if CONFIG_ESP_TLS_INSECURE && CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY
-    cfg.crt_bundle_attach = nullptr;
-    cfg.skip_cert_common_name_check = true;
-#else
-    ESP_LOGW(kTag,
-             "tls_skip_verify requested but CONFIG_ESP_TLS_INSECURE and "
-             "CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY are required");
-    cfg.crt_bundle_attach = esp_crt_bundle_attach;
-#endif
-  } else {
-    cfg.crt_bundle_attach = esp_crt_bundle_attach;
-  }
-  cfg.disable_auto_redirect = false;
-  cfg.max_redirection_count = 5;
-  cfg.keep_alive_enable = false;
-  if (method == "GET") {
-    cfg.event_handler = nullptr;
-    cfg.user_data = nullptr;
-  } else {
-    cfg.event_handler = httpEventHandler;
-    cfg.user_data = &cap;
-  }
-  cfg.buffer_size = 1024;
-  cfg.buffer_size_tx = 512;
-
-  esp_http_client_handle_t client = esp_http_client_init(&cfg);
-  if (client == nullptr) {
-    http_transport_gate::give();
-    reason = "http init failed";
-    return false;
-  }
-
   auto configureClientRequest = [&](esp_http_client_handle_t h) {
     esp_http_client_method_t m = HTTP_METHOD_GET;
     if (method == "POST") {
@@ -4464,6 +4551,44 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
     }
   };
 
+  esp_http_client_config_t cfg = {};
+  cfg.url = url.c_str();
+  cfg.timeout_ms = static_cast<int>(kHttpTimeoutMs);
+  if (urlUsesTls(url)) {
+    cfg.tls_version = ESP_HTTP_CLIENT_TLS_VER_ANY;
+  }
+  if (tlsSkipVerify) {
+#if CONFIG_ESP_TLS_INSECURE && CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY
+    cfg.crt_bundle_attach = nullptr;
+    cfg.skip_cert_common_name_check = true;
+#else
+    ESP_LOGW(kTag,
+             "tls_skip_verify requested but CONFIG_ESP_TLS_INSECURE and "
+             "CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY are required");
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
+#endif
+  } else {
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
+  }
+  cfg.disable_auto_redirect = false;
+  cfg.max_redirection_count = 5;
+  cfg.keep_alive_enable = false;
+  if (method == "GET") {
+    cfg.event_handler = nullptr;
+    cfg.user_data = nullptr;
+  } else {
+    cfg.event_handler = httpEventHandler;
+    cfg.user_data = &cap;
+  }
+  cfg.buffer_size = 1024;
+  cfg.buffer_size_tx = 512;
+
+  esp_http_client_handle_t client = esp_http_client_init(&cfg);
+  if (client == nullptr) {
+    http_transport_gate::give();
+    reason = "http init failed";
+    return false;
+  }
   configureClientRequest(client);
 
   esp_err_t reqErr = ESP_OK;
@@ -4531,10 +4656,9 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
   }
 
   // Release TLS/client allocations before attempting to allocate std::string body storage.
-  if (client != nullptr) {
-    esp_http_client_cleanup(client);
-    client = nullptr;
-  }
+  esp_http_client_cleanup(client);
+  client = nullptr;
+
   http_transport_gate::give();
   durationMs = platform::millisMs() - startMs;
 
@@ -4716,19 +4840,11 @@ void settleAfterNetworkTeardown() {
            static_cast<unsigned>(largestAfter));
 }
 
-bool httpGet(std::string url, std::vector<KeyValue> headers, int& statusCode, std::string& body,
-             std::string& reason) {
+bool httpGetViaWorker(std::string&& url, std::vector<KeyValue>&& headers, int& statusCode, std::string& body,
+                      std::string& reason) {
   statusCode = 0;
   body.clear();
   reason.clear();
-
-  if (!ensureHttpWorker()) {
-    uint32_t durationMs = 0;
-    std::string host;
-    bool viaProxy = false;
-    return httpRequestDirect("GET", url, headers, "", statusCode, body, reason, durationMs, host, viaProxy,
-                             s.httpMaxBytes, s.tlsSkipVerify);
-  }
 
   QueueHandle_t replyQueue = xQueueCreate(1, sizeof(HttpResult*));
   if (replyQueue == nullptr) {
@@ -4776,8 +4892,8 @@ bool httpGet(std::string url, std::vector<KeyValue> headers, int& statusCode, st
   return ok;
 }
 
-bool httpRequest(std::string method, std::string url, std::vector<KeyValue> headers,
-                 std::string reqBody, int& statusCode, std::string& body, std::string& reason) {
+bool httpGet(const std::string& url, const std::vector<KeyValue>& headers, int& statusCode,
+             std::string& body, std::string& reason) {
   statusCode = 0;
   body.clear();
   reason.clear();
@@ -4786,9 +4902,37 @@ bool httpRequest(std::string method, std::string url, std::vector<KeyValue> head
     uint32_t durationMs = 0;
     std::string host;
     bool viaProxy = false;
-    return httpRequestDirect(method, url, headers, reqBody, statusCode, body, reason, durationMs, host,
-                             viaProxy, s.httpMaxBytes, s.tlsSkipVerify);
+    return httpRequestDirect("GET", url, headers, "", statusCode, body, reason, durationMs, host, viaProxy,
+                             s.httpMaxBytes, s.tlsSkipVerify);
   }
+
+  std::string urlCopy = url;
+  std::vector<KeyValue> headersCopy = headers;
+  return httpGetViaWorker(std::move(urlCopy), std::move(headersCopy), statusCode, body, reason);
+}
+
+bool httpGet(std::string&& url, std::vector<KeyValue>&& headers, int& statusCode, std::string& body,
+             std::string& reason) {
+  statusCode = 0;
+  body.clear();
+  reason.clear();
+
+  if (!ensureHttpWorker()) {
+    uint32_t durationMs = 0;
+    std::string host;
+    bool viaProxy = false;
+    return httpRequestDirect("GET", url, headers, "", statusCode, body, reason, durationMs, host, viaProxy,
+                             s.httpMaxBytes, s.tlsSkipVerify);
+  }
+
+  return httpGetViaWorker(std::move(url), std::move(headers), statusCode, body, reason);
+}
+
+bool httpRequestViaWorker(std::string&& method, std::string&& url, std::vector<KeyValue>&& headers,
+                          std::string&& reqBody, int& statusCode, std::string& body, std::string& reason) {
+  statusCode = 0;
+  body.clear();
+  reason.clear();
 
   QueueHandle_t replyQueue = xQueueCreate(1, sizeof(HttpResult*));
   if (replyQueue == nullptr) {
@@ -4833,6 +4977,46 @@ bool httpRequest(std::string method, std::string url, std::vector<KeyValue> head
   const bool ok = result->ok;
   delete result;
   return ok;
+}
+
+bool httpRequest(const std::string& method, const std::string& url, const std::vector<KeyValue>& headers,
+                 const std::string& reqBody, int& statusCode, std::string& body, std::string& reason) {
+  statusCode = 0;
+  body.clear();
+  reason.clear();
+
+  if (!ensureHttpWorker()) {
+    uint32_t durationMs = 0;
+    std::string host;
+    bool viaProxy = false;
+    return httpRequestDirect(method, url, headers, reqBody, statusCode, body, reason, durationMs, host,
+                             viaProxy, s.httpMaxBytes, s.tlsSkipVerify);
+  }
+
+  std::string methodCopy = method;
+  std::string urlCopy = url;
+  std::vector<KeyValue> headersCopy = headers;
+  std::string bodyCopy = reqBody;
+  return httpRequestViaWorker(std::move(methodCopy), std::move(urlCopy), std::move(headersCopy),
+                              std::move(bodyCopy), statusCode, body, reason);
+}
+
+bool httpRequest(std::string&& method, std::string&& url, std::vector<KeyValue>&& headers,
+                 std::string&& reqBody, int& statusCode, std::string& body, std::string& reason) {
+  statusCode = 0;
+  body.clear();
+  reason.clear();
+
+  if (!ensureHttpWorker()) {
+    uint32_t durationMs = 0;
+    std::string host;
+    bool viaProxy = false;
+    return httpRequestDirect(method, url, headers, reqBody, statusCode, body, reason, durationMs, host,
+                             viaProxy, s.httpMaxBytes, s.tlsSkipVerify);
+  }
+
+  return httpRequestViaWorker(std::move(method), std::move(url), std::move(headers), std::move(reqBody),
+                              statusCode, body, reason);
 }
 
 void noteFetchFailure(uint32_t nowMs, const char* reason) {
@@ -4984,6 +5168,14 @@ bool resolveFieldsFromJsonView(std::string_view jsonText) {
     resolvedFmt.suffix = bindRuntimeTemplate(resolvedFmt.suffix);
     resolvedFmt.tz = bindRuntimeTemplate(resolvedFmt.tz);
     resolvedFmt.timeFormat = bindRuntimeTemplate(resolvedFmt.timeFormat);
+    resolvedFmt.valueMapLookup = bindRuntimeTemplate(resolvedFmt.valueMapLookup);
+    std::string mappedLookupValue;
+    if (resolveMappedLookupValue(resolvedFmt, raw, numeric, numericValue, mappedLookupValue)) {
+      (void)setValue(field.key, mappedLookupValue);
+      s.numericValues.erase(field.key);
+      ++resolved;
+      continue;
+    }
 
     const std::string formatted = applyFormat(raw, resolvedFmt, numeric, numericValue);
     (void)setValue(field.key, formatted);
@@ -4994,8 +5186,6 @@ bool resolveFieldsFromJsonView(std::string_view jsonText) {
     }
     ++resolved;
   }
-
-  applyWeatherDerivedValues();
 
   if (s.debug) {
     ESP_LOGI(kTag, "parse summary resolved=%d missing=%d total=%u", resolved, missing,
@@ -5053,6 +5243,14 @@ bool resolveFieldsFromLocalTime() {
     resolvedFmt.suffix = bindRuntimeTemplate(resolvedFmt.suffix);
     resolvedFmt.tz = bindRuntimeTemplate(resolvedFmt.tz);
     resolvedFmt.timeFormat = bindRuntimeTemplate(resolvedFmt.timeFormat);
+    resolvedFmt.valueMapLookup = bindRuntimeTemplate(resolvedFmt.valueMapLookup);
+    std::string mappedLookupValue;
+    if (resolveMappedLookupValue(resolvedFmt, raw, numeric, numericValue, mappedLookupValue)) {
+      (void)setValue(field.key, mappedLookupValue);
+      s.numericValues.erase(field.key);
+      ++resolved;
+      continue;
+    }
 
     const std::string formatted = applyFormat(raw, resolvedFmt, numeric, numericValue);
     (void)setValue(field.key, formatted);
@@ -5806,6 +6004,7 @@ bool reclaimRuntimeCachesLowHeap(const char* reason) {
   const size_t iconEntries = sIconMemCache.size();
   const size_t iconBytes = sIconMemCacheBytes;
   const size_t httpEntries = sSharedHttpCache.size();
+  const size_t canvasBytes = sCanvasCapacityBytes;
 
   sIconMemCache.clear();
   sIconMemCacheBytes = 0;
@@ -5814,6 +6013,14 @@ bool reclaimRuntimeCachesLowHeap(const char* reason) {
   std::map<std::string, uint32_t>().swap(sIconRetryAfterMs);
   sSharedHttpCache.clear();
   std::map<std::string, SharedHttpResponse>().swap(sSharedHttpCache);
+  if (sCanvas != nullptr) {
+    heap_caps_free(sCanvas);
+    sCanvas = nullptr;
+  }
+  sCanvasCapacityBytes = 0;
+  sCanvasW = 0;
+  sCanvasH = 0;
+  sCanvasY0 = 0;
 
   size_t wsCacheEntries = 0;
   if (takeWsLock(10)) {
@@ -5826,10 +6033,10 @@ bool reclaimRuntimeCachesLowHeap(const char* reason) {
   const size_t freeAfter = heap_caps_get_free_size(MALLOC_CAP_8BIT);
   const size_t largestAfter = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
   ESP_LOGW(kTag,
-           "low-heap reclaim reason=%s icon_entries=%u icon_bytes=%u http_entries=%u ws_cache=%u free=%u->%u largest=%u->%u",
+           "low-heap reclaim reason=%s icon_entries=%u icon_bytes=%u http_entries=%u ws_cache=%u canvas_bytes=%u free=%u->%u largest=%u->%u",
            reason != nullptr ? reason : "(unknown)", static_cast<unsigned>(iconEntries),
            static_cast<unsigned>(iconBytes), static_cast<unsigned>(httpEntries),
-           static_cast<unsigned>(wsCacheEntries),
+           static_cast<unsigned>(wsCacheEntries), static_cast<unsigned>(canvasBytes),
            static_cast<unsigned>(freeBefore), static_cast<unsigned>(freeAfter),
            static_cast<unsigned>(largestBefore), static_cast<unsigned>(largestAfter));
   return largestAfter > largestBefore || freeAfter > freeBefore;
@@ -5919,7 +6126,11 @@ void iconFileCachePut(const std::string& key, const std::vector<uint16_t>& pixel
            static_cast<unsigned>(bytes));
 }
 
-bool loadIconRemote(const std::string& url, int w, int h, bool allowNetwork = true) {
+bool loadIconRemote(const std::string& url, int w, int h, bool allowNetwork = true,
+                    bool* outUsedNetwork = nullptr) {
+  if (outUsedNetwork != nullptr) {
+    *outUsedNetwork = false;
+  }
   if (url.empty() || w <= 0 || h <= 0) {
     return false;
   }
@@ -5943,6 +6154,9 @@ bool loadIconRemote(const std::string& url, int w, int h, bool allowNetwork = tr
   }
   if (!allowNetwork) {
     return false;
+  }
+  if (outUsedNetwork != nullptr) {
+    *outUsedNetwork = true;
   }
 
   int status = 0;
@@ -6021,9 +6235,13 @@ void prefetchRemoteIconsForCurrentState() {
     if (iconMemCacheGetPtr(key, cachedPixels) && cachedPixels != nullptr) {
       continue;
     }
-    // Avoid allocator spikes by attempting at most one missing remote icon per pass.
-    (void)loadIconRemote(iconPath, node.w, node.h, true);
-    break;
+    // Avoid allocator spikes by attempting at most one network icon fetch per pass.
+    // Cache hits (memory or file-cache) should continue immediately.
+    bool usedNetwork = false;
+    (void)loadIconRemote(iconPath, node.w, node.h, true, &usedNetwork);
+    if (usedNetwork) {
+      break;
+    }
   }
 }
 
@@ -6725,6 +6943,8 @@ void reset() {
   s = {};
   sInstances.clear();
   std::vector<State>().swap(sInstances);
+  sSharedLookupsJsonCache.clear();
+  std::map<std::string, std::map<std::string, std::string>>().swap(sSharedFormatLookups);
   std::map<std::string, IconMemEntry>().swap(sIconMemCache);
   std::map<std::string, uint32_t>().swap(sIconRetryAfterMs);
   std::map<std::string, SharedHttpResponse>().swap(sSharedHttpCache);
@@ -6746,7 +6966,8 @@ void reset() {
 }
 
 bool begin(const char* widgetId, const char* dslPath, uint16_t x, uint16_t y, uint16_t w, uint16_t h,
-           const char* settingsJson, const char* sharedSettingsJson, bool drawBorder) {
+           const char* settingsJson, const char* sharedSettingsJson, const char* sharedLookupsJson,
+           bool drawBorder) {
   State previous = std::move(s);
   s = {};
   s.active = true;
@@ -6758,6 +6979,7 @@ bool begin(const char* widgetId, const char* dslPath, uint16_t x, uint16_t y, ui
   s.h = h;
   s.drawBorder = drawBorder;
   loadWidgetSettings(settingsJson, sharedSettingsJson);
+  refreshSharedLookupsCache(sharedLookupsJson);
 
   const std::string dslJson = readFile(s.dslPath.c_str());
   if (dslJson.empty() || !loadDslConfig(dslJson)) {

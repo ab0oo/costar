@@ -1293,8 +1293,12 @@ void bootTask(void* arg) {
   }
 
   // SNTP startup delay (CONFIG_LWIP_SNTP_MAXIMUM_STARTUP_DELAY) can be up to
-  // 5000ms, plus NTP round-trip. Use 15s to reliably cover both.
-  (void)timesync::ensureUtcTime(15000);
+  // 5000ms, plus NTP round-trip. Use 30s at boot, then keep retrying in the
+  // background if still unsynced.
+  const bool utcReadyAtBoot = timesync::ensureUtcTime(30000);
+  if (!utcReadyAtBoot) {
+    ESP_LOGW("time", "UTC time not ready after boot wait; background retries active");
+  }
   timesync::logUiTimeContext(geo.timezone.empty() ? nullptr : geo.timezone.c_str(),
                              geo.utcOffsetMinutes, geo.hasUtcOffset);
   boot::mark(baselineState, "geo_time_ready", kBaselineEnabled);

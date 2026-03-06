@@ -18,3 +18,27 @@ idf/.cache/
 /sdkconfig.*
 /dependencies.lock
 /CMakeLists.txt
+
+# Common build artifacts and vendor dependencies
+build/
+dist/
+out/
+target/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.class
+*.py[cod]
+*.deb
+*.buildinfo
+*.changes
+vendor/
+node_modules/

@@ -442,6 +442,33 @@ std::string formatCompass16(double deg) {
 std::string applyFormat(const std::string& rawText, const FormatSpec& fmt, bool numeric,
                         double numericValue) {
   std::string out = numeric ? std::string() : rawText;
+  if (!fmt.valueMap.empty()) {
+    std::string key = rawText;
+    size_t start = 0;
+    while (start < key.size() && std::isspace(static_cast<unsigned char>(key[start]))) {
+      ++start;
+    }
+    size_t end = key.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(key[end - 1]))) {
+      --end;
+    }
+    key = key.substr(start, end - start);
+    auto it = fmt.valueMap.find(key);
+    if (it == fmt.valueMap.end() && numeric && std::isfinite(numericValue)) {
+      const double rounded = std::round(numericValue);
+      if (std::fabs(numericValue - rounded) < 0.000001) {
+        key = std::to_string(static_cast<long long>(rounded));
+        it = fmt.valueMap.find(key);
+      }
+    }
+    if (it != fmt.valueMap.end()) {
+      out = it->second;
+      numeric = false;
+    } else if (!fmt.valueMapDefault.empty()) {
+      out = fmt.valueMapDefault;
+      numeric = false;
+    }
+  }
 
   if (!fmt.tz.empty()) {
     out = formatTimestampWithTz(rawText, fmt.tz, fmt.timeFormat);

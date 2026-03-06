@@ -34,6 +34,7 @@ uint32_t sLastPulseMs = 0;
 bool sPulseOn = false;
 std::string sWidgetDefsObj;
 std::string sSharedSettingsObj;
+std::string sSharedLookupsObj;
 
 size_t skipWs(const std::string& s, size_t i) {
   while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i])) != 0) {
@@ -336,6 +337,8 @@ bool begin(const char* layoutPath) {
   (void)extractObjectForKey(json, 0, "\"widget_defs\"", sWidgetDefsObj);
   sSharedSettingsObj.clear();
   (void)extractObjectForKey(json, 0, "\"shared_settings\"", sSharedSettingsObj);
+  sSharedLookupsObj.clear();
+  (void)extractObjectForKey(json, 0, "\"shared_lookups\"", sSharedLookupsObj);
 
   std::vector<std::string> regionObjects;
   if (!extractRegionObjects(json, regionObjects)) {
@@ -415,8 +418,9 @@ bool begin(const char* layoutPath) {
     for (const std::string& path : candidatePaths) {
       const char* settingsJson = settingsObj.empty() ? nullptr : settingsObj.c_str();
       const char* sharedSettingsJson = sSharedSettingsObj.empty() ? nullptr : sSharedSettingsObj.c_str();
+      const char* sharedLookupsJson = sSharedLookupsObj.empty() ? nullptr : sSharedLookupsObj.c_str();
       if (dsl_widget_runtime::begin(r.widget.c_str(), path.c_str(), r.x, r.y, r.w, r.h, settingsJson,
-                                    sharedSettingsJson, r.drawBorder)) {
+                                    sharedSettingsJson, sharedLookupsJson, r.drawBorder)) {
         widgetStarted = true;
         break;
       }
@@ -430,6 +434,8 @@ bool begin(const char* layoutPath) {
   sWidgetDefsObj.shrink_to_fit();
   sSharedSettingsObj.clear();
   sSharedSettingsObj.shrink_to_fit();
+  sSharedLookupsObj.clear();
+  sSharedLookupsObj.shrink_to_fit();
 
   sActive = started > 0;
   ESP_LOGI(kTag, "dsl widgets started=%d", started);

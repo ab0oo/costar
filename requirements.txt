@@ -1,0 +1,4 @@
+platformio>=6.1,<7
+Pillow>=12,<13
+CairoSVG>=2.8,<3
+websockets>=12,<16

@@ -3,12 +3,63 @@
 #include <ctime>
 
 #include "esp_sntp.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "platform/Platform.h"
 
 namespace {
 // Require a modern UTC epoch before treating time as synced for TLS.
 constexpr time_t kUtcReadyMinUnix = 1704067200;  // 2024-01-01T00:00:00Z
+constexpr uint32_t kUtcBackgroundProbeWindowMs = 15000;
+constexpr uint32_t kUtcBackgroundProbeSleepMs = 250;
+constexpr uint32_t kUtcBackgroundRetryBackoffMs = 2000;
+constexpr uint32_t kUtcBackgroundSteadySleepMs = 60000;
+TaskHandle_t sUtcRetryTask = nullptr;
+
+void utcRetryTask(void* arg) {
+  (void)arg;
+  uint32_t attempt = 0;
+  bool loggedReady = false;
+  for (;;) {
+    if (timesync::isUtcTimeReady()) {
+      if (!loggedReady) {
+        loggedReady = true;
+        platform::logi("time", "UTC time ready via background retry");
+      }
+      platform::sleepMs(kUtcBackgroundSteadySleepMs);
+      continue;
+    }
+
+    loggedReady = false;
+    ++attempt;
+    platform::logi("time", "UTC time retry attempt=%u", static_cast<unsigned>(attempt));
+    const uint32_t startMs = platform::millisMs();
+    while (platform::millisMs() - startMs < kUtcBackgroundProbeWindowMs) {
+      if (timesync::isUtcTimeReady()) {
+        break;
+      }
+      platform::sleepMs(kUtcBackgroundProbeSleepMs);
+    }
+
+    if (!timesync::isUtcTimeReady()) {
+      platform::logw("time", "UTC time still unsynced after attempt=%u; will keep retrying",
+                     static_cast<unsigned>(attempt));
+      platform::sleepMs(kUtcBackgroundRetryBackoffMs);
+    }
+  }
+}
+
+void ensureUtcRetryTaskStarted() {
+  if (sUtcRetryTask != nullptr) {
+    return;
+  }
+  if (xTaskCreatePinnedToCore(utcRetryTask, "utc_retry", 3072, nullptr, 1, &sUtcRetryTask, 0) == pdPASS) {
+    platform::logi("time", "UTC retry task started");
+  } else {
+    platform::logw("time", "failed to start UTC retry task");
+  }
+}
 }  // namespace
 
 namespace timesync {
@@ -32,6 +83,8 @@ bool ensureUtcTime(uint32_t timeoutMs) {
     }
     platform::sleepMs(120);
   }
+  // Don't give up after the boot wait window; keep retrying in the background.
+  ensureUtcRetryTaskStarted();
   return false;
 }
 

@@ -20,27 +20,22 @@ CONFIG_LV_BUILD_EXAMPLES=n
 CONFIG_LV_USE_DEMO_WIDGETS=n
 CONFIG_LV_USE_DEMO_STRESS=n
 CONFIG_LV_USE_DEMO_MUSIC=n
+# Low-memory TLS profile for long-running DSL widget layouts.
 CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=y
 CONFIG_MBEDTLS_SSL_PROTO_TLS1_3=y
-# TLS 1.3 certificate records from api.open-meteo.com and homeassistant can be
-# 3.0-3.5KB cert records are common, but some HTTPS payload records are larger.
-# Keep IN moderate to avoid oversized contiguous allocations while preventing
-# zero-body edge cases seen at 4096. OUT stays at 2048 (our sends are small).
-CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=8192
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=4096
 CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=2048
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_MAX_CERTS=512
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y
+# Don't retain peer certs post-handshake; saves heap on long-lived TLS sockets.
+CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE=n
+# Prevent persistent TLS session state from shrinking largest-free-block after
+# first HTTPS handshakes in long-running widget layouts.
+CONFIG_MBEDTLS_CLIENT_SSL_SESSION_TICKETS=n
+CONFIG_MBEDTLS_SERVER_SSL_SESSION_TICKETS=n
+# Allow runtime opt-in insecure TLS for self-signed/private endpoints.
+# Cert verification remains default unless DSL explicitly sets data.tls_skip_verify=true.
 CONFIG_ESP_TLS_INSECURE=y
 CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y
-# Session tickets cache a ~10-20KB session struct in heap permanently after the
-# first TLS connection, fragmenting the largest contiguous block below the
-# threshold needed for a second TLS handshake. Disable since poll intervals
-# (180s+) are far longer than typical session ticket lifetimes anyway.
-CONFIG_MBEDTLS_CLIENT_SSL_SESSION_TICKETS=n
-# DSL TLS guard tunables (in KB). These gate new TLS handshakes when heap is fragmented.
-CONFIG_COSTAR_DSL_TLS_MIN_LARGEST_8BIT_KB=7
-CONFIG_COSTAR_DSL_TLS_MIN_FREE_8BIT_KB=28
-CONFIG_COSTAR_DSL_TLS_RELAXED_LARGEST_8BIT_KB=8
-CONFIG_COSTAR_DSL_TLS_RELAXED_FREE_THRESHOLD_8BIT_KB=32

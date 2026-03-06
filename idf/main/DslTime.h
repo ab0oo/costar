@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <string>
 
 // Geo context helpers — read from NVS prefs, used by time formatting and transforms.
@@ -35,6 +36,9 @@ struct FormatSpec {
   std::string suffix;
   std::string tz;
   std::string timeFormat;
+  std::string valueMapLookup;
+  std::map<std::string, std::string> valueMap;
+  std::string valueMapDefault;
 };
 
 std::string applyFormat(const std::string& rawText, const FormatSpec& fmt, bool numeric,

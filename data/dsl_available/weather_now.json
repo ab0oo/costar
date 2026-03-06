@@ -19,6 +19,20 @@
         }
       },
       "code_now": "current.weather_code",
+      "cond_now": {
+        "path": "current.weather_code",
+        "format": {
+          "map_lookup": "weather_code_text",
+          "map_default": "Unknown"
+        }
+      },
+      "icon_now": {
+        "path": "current.weather_code",
+        "format": {
+          "map_lookup": "weather_code_icon_day",
+          "map_default": "/icons/meteocons/overcast-day.raw"
+        }
+      },
       "humidity_now": {
         "path": "current.relative_humidity_2m",
         "format": {

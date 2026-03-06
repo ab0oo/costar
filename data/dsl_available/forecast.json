@@ -32,6 +32,20 @@
         }
       },
       "day1_code": "daily.weather_code[0]",
+      "day1_cond": {
+        "path": "daily.weather_code[0]",
+        "format": {
+          "map_lookup": "weather_code_text",
+          "map_default": "Unknown"
+        }
+      },
+      "day1_icon": {
+        "path": "daily.weather_code[0]",
+        "format": {
+          "map_lookup": "weather_code_icon_day",
+          "map_default": "/icons/meteocons/overcast-day.raw"
+        }
+      },
       "day2_name": {
         "path": "daily.time[1]",
         "format": {
@@ -53,7 +67,22 @@
           "locale": "en-US"
         }
       },
-      "day2_code": "daily.weather_code[1]"    }
+      "day2_code": "daily.weather_code[1]",
+      "day2_cond": {
+        "path": "daily.weather_code[1]",
+        "format": {
+          "map_lookup": "weather_code_text",
+          "map_default": "Unknown"
+        }
+      },
+      "day2_icon": {
+        "path": "daily.weather_code[1]",
+        "format": {
+          "map_lookup": "weather_code_icon_day",
+          "map_default": "/icons/meteocons/overcast-day.raw"
+        }
+      }
+    }
   },
   "ui": {
     "title": "Forecast",

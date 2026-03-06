@@ -1137,6 +1137,23 @@
       const resolvedTimeFormat = bindTemplate(String(fmt.time_format || fmt.timeFormat || "%Y-%m-%d %H:%M"), scope);
       let numeric = typeof raw === "number" ? raw : parseNumberMaybe(raw);
       let out = (raw == null) ? "" : String(raw);
+      const mapObj = (fmt && typeof fmt.map === "object" && fmt.map) ? fmt.map : null;
+      if (mapObj) {
+        const trimmed = String(raw == null ? "" : raw).trim();
+        const numericKey = (numeric != null && Number.isFinite(numeric) && Math.abs(numeric - Math.round(numeric)) < 1e-6)
+          ? String(Math.round(numeric))
+          : "";
+        const mapped = Object.prototype.hasOwnProperty.call(mapObj, trimmed) ? mapObj[trimmed]
+          : (numericKey && Object.prototype.hasOwnProperty.call(mapObj, numericKey)) ? mapObj[numericKey]
+          : undefined;
+        if (mapped !== undefined) {
+          out = String(mapped ?? "");
+          numeric = null;
+        } else if (typeof fmt.map_default === "string" || typeof fmt.default === "string") {
+          out = String((fmt.map_default ?? fmt.default) ?? "");
+          numeric = null;
+        }
+      }
 
       if (resolvedTz) {
         out = formatTimestamp(String(raw ?? ""), resolvedTz, resolvedTimeFormat);
@@ -1211,64 +1228,12 @@
       };
     }
 
-    function mapWeatherCode(code) {
-      let text = "Unknown";
-      let icon = "/icons/meteocons/cloudy.raw";
-
-      if (code === 0) {
-        text = "Clear";
-        icon = "/icons/meteocons/clear-day.raw";
-      } else if (code === 1) {
-        text = "Mostly Clear";
-        icon = "/icons/meteocons/partly-cloudy-day.raw";
-      } else if (code === 2) {
-        text = "Partly Cloudy";
-        icon = "/icons/meteocons/partly-cloudy-day.raw";
-      } else if (code === 3) {
-        text = "Overcast";
-        icon = "/icons/meteocons/cloudy.raw";
-      } else if (code === 45 || code === 48) {
-        text = "Fog";
-        icon = "/icons/meteocons/fog.raw";
-      } else if (code === 51 || code === 53 || code === 55 || code === 56 || code === 57) {
-        text = "Drizzle";
-        icon = "/icons/meteocons/drizzle.raw";
-      } else if (
-        code === 61 || code === 63 || code === 65 || code === 66 || code === 67 ||
-        code === 80 || code === 81 || code === 82
-      ) {
-        text = "Rain";
-        icon = "/icons/meteocons/rain.raw";
-      } else if (code === 71 || code === 73 || code === 75 || code === 77 || code === 85 || code === 86) {
-        text = "Snow";
-        icon = "/icons/meteocons/snow.raw";
-      } else if (code === 95 || code === 96 || code === 99) {
-        text = "Storm";
-        icon = "/icons/meteocons/thunderstorms-day.raw";
-      }
-
-      return { text, icon };
-    }
-
-    function applyDerivedWeather(values, codeKey, textKey, iconKey) {
-      const raw = values[codeKey];
-      if (raw == null || String(raw).trim() === "") {
-        values[textKey] = "";
-        values[iconKey] = "";
-        return;
-      }
-      const parsed = parseInt(String(raw), 10);
-      const code = Number.isFinite(parsed) ? parsed : 0;
-      const mapped = mapWeatherCode(code);
-      values[textKey] = mapped.text;
-      values[iconKey] = mapped.icon;
-    }
-
     function buildResolvedData(dslDoc, payload) {
       const values = {};
       const numerics = {};
       const series = {};
       const fields = (((dslDoc || {}).data || {}).fields) || {};
+      const lookups = (((dslDoc || {}).data || {}).lookups) || {};
       const source = (((dslDoc || {}).data || {}).source) || "http";
       const dataDoc = source === "local_time" ? buildLocalTimeDoc() : (payload || {});
 
@@ -1281,6 +1246,16 @@
         } else if (spec && typeof spec === "object") {
           path = bindTemplate(String(spec.path || ""), values);
           fmt = spec.format || null;
+          if (fmt && typeof fmt === "object") {
+            const lookupName = String(fmt.map_lookup || fmt.mapLookup || "").trim();
+            if (lookupName) {
+              const lookupMap = lookups[lookupName];
+              if (lookupMap && typeof lookupMap === "object") {
+                const localMap = (fmt.map && typeof fmt.map === "object") ? fmt.map : {};
+                fmt = { ...fmt, map: { ...lookupMap, ...localMap } };
+              }
+            }
+          }
         } else {
           continue;
         }
@@ -1307,11 +1282,6 @@
         const n = parseNumberMaybe(raw);
         if (n != null) numerics[key] = n;
       }
-
-      // Mirror firmware's derived weather fields from weather codes.
-      applyDerivedWeather(values, "code_now", "cond_now", "icon_now");
-      applyDerivedWeather(values, "day1_code", "day1_cond", "day1_icon");
-      applyDerivedWeather(values, "day2_code", "day2_cond", "day2_icon");
 
       return { values, numerics, series, dataDoc };
     }
