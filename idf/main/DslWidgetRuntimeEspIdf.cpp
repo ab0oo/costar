@@ -461,6 +461,8 @@ size_t sIconMemCacheBytes = 0;
 bool sIconCacheDirReady = false;
 std::map<std::string, uint32_t> sIconRetryAfterMs;
 uint32_t sLastLowHeapRecoverMs = 0;
+std::string sLastLowHeapReclaimReason;
+uint32_t sLastLowHeapReclaimLogMs = 0;
 
 struct WsReqMeta {
   std::string cacheKey;
@@ -4470,13 +4472,23 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
     size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
     size_t freeHeap = esp_get_free_heap_size();
     size_t minLargest = tlsMinLargestForFreeHeap(freeHeap);
-    if (largest < minLargest || freeHeap < kTlsMinFree8Bit) {
+    // Generic soft margin: when total free heap is comfortably above guard,
+    // allow a slightly smaller contiguous block before deferring.
+    const size_t minLargestSoft = (minLargest > 1024U) ? (minLargest - 1024U) : minLargest;
+    const bool allowSoftLargest = freeHeap >= (kTlsMinFree8Bit + 4096U);
+    const auto passesLargestGuard = [&](size_t largestNow, size_t minLargestNow) {
+      if (largestNow >= minLargestNow) {
+        return true;
+      }
+      return allowSoftLargest && largestNow >= minLargestSoft;
+    };
+    if (!passesLargestGuard(largest, minLargest) || freeHeap < kTlsMinFree8Bit) {
       (void)reclaimRuntimeCachesLowHeap("tls-guard");
       largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
       freeHeap = esp_get_free_heap_size();
       minLargest = tlsMinLargestForFreeHeap(freeHeap);
     }
-    if (largest < minLargest || freeHeap < kTlsMinFree8Bit) {
+    if (!passesLargestGuard(largest, minLargest) || freeHeap < kTlsMinFree8Bit) {
       char lowHeapReason[96];
       std::snprintf(lowHeapReason, sizeof(lowHeapReason), "tls low heap free=%u largest=%u",
                     static_cast<unsigned>(freeHeap), static_cast<unsigned>(largest));
@@ -5036,9 +5048,17 @@ void noteFetchDeferred(uint32_t nowMs, const char* reason) {
   if (s.backoffUntilMs == 0 || static_cast<int32_t>(s.backoffUntilMs - nowMs) < static_cast<int32_t>(desiredDelayMs)) {
     s.backoffUntilMs = nowMs + desiredDelayMs;
   }
-  if (s.lastDeferredLogMs == 0 || static_cast<int32_t>(nowMs - s.lastDeferredLogMs) >= 2000) {
-    ESP_LOGI(kTag, "fetch deferred widget=%s backoff_ms=%u reason=%s", s.widgetId.c_str(),
-             static_cast<unsigned>(desiredDelayMs), reason != nullptr ? reason : "unknown");
+  const char* reasonText = reason != nullptr ? reason : "unknown";
+  const bool chattyWsBootstrapReason = std::strcmp(reasonText, "ws bootstrap subscribed") == 0;
+  const uint32_t logIntervalMs = chattyWsBootstrapReason ? 30000U : 5000U;
+  if (s.lastDeferredLogMs == 0 || static_cast<int32_t>(nowMs - s.lastDeferredLogMs) >= static_cast<int32_t>(logIntervalMs)) {
+    if (chattyWsBootstrapReason) {
+      ESP_LOGD(kTag, "fetch deferred widget=%s backoff_ms=%u reason=%s", s.widgetId.c_str(),
+               static_cast<unsigned>(desiredDelayMs), reasonText);
+    } else {
+      ESP_LOGI(kTag, "fetch deferred widget=%s backoff_ms=%u reason=%s", s.widgetId.c_str(),
+               static_cast<unsigned>(desiredDelayMs), reasonText);
+    }
     s.lastDeferredLogMs = nowMs;
   }
 }
@@ -6032,13 +6052,26 @@ bool reclaimRuntimeCachesLowHeap(const char* reason) {
 
   const size_t freeAfter = heap_caps_get_free_size(MALLOC_CAP_8BIT);
   const size_t largestAfter = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-  ESP_LOGW(kTag,
-           "low-heap reclaim reason=%s icon_entries=%u icon_bytes=%u http_entries=%u ws_cache=%u canvas_bytes=%u free=%u->%u largest=%u->%u",
-           reason != nullptr ? reason : "(unknown)", static_cast<unsigned>(iconEntries),
-           static_cast<unsigned>(iconBytes), static_cast<unsigned>(httpEntries),
-           static_cast<unsigned>(wsCacheEntries), static_cast<unsigned>(canvasBytes),
-           static_cast<unsigned>(freeBefore), static_cast<unsigned>(freeAfter),
-           static_cast<unsigned>(largestBefore), static_cast<unsigned>(largestAfter));
+  const char* reasonText = reason != nullptr ? reason : "(unknown)";
+  const bool reasonChanged = sLastLowHeapReclaimReason != reasonText;
+  const bool intervalElapsed = (sLastLowHeapReclaimLogMs == 0) ||
+                               (nowMs - sLastLowHeapReclaimLogMs >= 30000U);
+  if (reasonChanged || intervalElapsed) {
+    ESP_LOGW(kTag,
+             "low-heap reclaim reason=%s icon_entries=%u icon_bytes=%u http_entries=%u ws_cache=%u canvas_bytes=%u free=%u->%u largest=%u->%u",
+             reasonText, static_cast<unsigned>(iconEntries), static_cast<unsigned>(iconBytes),
+             static_cast<unsigned>(httpEntries), static_cast<unsigned>(wsCacheEntries),
+             static_cast<unsigned>(canvasBytes), static_cast<unsigned>(freeBefore),
+             static_cast<unsigned>(freeAfter), static_cast<unsigned>(largestBefore),
+             static_cast<unsigned>(largestAfter));
+    sLastLowHeapReclaimReason = reasonText;
+    sLastLowHeapReclaimLogMs = nowMs;
+  } else {
+    ESP_LOGD(kTag,
+             "low-heap reclaim reason=%s free=%u->%u largest=%u->%u",
+             reasonText, static_cast<unsigned>(freeBefore), static_cast<unsigned>(freeAfter),
+             static_cast<unsigned>(largestBefore), static_cast<unsigned>(largestAfter));
+  }
   return largestAfter > largestBefore || freeAfter > freeBefore;
 }
 
@@ -6093,7 +6126,7 @@ bool iconFileCacheGet(const std::string& key, int w, int h, std::vector<uint16_t
   const size_t got = std::fread(outPixels.data(), sizeof(uint16_t), needPixels, fp);
   std::fclose(fp);
   if (got == needPixels) {
-    ESP_LOGI(kTag, "icon file cache hit key=%s path=%s bytes=%u", key.c_str(), path.c_str(),
+    ESP_LOGD(kTag, "icon file cache hit key=%s path=%s bytes=%u", key.c_str(), path.c_str(),
              static_cast<unsigned>(needBytes));
     return true;
   }
