@@ -4,15 +4,15 @@
     "id": "homeassistant-multi-entity-card-a",
     "orientation": "landscape",
     "width": 320,
-    "height": 240,
+    "height": 220,
     "regions": [
       {
         "id": "ha-multi-card",
         "widget": "ha-multi-card",
         "x": 0,
-        "y": 0,
+        "y": 20,
         "w": 320,
-        "h": 240,
+        "h": 220,
         "draw_border": false
       }
     ]

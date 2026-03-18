@@ -6,14 +6,14 @@
   "data": {
     "source": "http",
     "tls_skip_verify": true,
-    "url": "https://api.open-meteo.com/v1/forecast?latitude={{geo.lat}}&longitude={{geo.lon}}&daily=weather_code,temperature_2m_min,temperature_2m_max&timezone=UTC&forecast_days=2&temperature_unit=fahrenheit",
+    "url": "https://api.open-meteo.com/v1/forecast?latitude={{geo.lat}}&longitude={{geo.lon}}&daily=weather_code,temperature_2m_min,temperature_2m_max&timezone=auto&forecast_days=2&temperature_unit=fahrenheit",
     "debug": true,
     "poll_ms": 600000,
     "fields": {
       "day1_name": {
         "path": "daily.time[0]",
         "format": {
-          "tz": "local",
+          "tz": "UTC",
           "time_format": "%A"
         }
       },
@@ -49,7 +49,7 @@
       "day2_name": {
         "path": "daily.time[1]",
         "format": {
-          "tz": "local",
+          "tz": "UTC",
           "time_format": "%A"
         }
       },

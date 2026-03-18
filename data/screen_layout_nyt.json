@@ -4,15 +4,15 @@
     "id": "nyt-fullscreen",
     "orientation": "landscape",
     "width": 320,
-    "height": 240,
+    "height": 220,
     "regions": [
       {
         "id": "nyt-headlines",
         "widget": "nyt-headlines",
         "x": 0,
-        "y": 0,
+        "y": 20,
         "w": 320,
-        "h": 240,
+        "h": 220,
         "draw_border": false
       }
     ]

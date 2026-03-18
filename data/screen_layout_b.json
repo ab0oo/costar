@@ -4,33 +4,33 @@
     "id": "weather-left-b",
     "orientation": "landscape",
     "width": 320,
-    "height": 240,
+    "height": 220,
     "regions": [
       {
         "id": "weather-now",
         "widget": "weather-now",
         "x": 0,
-        "y": 0,
+        "y": 20,
         "w": 160,
-        "h": 120,
+        "h": 110,
         "draw_border": false
       },
       {
         "id": "forecast",
         "widget": "forecast",
         "x": 0,
-        "y": 120,
+        "y": 130,
         "w": 160,
-        "h": 120,
+        "h": 110,
         "draw_border": false
       },
       {
         "id": "clock-full",
         "widget": "clock-full",
         "x": 160,
-        "y": 0,
+        "y": 20,
         "w": 160,
-        "h": 240,
+        "h": 220,
         "draw_border": false
       }
     ]

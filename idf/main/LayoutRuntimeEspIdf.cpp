@@ -16,6 +16,8 @@ constexpr const char* kTag = "layout-runtime";
 constexpr uint16_t kBg = 0x0000;
 constexpr uint16_t kBorder = 0xFFFF;
 constexpr uint16_t kRegionBg = 0x4208;
+// Top kTabBarH rows are owned by the tab bar in app_main; don't clear them.
+constexpr uint16_t kTabBarH = 20;
 
 struct Region {
   std::string id;
@@ -310,7 +312,10 @@ void drawRegionFrame(const Region& r) {
 }
 
 void drawScene() {
-  (void)display_spi::clear(kBg);
+  const uint16_t sw = display_spi::width();
+  const uint16_t sh = display_spi::height();
+  // Clear only the widget area below the tab bar.
+  (void)display_spi::fillRect(0, kTabBarH, sw, static_cast<uint16_t>(sh - kTabBarH), kBg);
   for (const Region& r : sRegions) {
     drawRegionFrame(r);
   }

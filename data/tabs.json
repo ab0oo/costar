@@ -1,0 +1,10 @@
+{
+  "default": "/littlefs/screen_layout_a.json",
+  "tabs": [
+    {"label": "HA",  "path": "/littlefs/screen_layout_a.json"},
+    {"label": "WX",  "path": "/littlefs/screen_layout_b.json"},
+    {"label": "NYT", "path": "/littlefs/screen_layout_nyt.json"},
+    {"label": "QK",  "path": "/littlefs/screen_layout_quakes.json"},
+    {"label": "SOL", "path": "/littlefs/screen_layout_solar.json"}
+  ]
+}

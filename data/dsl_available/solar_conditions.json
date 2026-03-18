@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "notes": {
+    "source": "NOAA SWPC government data via solar_proxy.py (plain HTTP, no TLS)",
+    "proxy": "http://vps.gorkos.net:8086/solar"
+  },
+  "data": {
+    "source": "http",
+    "url": "http://{{setting.proxy_host}}:{{setting.proxy_port}}/solar",
+    "poll_ms": 900000,
+    "fields": {
+      "sfi":         "sfi",
+      "k_index":     "k_index",
+      "a_index":     "a_index",
+      "xray":        "xray",
+      "sunspots":    "sunspots",
+      "solar_wind":  "solar_wind",
+      "geomag":      "geomag_scale",
+      "updated":     "fetched_utc",
+      "hf_80_day":   "hf_conditions.80m-40m.day",
+      "hf_80_night": "hf_conditions.80m-40m.night",
+      "hf_20_day":   "hf_conditions.30m-20m.day",
+      "hf_20_night": "hf_conditions.30m-20m.night",
+      "hf_15_day":   "hf_conditions.17m-15m.day",
+      "hf_15_night": "hf_conditions.17m-15m.night",
+      "hf_10_day":   "hf_conditions.12m-10m.day",
+      "hf_10_night": "hf_conditions.12m-10m.night"
+    }
+  },
+  "ui": {
+    "title": "Solar / HF",
+    "nodes": [
+      {
+        "type": "label",
+        "x": 4, "y": 2,
+        "font": 1,
+        "color": "#90CAF9",
+        "text": "SFI:{{sfi}}  K:{{k_index}}  A:{{a_index}}  SN:{{sunspots}}"
+      },
+      {
+        "type": "label",
+        "x": 4, "y": 14,
+        "font": 1,
+        "color": "#80CBC4",
+        "text": "Xray:{{xray}}  SW:{{solar_wind}}km/s  {{geomag}}"
+      },
+      {
+        "type": "label",
+        "x": 4, "y": 30,
+        "font": 1,
+        "color": "#B0BEC5",
+        "text": "        DAY   NIGHT"
+      },
+      {
+        "type": "label",
+        "x": 4, "y": 42,
+        "font": 1,
+        "color": "#CFD8DC",
+        "text": "80/40m  {{hf_80_day}}  {{hf_80_night}}"
+      },
+      {
+        "type": "label",
+        "x": 4, "y": 54,
+        "font": 1,
+        "color": "#CFD8DC",
+        "text": "30/20m  {{hf_20_day}}  {{hf_20_night}}"
+      },
+      {
+        "type": "label",
+        "x": 4, "y": 66,
+        "font": 1,
+        "color": "#CFD8DC",
+        "text": "17/15m  {{hf_15_day}}  {{hf_15_night}}"
+      },
+      {
+        "type": "label",
+        "x": 4, "y": 78,
+        "font": 1,
+        "color": "#CFD8DC",
+        "text": "12/10m  {{hf_10_day}}  {{hf_10_night}}"
+      },
+      {
+        "type": "label",
+        "x": 4, "y": 94,
+        "font": 1,
+        "color": "#546E7A",
+        "text": "{{updated}}"
+      }
+    ]
+  }
+}

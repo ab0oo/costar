@@ -149,8 +149,11 @@ constexpr size_t kValueInsertMinFree8Bit = 12U * 1024U;
 constexpr uint32_t kWsPendingReqTimeoutMs = 8000U;
 constexpr size_t kUiCriticalLargest8Bit = 12288U;
 constexpr size_t kUiCriticalFree8Bit = 24576U;
-// Guard against fragmentation before TLS setup. mbedtls_ssl_setup needs more
-// than 16KB contiguous even with dynamic buffers; 20KB gives reliable headroom.
+// Guard against fragmentation before TLS setup. With dynamic buffers (4KB IN /
+// 2KB OUT) mbedtls can handshake with 8KB largest contiguous block available.
+// Strict path (min_largest=12KB) applies only when free heap is very low.
+// Relaxed path (relaxed_largest=7KB, threshold=28KB) covers post-HTTP-worker
+// steady state where the worker 8KB stack is the largest block.
 constexpr size_t kTlsMinLargest8Bit =
     static_cast<size_t>(CONFIG_COSTAR_DSL_TLS_MIN_LARGEST_8BIT_KB) * 1024U;
 constexpr size_t kTlsMinFree8Bit =
@@ -4585,13 +4588,8 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
   cfg.disable_auto_redirect = false;
   cfg.max_redirection_count = 5;
   cfg.keep_alive_enable = false;
-  if (method == "GET") {
-    cfg.event_handler = nullptr;
-    cfg.user_data = nullptr;
-  } else {
-    cfg.event_handler = httpEventHandler;
-    cfg.user_data = &cap;
-  }
+  cfg.event_handler = httpEventHandler;
+  cfg.user_data = &cap;
   cfg.buffer_size = 1024;
   cfg.buffer_size_tx = 512;
 
@@ -4603,68 +4601,11 @@ bool httpRequestDirect(const std::string& method, const std::string& url,
   }
   configureClientRequest(client);
 
-  esp_err_t reqErr = ESP_OK;
-  if (method == "GET") {
-    reqErr = esp_http_client_open(client, 0);
-    if (reqErr == ESP_OK) {
-      const int64_t contentLen = esp_http_client_fetch_headers(client);
-      responseContentLength = contentLen;
-      statusCode = esp_http_client_get_status_code(client);
-      chunkedResponse = esp_http_client_is_chunked_response(client) ? 1 : 0;
-      if (contentLen > 0) {
-        if (static_cast<size_t>(contentLen) > cap.maxBytes) {
-          cap.overflow = true;
-        } else {
-          (void)ensureHttpCaptureCapacity(&cap, static_cast<size_t>(contentLen));
-        }
-      }
-      int zeroReadStreak = 0;
-      while (reqErr == ESP_OK) {
-        char tmp[512];
-        const int got = esp_http_client_read(client, tmp, sizeof(tmp));
-        if (got == -ESP_ERR_HTTP_EAGAIN) {
-          if (++zeroReadStreak >= 5) {
-            reqErr = ESP_FAIL;
-            reason = "http read timeout";
-            break;
-          }
-          vTaskDelay(pdMS_TO_TICKS(20));
-          continue;
-        }
-        if (got < 0) {
-          reqErr = ESP_FAIL;
-          reason = "http read failed";
-          break;
-        }
-        if (got == 0) {
-          if (esp_http_client_is_complete_data_received(client)) {
-            break;
-          }
-          if (++zeroReadStreak >= 5) {
-            reqErr = ESP_FAIL;
-            reason = "http read incomplete";
-            break;
-          }
-          vTaskDelay(pdMS_TO_TICKS(20));
-          continue;
-        }
-        zeroReadStreak = 0;
-        const size_t needBytes = cap.size + static_cast<size_t>(got);
-        if (!ensureHttpCaptureCapacity(&cap, needBytes)) {
-          break;
-        }
-        std::memcpy(cap.data + cap.size, tmp, static_cast<size_t>(got));
-        cap.size += static_cast<size_t>(got);
-        cap.data[cap.size] = '\0';
-      }
-    }
-  } else {
-    reqErr = esp_http_client_perform(client);
-    if (reqErr == ESP_OK) {
-      statusCode = esp_http_client_get_status_code(client);
-      responseContentLength = esp_http_client_get_content_length(client);
-      chunkedResponse = esp_http_client_is_chunked_response(client) ? 1 : 0;
-    }
+  const esp_err_t reqErr = esp_http_client_perform(client);
+  if (reqErr == ESP_OK) {
+    statusCode = esp_http_client_get_status_code(client);
+    responseContentLength = esp_http_client_get_content_length(client);
+    chunkedResponse = esp_http_client_is_chunked_response(client) ? 1 : 0;
   }
 
   // Release TLS/client allocations before attempting to allocate std::string body storage.
@@ -4818,6 +4759,9 @@ void teardownHttpWorker() {
     if (sHttpWorkerTask != nullptr) {
       vTaskDelete(sHttpWorkerTask);
       sHttpWorkerTask = nullptr;
+      // Force-release the transport gate in case the task was killed mid-request
+      // while holding it, which would otherwise permanently block future fetches.
+      http_transport_gate::give();
     }
   }
 
@@ -4839,12 +4783,25 @@ void teardownHttpWorker() {
 void settleAfterNetworkTeardown() {
   const size_t freeBefore = heap_caps_get_free_size(MALLOC_CAP_8BIT);
   const size_t largestBefore = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-  // Allow async socket/task teardown paths to complete before next layout starts
-  // issuing fresh TLS connections.
-  for (int i = 0; i < 3; ++i) {
+  // Allow async socket/task teardown paths (TLS context free, lwIP socket close,
+  // FreeRTOS task cleanup) to complete before the next layout issues new connections.
+  // 150ms gives the idle task time to actually run destructors and return memory.
+  for (int i = 0; i < 6; ++i) {
     vTaskDelay(pdMS_TO_TICKS(25));
   }
+  // Unconditional reclaim — cooldown was reset to 0 at the start of reset().
   (void)reclaimRuntimeCachesLowHeap("layout-switch");
+  // Poll for up to 300ms more for fragmentation to improve (largest block growing).
+  // The lwIP/mbedtls teardown path releases memory asynchronously.
+  size_t prevLargest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  for (int i = 0; i < 6; ++i) {
+    vTaskDelay(pdMS_TO_TICKS(50));
+    const size_t nowLargest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    if (nowLargest <= prevLargest) {
+      break;  // No improvement — stop waiting
+    }
+    prevLargest = nowLargest;
+  }
   const size_t freeAfter = heap_caps_get_free_size(MALLOC_CAP_8BIT);
   const size_t largestAfter = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
   ESP_LOGI(kTag, "reset settle net free=%u->%u largest=%u->%u", static_cast<unsigned>(freeBefore),
@@ -6952,6 +6909,9 @@ void reset() {
   const size_t canvasBytes = sCanvasCapacityBytes;
   const size_t freeBefore = heap_caps_get_free_size(MALLOC_CAP_8BIT);
   const size_t largestBefore = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  // Reset cooldown so settleAfterNetworkTeardown's reclaimRuntimeCachesLowHeap
+  // call always runs unconditionally during a layout switch.
+  sLastLowHeapRecoverMs = 0;
   teardownHttpWorker();
   sIconMemCache.clear();
   sIconMemCacheBytes = 0;

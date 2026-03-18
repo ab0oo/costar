@@ -16,6 +16,7 @@
 #include "platform/Net.h"
 #include "platform/Prefs.h"
 #include "AppConfig.h"
+#include "DslJson.h"
 
 #include "esp_err.h"
 #include "esp_event.h"
@@ -53,10 +54,8 @@ constexpr unsigned long kRuntimeTickPeriodMs = 33UL;
 constexpr uint32_t kBootTaskStackBytes = 16384;
 constexpr const char* kLayoutPrefsNs = "ui";
 constexpr const char* kLayoutPrefsKey = "layout";
-constexpr const char* kLayoutAPath = "/littlefs/screen_layout_a.json";
-constexpr const char* kLayoutBPath = "/littlefs/screen_layout_b.json";
-constexpr const char* kLayoutNytPath = "/littlefs/screen_layout_nyt.json";
-constexpr const char* kLayoutQuakesPath = "/littlefs/screen_layout_quakes.json";
+constexpr const char* kTabsConfigPath  = "/littlefs/tabs.json";
+constexpr const char* kFallbackLayoutPath = "/littlefs/screen_layout_a.json";
 constexpr EventBits_t kWifiConnectedBit = BIT0;
 constexpr EventBits_t kWifiFailedBit = BIT1;
 EventGroupHandle_t sWifiEventGroup = nullptr;
@@ -67,45 +66,23 @@ TaskHandle_t sRuntimeTaskHandle = nullptr;
 struct RuntimeLoopContext {
   boot::BaselineState baselineState;
   bool wifiReady = false;
-  std::string activeLayoutPath = kLayoutAPath;
+  std::string activeLayoutPath;
 };
 
-struct UiRect {
-  uint16_t x = 0;
-  uint16_t y = 0;
-  uint16_t w = 0;
-  uint16_t h = 0;
-};
+// Tab bar: loaded at boot from /littlefs/tabs.json
+constexpr uint16_t kTabBarH = 20;
 
-struct RuntimeMenuRects {
-  UiRect button;
-  UiRect panel;
-  UiRect rowLayoutA;
-  UiRect rowLayoutB;
-  UiRect rowLayoutNyt;
-  UiRect rowLayoutQuakes;
-  UiRect rowConfig;
-  UiRect rowTouchCal;
+struct TabDef {
+  std::string label;
+  std::string path;
 };
+std::vector<TabDef> sTabs;
+std::string sDefaultLayoutPath = kFallbackLayoutPath;
 
-enum class RuntimeMenuAction : uint8_t {
-  None = 0,
-  Toggle,
-  SelectLayoutA,
-  SelectLayoutB,
-  SelectLayoutNyt,
-  SelectLayoutQuakes,
-  OpenConfig,
-  OpenTouchCalibration,
-  Dismiss,
-};
-
-struct RuntimeMenuState {
-  bool open = false;
+struct TabBarState {
   bool dirty = true;
 };
-
-RuntimeMenuState sRuntimeMenu;
+TabBarState sTabBar;
 
 struct WifiApEntry {
   std::string ssid;
@@ -320,12 +297,6 @@ uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
   return static_cast<uint16_t>(((r & 0xF8U) << 8) | ((g & 0xFCU) << 3) | (b >> 3));
 }
 
-bool rectContains(const UiRect& r, uint16_t x, uint16_t y) {
-  const uint16_t x2 = static_cast<uint16_t>(r.x + r.w);
-  const uint16_t y2 = static_cast<uint16_t>(r.y + r.h);
-  return x >= r.x && x < x2 && y >= r.y && y < y2;
-}
-
 void drawTinyChar(int x, int y, char c, uint16_t fg, uint16_t bg, int scale) {
   if (c < 0x20 || c > 0x7E) {
     c = '?';
@@ -359,143 +330,131 @@ void drawTinyText(int x, int y, const char* text, uint16_t fg, uint16_t bg, int 
   }
 }
 
-RuntimeMenuRects calcRuntimeMenuRects() {
-  RuntimeMenuRects out = {};
+void drawTabBar(const std::string& activeLayoutPath) {
+  if (sTabs.empty()) { return; }
   const uint16_t w = display_spi::width();
-  const uint16_t h = display_spi::height();
-  const uint16_t menuBtnW = 24;
-  const uint16_t menuBtnH = 20;
-  const uint16_t margin = 4;
-  (void)w;
-  out.button = {margin, static_cast<uint16_t>(h - menuBtnH - margin), menuBtnW, menuBtnH};
+  const uint16_t tabW = static_cast<uint16_t>(w / static_cast<uint16_t>(sTabs.size()));
+  const uint16_t barBg     = rgb565(12, 18, 32);
+  const uint16_t tabBg     = rgb565(22, 34, 54);
+  const uint16_t tabActive = rgb565(58, 92, 140);
+  const uint16_t textColor = rgb565(220, 230, 245);
+  const uint16_t divider   = rgb565(60, 80, 110);
 
-  const uint16_t panelW = 160;
-  const uint16_t rowH = 18;
-  const uint16_t panelH = static_cast<uint16_t>(rowH * 6 + 6);
-  int panelY = static_cast<int>(out.button.y) - static_cast<int>(panelH) - 4;
-  if (panelY < 0) {
-    panelY = 0;
-  }
-  out.panel = {margin, static_cast<uint16_t>(panelY), panelW, panelH};
-  out.rowLayoutA = {static_cast<uint16_t>(out.panel.x + 3), static_cast<uint16_t>(out.panel.y + 3),
-                    static_cast<uint16_t>(panelW - 6), rowH};
-  out.rowLayoutB = {static_cast<uint16_t>(out.panel.x + 3), static_cast<uint16_t>(out.panel.y + 3 + rowH),
-                    static_cast<uint16_t>(panelW - 6), rowH};
-  out.rowLayoutNyt = {static_cast<uint16_t>(out.panel.x + 3), static_cast<uint16_t>(out.panel.y + 3 + rowH * 2),
-                      static_cast<uint16_t>(panelW - 6), rowH};
-  out.rowLayoutQuakes = {static_cast<uint16_t>(out.panel.x + 3), static_cast<uint16_t>(out.panel.y + 3 + rowH * 3),
-                         static_cast<uint16_t>(panelW - 6), rowH};
-  out.rowConfig = {static_cast<uint16_t>(out.panel.x + 3), static_cast<uint16_t>(out.panel.y + 3 + rowH * 4),
-                   static_cast<uint16_t>(panelW - 6), rowH};
-  out.rowTouchCal = {static_cast<uint16_t>(out.panel.x + 3), static_cast<uint16_t>(out.panel.y + 3 + rowH * 5),
-                     static_cast<uint16_t>(panelW - 6), rowH};
-  return out;
-}
+  // Fill bar background
+  (void)display_spi::fillRect(0, 0, w, kTabBarH, barBg);
+  // Bottom border
+  (void)display_spi::fillRect(0, static_cast<uint16_t>(kTabBarH - 1), w, 1, divider);
 
-void drawRuntimeMenuButton(bool active) {
-  const RuntimeMenuRects r = calcRuntimeMenuRects();
-  const uint16_t bg = active ? rgb565(70, 90, 130) : rgb565(22, 31, 46);
-  const uint16_t line = rgb565(220, 234, 248);
-  (void)display_spi::fillRect(r.button.x, r.button.y, r.button.w, r.button.h, bg);
-  (void)display_spi::fillRect(r.button.x, r.button.y, r.button.w, 1, line);
-  (void)display_spi::fillRect(r.button.x, static_cast<uint16_t>(r.button.y + r.button.h - 1), r.button.w, 1, line);
-  (void)display_spi::fillRect(r.button.x, r.button.y, 1, r.button.h, line);
-  (void)display_spi::fillRect(static_cast<uint16_t>(r.button.x + r.button.w - 1), r.button.y, 1, r.button.h, line);
-  const uint16_t barW = static_cast<uint16_t>(r.button.w - 10);
-  for (int i = 0; i < 3; ++i) {
-    const uint16_t y = static_cast<uint16_t>(r.button.y + 5 + i * 5);
-    (void)display_spi::fillRect(static_cast<uint16_t>(r.button.x + 5), y, barW, 2, line);
+  for (uint16_t i = 0; i < static_cast<uint16_t>(sTabs.size()); ++i) {
+    const uint16_t tx = static_cast<uint16_t>(i * tabW);
+    const bool active = (activeLayoutPath == sTabs[i].path);
+    const uint16_t bg = active ? tabActive : tabBg;
+
+    (void)display_spi::fillRect(tx, 0, tabW, static_cast<uint16_t>(kTabBarH - 1), bg);
+
+    // Right divider between tabs
+    if (i + 1 < static_cast<uint16_t>(sTabs.size())) {
+      (void)display_spi::fillRect(static_cast<uint16_t>(tx + tabW - 1), 0,
+                                  1, static_cast<uint16_t>(kTabBarH - 1), divider);
+    }
+
+    // Center label: 5px wide chars + 1px gap = 6px per char; 8px tall at scale=1
+    const char* label = sTabs[i].label.c_str();
+    const int labelLen = static_cast<int>(sTabs[i].label.size());
+    const int textW = labelLen * 6 - 1;  // no trailing gap
+    const int textX = static_cast<int>(tx) + (static_cast<int>(tabW) - textW) / 2;
+    const int textY = (static_cast<int>(kTabBarH) - 8) / 2;
+    drawTinyText(textX, textY, label, textColor, bg, 1);
   }
 }
 
-void drawRuntimeMenuOverlay(const std::string& activeLayoutPath) {
-  const RuntimeMenuRects r = calcRuntimeMenuRects();
-  const uint16_t panelBg = rgb565(10, 16, 28);
-  const uint16_t border = rgb565(160, 185, 214);
-  const uint16_t rowBg = rgb565(22, 34, 54);
-  const uint16_t rowActive = rgb565(58, 92, 122);
-  const uint16_t rowText = rgb565(225, 235, 245);
-
-  (void)display_spi::fillRect(r.panel.x, r.panel.y, r.panel.w, r.panel.h, panelBg);
-  (void)display_spi::fillRect(r.panel.x, r.panel.y, r.panel.w, 1, border);
-  (void)display_spi::fillRect(r.panel.x, static_cast<uint16_t>(r.panel.y + r.panel.h - 1), r.panel.w, 1, border);
-  (void)display_spi::fillRect(r.panel.x, r.panel.y, 1, r.panel.h, border);
-  (void)display_spi::fillRect(static_cast<uint16_t>(r.panel.x + r.panel.w - 1), r.panel.y, 1, r.panel.h, border);
-
-  const bool layoutAActive = activeLayoutPath == kLayoutAPath;
-  const bool layoutBActive = activeLayoutPath == kLayoutBPath;
-  const bool layoutNytActive = activeLayoutPath == kLayoutNytPath;
-  const bool layoutQuakesActive = activeLayoutPath == kLayoutQuakesPath;
-  (void)display_spi::fillRect(r.rowLayoutA.x, r.rowLayoutA.y, r.rowLayoutA.w, r.rowLayoutA.h,
-                              layoutAActive ? rowActive : rowBg);
-  (void)display_spi::fillRect(r.rowLayoutB.x, r.rowLayoutB.y, r.rowLayoutB.w, r.rowLayoutB.h,
-                              layoutBActive ? rowActive : rowBg);
-  (void)display_spi::fillRect(r.rowLayoutNyt.x, r.rowLayoutNyt.y, r.rowLayoutNyt.w, r.rowLayoutNyt.h,
-                              layoutNytActive ? rowActive : rowBg);
-  (void)display_spi::fillRect(r.rowLayoutQuakes.x, r.rowLayoutQuakes.y, r.rowLayoutQuakes.w, r.rowLayoutQuakes.h,
-                              layoutQuakesActive ? rowActive : rowBg);
-  (void)display_spi::fillRect(r.rowConfig.x, r.rowConfig.y, r.rowConfig.w, r.rowConfig.h, rowBg);
-  (void)display_spi::fillRect(r.rowTouchCal.x, r.rowTouchCal.y, r.rowTouchCal.w, r.rowTouchCal.h, rowBg);
-
-  drawTinyText(r.rowLayoutA.x + 4, r.rowLayoutA.y + 5, "Layout A (HA)", rowText,
-               layoutAActive ? rowActive : rowBg, 1);
-  drawTinyText(r.rowLayoutB.x + 4, r.rowLayoutB.y + 5, "Layout B (WX)", rowText,
-               layoutBActive ? rowActive : rowBg, 1);
-  drawTinyText(r.rowLayoutNyt.x + 4, r.rowLayoutNyt.y + 5, "Layout C (NYT)", rowText,
-               layoutNytActive ? rowActive : rowBg, 1);
-  drawTinyText(r.rowLayoutQuakes.x + 4, r.rowLayoutQuakes.y + 5, "Layout D (QK)", rowText,
-               layoutQuakesActive ? rowActive : rowBg, 1);
-  drawTinyText(r.rowConfig.x + 4, r.rowConfig.y + 5, "WiFi / Units", rowText, rowBg, 1);
-  drawTinyText(r.rowTouchCal.x + 4, r.rowTouchCal.y + 5, "Touch Calibrate", rowText, rowBg, 1);
+// Returns tab index if tap hits the tab bar, else -1.
+int hitTestTabBar(uint16_t x, uint16_t y) {
+  if (y >= kTabBarH || sTabs.empty()) {
+    return -1;
+  }
+  const uint16_t w = display_spi::width();
+  const uint16_t tabW = static_cast<uint16_t>(w / static_cast<uint16_t>(sTabs.size()));
+  const int idx = static_cast<int>(x / tabW);
+  return (idx < static_cast<int>(sTabs.size())) ? idx : static_cast<int>(sTabs.size()) - 1;
 }
 
-RuntimeMenuAction hitTestRuntimeMenu(uint16_t x, uint16_t y, bool menuOpen) {
-  const RuntimeMenuRects r = calcRuntimeMenuRects();
-  if (rectContains(r.button, x, y)) {
-    return RuntimeMenuAction::Toggle;
+// Read /littlefs/tabs.json and populate sTabs / sDefaultLayoutPath.
+// Falls back gracefully if the file is missing or malformed.
+void loadTabsConfig() {
+  std::FILE* fp = std::fopen(kTabsConfigPath, "rb");
+  if (fp == nullptr) {
+    ESP_LOGW(kFsTag, "tabs.json not found, using fallback");
+    return;
   }
-  if (!menuOpen) {
-    return RuntimeMenuAction::None;
+  std::fseek(fp, 0, SEEK_END);
+  const long len = std::ftell(fp);
+  std::fseek(fp, 0, SEEK_SET);
+  if (len <= 0 || len > 4096) {
+    std::fclose(fp);
+    ESP_LOGW(kFsTag, "tabs.json size invalid (%ld)", len);
+    return;
   }
-  if (rectContains(r.rowLayoutA, x, y)) {
-    return RuntimeMenuAction::SelectLayoutA;
+  std::string text(static_cast<size_t>(len), '\0');
+  const size_t got = std::fread(text.data(), 1, text.size(), fp);
+  std::fclose(fp);
+  if (got != text.size()) {
+    ESP_LOGW(kFsTag, "tabs.json read short");
+    return;
   }
-  if (rectContains(r.rowLayoutB, x, y)) {
-    return RuntimeMenuAction::SelectLayoutB;
+
+  using namespace dsl_json;
+
+  std::string def;
+  if (objectMemberString(text, "default", def) && !def.empty()) {
+    sDefaultLayoutPath = def;
   }
-  if (rectContains(r.rowLayoutNyt, x, y)) {
-    return RuntimeMenuAction::SelectLayoutNyt;
+
+  std::string_view tabsArr;
+  if (!objectMemberArray(text, "tabs", tabsArr)) {
+    ESP_LOGW(kFsTag, "tabs.json: no 'tabs' array");
+    return;
   }
-  if (rectContains(r.rowLayoutQuakes, x, y)) {
-    return RuntimeMenuAction::SelectLayoutQuakes;
+
+  std::vector<TabDef> loaded;
+  forEachArrayElement(tabsArr, [&](int /*idx*/, std::string_view elem) {
+    std::string label, path;
+    std::string elemStr(elem);
+    if (objectMemberString(elemStr, "label", label) &&
+        objectMemberString(elemStr, "path",  path)  &&
+        !label.empty() && !path.empty()) {
+      loaded.push_back({std::move(label), std::move(path)});
+    }
+  });
+
+  if (loaded.empty()) {
+    ESP_LOGW(kFsTag, "tabs.json: no valid tabs parsed");
+    return;
   }
-  if (rectContains(r.rowConfig, x, y)) {
-    return RuntimeMenuAction::OpenConfig;
+
+  sTabs = std::move(loaded);
+  ESP_LOGI(kFsTag, "tabs.json loaded: %d tabs, default=%s",
+           static_cast<int>(sTabs.size()), sDefaultLayoutPath.c_str());
+}
+
+bool isKnownLayoutPath(const std::string& path) {
+  for (const auto& t : sTabs) {
+    if (t.path == path) { return true; }
   }
-  if (rectContains(r.rowTouchCal, x, y)) {
-    return RuntimeMenuAction::OpenTouchCalibration;
-  }
-  if (rectContains(r.panel, x, y)) {
-    return RuntimeMenuAction::None;
-  }
-  return RuntimeMenuAction::Dismiss;
+  return false;
 }
 
 std::string loadPreferredLayoutPath() {
-  std::string path = platform::prefs::getString(kLayoutPrefsNs, kLayoutPrefsKey, kLayoutAPath);
-  if (path.empty()) {
-    return kLayoutAPath;
-  }
-  if (path != kLayoutAPath && path != kLayoutBPath && path != kLayoutNytPath &&
-      path != kLayoutQuakesPath) {
-    return kLayoutAPath;
+  std::string path = platform::prefs::getString(kLayoutPrefsNs, kLayoutPrefsKey,
+                                                sDefaultLayoutPath.c_str());
+  if (path.empty() || !isKnownLayoutPath(path)) {
+    return sDefaultLayoutPath;
   }
   return path;
 }
 
 void savePreferredLayoutPath(const std::string& path) {
-  if (path != kLayoutAPath && path != kLayoutBPath && path != kLayoutNytPath &&
-      path != kLayoutQuakesPath) {
+  if (!isKnownLayoutPath(path)) {
     return;
   }
   (void)platform::prefs::putString(kLayoutPrefsNs, kLayoutPrefsKey, path.c_str());
@@ -745,10 +704,7 @@ void verifyLittlefsAssets() {
   };
 
   static constexpr RequiredAsset kRequired[] = {
-      {"layout_a", "/littlefs/screen_layout_a.json"},
-      {"layout_b", "/littlefs/screen_layout_b.json"},
-      {"layout_nyt", "/littlefs/screen_layout_nyt.json"},
-      {"layout_quakes", "/littlefs/screen_layout_quakes.json"},
+      {"tabs", "/littlefs/tabs.json"},
       {"dsl_weather_now", "/littlefs/dsl_available/weather_now.json"},
       {"dsl_forecast", "/littlefs/dsl_available/forecast.json"},
       {"dsl_clock_analog_full", "/littlefs/dsl_available/clock_analog_full.json"},
@@ -1000,7 +956,7 @@ void refreshLayout(RuntimeLoopContext* ctx) {
     ctx->activeLayoutPath = kLayoutAPath;
     (void)layout_runtime::begin(kLayoutAPath);
   }
-  sRuntimeMenu.dirty = true;
+  sTabBar.dirty = true;
 }
 
 void switchLayout(RuntimeLoopContext* ctx, const char* path) {
@@ -1047,7 +1003,7 @@ void runtimeLoopTask(void* arg) {
   uint16_t tapX = 0;
   uint16_t tapY = 0;
   uint32_t touchDownMs = 0;
-  constexpr uint32_t kTapMaxMs = 700;
+  constexpr uint32_t kTapMaxMs = 1500;
   for (;;) {
     platform::sleepMs(kRuntimeTickPeriodMs);
     const uint32_t nowMs = platform::millisMs();
@@ -1067,75 +1023,30 @@ void runtimeLoopTask(void* arg) {
                  static_cast<unsigned>(heldMs));
         if (heldMs <= kTapMaxMs) {
           bool handled = false;
-          const RuntimeMenuAction menuAction = hitTestRuntimeMenu(tapX, tapY, sRuntimeMenu.open);
-          if (menuAction != RuntimeMenuAction::None) {
+          const int tabHit = hitTestTabBar(tapX, tapY);
+          if (tabHit >= 0) {
             handled = true;
-            ESP_LOGI(kUiTag, "menu action=%d x=%u y=%u", static_cast<int>(menuAction), tapX, tapY);
-            if (menuAction == RuntimeMenuAction::Toggle) {
-              const bool newOpen = !sRuntimeMenu.open;
-              if (newOpen != sRuntimeMenu.open) {
-                sRuntimeMenu.open = newOpen;
-                sRuntimeMenu.dirty = true;
-                if (!sRuntimeMenu.open) {
-                  refreshLayout(ctx);
-                }
-              }
-            } else if (menuAction == RuntimeMenuAction::Dismiss) {
-              if (sRuntimeMenu.open) {
-                sRuntimeMenu.open = false;
-                sRuntimeMenu.dirty = true;
-                refreshLayout(ctx);
-              }
-            } else if (menuAction == RuntimeMenuAction::SelectLayoutA) {
-              sRuntimeMenu.open = false;
-              sRuntimeMenu.dirty = true;
-              switchLayout(ctx, kLayoutAPath);
-            } else if (menuAction == RuntimeMenuAction::SelectLayoutB) {
-              sRuntimeMenu.open = false;
-              sRuntimeMenu.dirty = true;
-              switchLayout(ctx, kLayoutBPath);
-            } else if (menuAction == RuntimeMenuAction::SelectLayoutNyt) {
-              sRuntimeMenu.open = false;
-              sRuntimeMenu.dirty = true;
-              switchLayout(ctx, kLayoutNytPath);
-            } else if (menuAction == RuntimeMenuAction::SelectLayoutQuakes) {
-              sRuntimeMenu.open = false;
-              sRuntimeMenu.dirty = true;
-              switchLayout(ctx, kLayoutQuakesPath);
-            } else if (menuAction == RuntimeMenuAction::OpenConfig) {
-              sRuntimeMenu.open = false;
-              sRuntimeMenu.dirty = true;
-              openRuntimeConfig(ctx);
-            } else if (menuAction == RuntimeMenuAction::OpenTouchCalibration) {
-              sRuntimeMenu.open = false;
-              sRuntimeMenu.dirty = true;
-              openRuntimeTouchCalibration(ctx);
-            }
+            ESP_LOGI(kUiTag, "tab tap idx=%d x=%u y=%u", tabHit, tapX, tapY);
+            switchLayout(ctx, sTabs[static_cast<size_t>(tabHit)].path);
           } else {
             handled = layout_runtime::onTap(tapX, tapY);
             if (handled) {
-              // DSL tap handlers can redraw widgets; repaint the menu button
-              // once so it stays visually on top.
-              sRuntimeMenu.dirty = true;
+              // DSL tap handlers can redraw widgets; repaint the tab bar.
+              sTabBar.dirty = true;
             }
           }
-          ESP_LOGI(kTouchTag, "runtime tap dispatch x=%u y=%u handled=%d menu_open=%d", tapX, tapY,
-                   handled ? 1 : 0, sRuntimeMenu.open ? 1 : 0);
+          ESP_LOGI(kTouchTag, "runtime tap dispatch x=%u y=%u handled=%d", tapX, tapY,
+                   handled ? 1 : 0);
         }
         touchDown = false;
       }
     }
-    if (!sRuntimeMenu.open) {
-      if (layout_runtime::tick(nowMs)) {
-        sRuntimeMenu.dirty = true;
-      }
+    if (layout_runtime::tick(nowMs)) {
+      sTabBar.dirty = true;
     }
-    if (sRuntimeMenu.dirty) {
-      drawRuntimeMenuButton(sRuntimeMenu.open);
-      if (sRuntimeMenu.open) {
-        drawRuntimeMenuOverlay(ctx->activeLayoutPath);
-      }
-      sRuntimeMenu.dirty = false;
+    if (sTabBar.dirty) {
+      drawTabBar(ctx->activeLayoutPath);
+      sTabBar.dirty = false;
     }
     if (nowMs - lastTickMs >= kBaselineLoopPeriodMs) {
       lastTickMs = nowMs;
@@ -1303,14 +1214,15 @@ void bootTask(void* arg) {
                              geo.utcOffsetMinutes, geo.hasUtcOffset);
   boot::mark(baselineState, "geo_time_ready", kBaselineEnabled);
 
+  loadTabsConfig();
   std::string activeLayoutPath = loadPreferredLayoutPath();
   ESP_LOGI(kBootTag, "idf scaffold ready");
   boot::mark(baselineState, "display_ready", kBaselineEnabled);
   bool runtimeReady = layout_runtime::begin(activeLayoutPath.c_str());
-  if (!runtimeReady && activeLayoutPath != kLayoutAPath) {
+  if (!runtimeReady && activeLayoutPath != sDefaultLayoutPath) {
     ESP_LOGW(kUiTag, "preferred layout failed path=%s fallback=%s", activeLayoutPath.c_str(),
-             kLayoutAPath);
-    activeLayoutPath = kLayoutAPath;
+             sDefaultLayoutPath.c_str());
+    activeLayoutPath = sDefaultLayoutPath;
     runtimeReady = layout_runtime::begin(activeLayoutPath.c_str());
   }
   ESP_LOGI(kBootTag, "layout runtime=%d", runtimeReady ? 1 : 0);
