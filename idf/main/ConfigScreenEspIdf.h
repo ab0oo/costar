@@ -6,29 +6,28 @@ namespace config_screen {
 
 enum class Action : uint8_t {
   None = 0,
-  RetryWifi,
-  OfflineMode,
-  OpenWifiList,
   ToggleClock,
   ToggleTemp,
   ToggleDistance,
 };
 
 struct ViewState {
-  bool hasStoredCreds = false;
   bool wifiConnected = false;
-  bool showWifiButtons = false;
   bool use24HourClock = false;
   bool useFahrenheit = true;
   bool useMiles = true;
 };
 
+// Draw the locale config screen (time/temp/distance toggles + wifi status line).
 void show(const ViewState& state);
-void showWifiScanInterstitial();
+
+// Draw a full-screen status message used during boot (connecting, failed, etc.).
 void showWifiStatus(const char* title, const char* subtitle, bool isError);
+
+// Hit-test a touch point against the locale toggle buttons.
 Action hitTest(uint16_t x, uint16_t y);
-void showWifiList(const char* const* labels, uint16_t count);
-int hitTestWifiListRow(uint16_t x, uint16_t y, uint16_t count);
+
+// Draw a small yellow touch-marker dot (used during calibration / debug).
 void markTouch(uint16_t x, uint16_t y);
 
 }  // namespace config_screen

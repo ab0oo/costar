@@ -5,6 +5,10 @@
 #include "DslJson.h"
 #include "DslTime.h"
 #include "Font5x7Classic.h"
+#include "GfxFontDefs.h"
+#include "FontFreeMono9pt7b.h"
+#include "FontFreeMono12pt7b.h"
+#include "FontFreeMono18pt7b.h"
 #include "HttpTransportGate.h"
 #include "RuntimeSettings.h"
 #include "core/TimeSync.h"
@@ -5574,6 +5578,79 @@ int textWidthPx(const std::string& text, int scale) {
   return static_cast<int>(text.size()) * 6 * std::max(scale, 1);
 }
 
+// ---------------------------------------------------------------------------
+// GFX proportional font renderer
+// font index 5 = FreeMono 9pt  (yAdvance=18, ascent=11)
+// font index 6 = FreeMono 12pt (yAdvance=24, ascent=15)
+// font index 7 = FreeMono 18pt (yAdvance=35, ascent=22)
+// ---------------------------------------------------------------------------
+
+struct GfxFontSlot { const GFXfont* font; int ascent; };
+
+static const GfxFontSlot kGfxFonts[] = {
+  { nullptr,          0 },   // 0 – unused
+  { nullptr,          0 },   // 1 – 5x7 bitmap (handled elsewhere)
+  { nullptr,          0 },   // 2
+  { nullptr,          0 },   // 3
+  { nullptr,          0 },   // 4
+  { &FreeMono9pt7b,  11 },   // 5
+  { &FreeMono12pt7b, 15 },   // 6
+  { &FreeMono18pt7b, 22 },   // 7
+};
+static constexpr int kGfxFontCount = static_cast<int>(sizeof(kGfxFonts) / sizeof(kGfxFonts[0]));
+
+static const GfxFontSlot* gfxFontForIndex(int fontIndex) {
+  if (fontIndex < 5 || fontIndex >= kGfxFontCount) return nullptr;
+  return kGfxFonts[fontIndex].font ? &kGfxFonts[fontIndex] : nullptr;
+}
+
+static int textWidthGFX(const std::string& text, const GFXfont* font) {
+  int w = 0;
+  for (char ch : text) {
+    const uint8_t c = static_cast<uint8_t>(ch);
+    const uint8_t idx = (c >= font->first && c <= font->last) ? (c - font->first) : 0;
+    w += font->glyph[idx].xAdvance;
+  }
+  return w;
+}
+
+static void drawGlyphGFX(int curX, int baseline, uint8_t c, uint16_t fg,
+                          const GFXfont* font) {
+  if (c < font->first || c > font->last) return;
+  const GFXglyph& g = font->glyph[c - font->first];
+  if (g.width == 0 || g.height == 0) return;
+  uint16_t bo = g.bitmapOffset;
+  uint8_t bits = 0, bit = 0;
+  for (int row = 0; row < static_cast<int>(g.height); ++row) {
+    for (int col = 0; col < static_cast<int>(g.width); ++col) {
+      if (bit == 0) { bits = font->bitmap[bo++]; bit = 8; }
+      if (bits & 0x80U) {
+        drawPixel(curX + static_cast<int>(g.xOffset) + col,
+                  baseline + static_cast<int>(g.yOffset) + row, fg);
+      }
+      bits <<= 1U;
+      --bit;
+    }
+  }
+}
+
+static void drawTextGFX(int x, int y, const std::string& text,
+                         uint16_t fg, uint16_t bg,
+                         const GFXfont* font, int ascent) {
+  // y is the top of the cell (consistent with 5x7 convention).
+  // Background is filled first for the full text width.
+  const int totalW = textWidthGFX(text, font);
+  drawSolidRect(x, y, totalW, font->yAdvance, bg);
+  const int baseline = y + ascent;
+  int curX = x;
+  for (char ch : text) {
+    const uint8_t c = static_cast<uint8_t>(ch);
+    const uint8_t idx = (c >= font->first && c <= font->last) ? (c - font->first) : 0;
+    drawGlyphGFX(curX, baseline, c, fg, font);
+    curX += font->glyph[idx].xAdvance;
+  }
+}
+
 std::string ellipsizeToWidth(const std::string& text, int scale, int maxWidthPx) {
   if (maxWidthPx <= 0 || textWidthPx(text, scale) <= maxWidthPx) {
     return text;
@@ -6408,7 +6485,7 @@ void renderNodes() {
     const int localY = resolveNodeCoord(node.yExpr, node.y);
     const int x = static_cast<int>(s.x) + localX;
     const int y = static_cast<int>(s.y) + localY;
-    const int scale = std::max(1, std::min(3, node.font <= 1 ? 1 : (node.font >= 4 ? 2 : 1)));
+    const int scale = std::max(1, std::min(4, node.font));
 
     if (node.type == NodeType::kLabel) {
       std::string text = bindRuntimeTemplate(node.text);
@@ -6429,18 +6506,26 @@ void renderNodes() {
         }
       }
       if (!node.wrap || node.w <= 0) {
-        const int textW = textWidthPx(text, scale);
-        const int textH = 8 * scale;
-        const int textX = datumTextX(x, textW, node.datum);
-        const int textY = datumTextY(y, textH, scale, node.datum);
-        drawText(textX, textY, text, node.color565, kBg, scale);
+        if (const GfxFontSlot* gfx = gfxFontForIndex(node.font)) {
+          const int textW = textWidthGFX(text, gfx->font);
+          const int textH = gfx->font->yAdvance;
+          const int textX = datumTextX(x, textW, node.datum);
+          const int textY = datumTextY(y, textH, scale, node.datum);
+          drawTextGFX(textX, textY, text, node.color565, kBg, gfx->font, gfx->ascent);
+        } else {
+          const int textW = textWidthPx(text, scale);
+          const int textH = 8 * scale;
+          const int textX = datumTextX(x, textW, node.datum);
+          const int textY = datumTextY(y, textH, scale, node.datum);
+          drawText(textX, textY, text, node.color565, kBg, scale);
+        }
         continue;
       }
 
-      int lineHeight = node.lineHeight > 0 ? node.lineHeight : (8 * scale);
-      if (lineHeight <= 0) {
-        lineHeight = 8;
-      }
+      const GfxFontSlot* gfxWrap = gfxFontForIndex(node.font);
+      int lineHeight = node.lineHeight > 0 ? node.lineHeight
+                     : (gfxWrap ? gfxWrap->font->yAdvance : (8 * scale));
+      if (lineHeight <= 0) lineHeight = 8;
       int maxLines = node.maxLines > 0 ? node.maxLines : 0;
       if (node.h > 0) {
         const int byHeight = node.h / lineHeight;
@@ -6468,12 +6553,17 @@ void renderNodes() {
       }
       const TextDatum lineDatum = topLineDatum(node.datum);
       for (size_t i = 0; i < lines.size(); ++i) {
-        if (lines[i].empty()) {
-          continue;
+        if (lines[i].empty()) continue;
+        const int lineY = startY + static_cast<int>(i) * lineHeight;
+        if (gfxWrap) {
+          const int lineW = textWidthGFX(lines[i], gfxWrap->font);
+          const int lineX = datumTextX(x, lineW, lineDatum);
+          drawTextGFX(lineX, lineY, lines[i], node.color565, kBg, gfxWrap->font, gfxWrap->ascent);
+        } else {
+          const int lineW = textWidthPx(lines[i], scale);
+          const int lineX = datumTextX(x, lineW, lineDatum);
+          drawText(lineX, lineY, lines[i], node.color565, kBg, scale);
         }
-        const int lineW = textWidthPx(lines[i], scale);
-        const int lineX = datumTextX(x, lineW, lineDatum);
-        drawText(lineX, startY + static_cast<int>(i) * lineHeight, lines[i], node.color565, kBg, scale);
       }
       continue;
     }
@@ -6769,7 +6859,7 @@ void renderActiveModal() {
   drawSolidRect(mx, my, 1, mh, modal->border565);
   drawSolidRect(mx + mw - 1, my, 1, mh, modal->border565);
 
-  const int scale = std::max(1, std::min(3, modal->font <= 1 ? 1 : (modal->font >= 4 ? 2 : 1)));
+  const int scale = std::max(1, std::min(4, modal->font));
   const std::string title = bindRuntimeTemplate(modal->title);
   const std::string body = bindRuntimeTemplate(modal->text);
   drawWrappedTextBlock(mx + 6, my + 6, mw - 12, 28, title, scale, modal->lineHeight > 0 ? modal->lineHeight : 9,

@@ -13,8 +13,6 @@ idf_component_register(
     "TouchCalibration.cpp"
     "ConfigScreenEspIdf.cpp"
     "TouchInputEspIdf.cpp"
-    "TextEntryEspIdf.cpp"
-    "LvglPasswordPrompt.cpp"
     "PlatformEspIdf.cpp"
     "PrefsEspIdf.cpp"
     "BootCommon.cpp"

@@ -42,3 +42,4 @@ CMakeCache.txt
 *.changes
 vendor/
 node_modules/
+data/wifi.json

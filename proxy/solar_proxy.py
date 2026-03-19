@@ -1,24 +1,33 @@
 #!/usr/bin/env python3
 """
-solar_proxy.py — CoStar space-weather proxy
+solar_proxy.py - CoStar space-weather proxy
 
-Fetches solar and geomagnetic data from US government sources (NOAA SWPC),
-calculates HF band conditions from SFI + Kp using published propagation physics,
-and serves a flat JSON object over plain HTTP so the ESP32 can poll without TLS.
+Fetches solar and geomagnetic data exclusively from US government / scientific
+sources (NOAA SWPC), calculates HF band conditions and the aurora activity index
+from first-principles data, and serves a flat JSON object over plain HTTP so the
+ESP32 can poll without TLS.
 
 Data sources (all public-domain US government data, no API keys required):
-  - https://services.swpc.noaa.gov/products/summary/10cm-flux.json   (SFI)
-  - https://services.swpc.noaa.gov/json/planetary_k_index_1m.json    (Kp, live)
-  - https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json  (Ap running)
-  - https://services.swpc.noaa.gov/json/goes/primary/xray-flares-latest.json  (X-ray class)
-  - https://services.swpc.noaa.gov/products/summary/solar-wind-speed.json   (solar wind)
+  - https://services.swpc.noaa.gov/products/summary/10cm-flux.json         (SFI)
+  - https://services.swpc.noaa.gov/json/planetary_k_index_1m.json          (Kp live)
+  - https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json    (Ap running)
+  - https://services.swpc.noaa.gov/json/goes/primary/xray-flares-latest.json (X-ray class)
+  - https://services.swpc.noaa.gov/products/summary/solar-wind-speed.json  (solar wind)
   - https://services.swpc.noaa.gov/products/summary/solar-wind-mag-field.json (Bz/Bt)
-  - https://services.swpc.noaa.gov/products/noaa-scales.json          (R/S/G storm scale)
-  - https://services.swpc.noaa.gov/json/solar_regions.json            (sunspot count)
+  - https://services.swpc.noaa.gov/products/noaa-scales.json               (R/S/G scales)
+  - https://services.swpc.noaa.gov/json/solar_regions.json                 (sunspots)
+  - https://services.swpc.noaa.gov/json/goes/primary/euvs-6-hour.json      (EUV 304 A)
+  - https://services.swpc.noaa.gov/json/goes/primary/integral-protons-1-day.json  (p+ flux)
+  - https://services.swpc.noaa.gov/json/goes/primary/integral-electrons-1-day.json (e- flux)
+  - https://services.swpc.noaa.gov/text/aurora-nowcast-hemi-power.txt      (hemispheric power)
 
-HF band conditions (Good/Fair/Poor) are calculated from SFI + Kp using the
-threshold table published by N0NBH at hamqsl.com/solar2.html plus standard
+HF band conditions (Good/Fair/Poor) are calculated from SFI + Kp using standard
 ionospheric physics (D-layer day/night, F2-layer SFI sensitivity per band).
+
+Aurora activity index is calculated from NOAA hemispheric power (HP) using the
+same linear mapping described by N0NBH: HP 0-150 GW -> index 0-10, where each
+unit represents ~15 GW of combined auroral energy dissipation.  Index >10 is
+reported as-is (e.g. 11, 12) rather than clamped.
 
 Endpoints:
   GET /solar    -> JSON payload (see schema in fetch_all())
@@ -192,6 +201,158 @@ def _sum_sunspots(regions: list) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Particle flux, EUV, and aurora — all from NOAA SWPC
+# ---------------------------------------------------------------------------
+
+def _fmt_flux(val) -> str:
+    """
+    Format a particle flux for display on a small screen.
+    Values < 1000 show as decimals (e.g. "0.18", "123.4");
+    larger values use compact scientific notation (e.g. "1.2e4").
+    """
+    if val is None:
+        return "N/A"
+    try:
+        f = float(val)
+        if f == 0:
+            return "0"
+        if abs(f) < 1000:
+            # Show up to 2 sig figs as a decimal
+            if abs(f) < 1:
+                return f"{f:.2f}"
+            if abs(f) < 10:
+                return f"{f:.1f}"
+            return f"{f:.0f}"
+        exp = int(f"{f:.1e}".split("e")[1])
+        mant = f / (10 ** exp)
+        return f"{mant:.1f}e{exp}"
+    except (ValueError, TypeError):
+        return str(val)
+
+
+def _fetch_euv_304a() -> float:
+    """
+    Return the most recent GOES-R EUVS 304 A irradiance in mW/m^2
+    (AU-distance-corrected, eclipse/contamination entries skipped).
+    Source: https://services.swpc.noaa.gov/json/goes/primary/euvs-6-hour.json
+    """
+    data = _get_json("https://services.swpc.noaa.gov/json/goes/primary/euvs-6-hour.json")
+    for rec in reversed(data):
+        if rec.get("line") != "304":
+            continue
+        flags = rec.get("flags") or {}
+        if flags.get("eclipse") or flags.get("lunar_transit"):
+            continue
+        val = _num(rec.get("value"))
+        au  = _num(rec.get("au_factor"), 1.0)
+        if val is None:
+            continue
+        # Convert W/m^2 -> mW/m^2, apply AU correction, round to 3 decimal places
+        return round(float(val) * float(au) * 1000.0, 3)
+    return None
+
+
+def _fetch_proton_flux() -> float:
+    """
+    Return the most recent GOES integral proton flux for >=10 MeV in pfu.
+    Source: https://services.swpc.noaa.gov/json/goes/primary/integral-protons-1-day.json
+    """
+    data = _get_json(
+        "https://services.swpc.noaa.gov/json/goes/primary/integral-protons-1-day.json"
+    )
+    for rec in reversed(data):
+        if rec.get("energy") == ">=10 MeV":
+            val = _num(rec.get("flux"))
+            if val is not None:
+                return val
+    return None
+
+
+def _fetch_electron_flux() -> str:
+    """
+    Return the most recent GOES integral electron flux for >=2 MeV,
+    pre-formatted as a compact string (e.g. "1.9e3") for display.
+    Source: https://services.swpc.noaa.gov/json/goes/primary/integral-electrons-1-day.json
+    """
+    data = _get_json(
+        "https://services.swpc.noaa.gov/json/goes/primary/integral-electrons-1-day.json"
+    )
+    # All entries in this feed are >=2 MeV; grab the last non-null value
+    for rec in reversed(data):
+        val = _num(rec.get("flux"))
+        if val is not None:
+            return _fmt_flux(val)
+    return None
+
+
+def _fetch_hemi_power() -> tuple:
+    """
+    Parse the NOAA aurora hemispheric-power nowcast text product.
+    Returns (north_gw, south_gw) floats for the most recent observation,
+    or (None, None) on failure.
+    Source: https://services.swpc.noaa.gov/text/aurora-nowcast-hemi-power.txt
+    Columns: obs_time  forecast_time  north_GW  south_GW
+    """
+    text = _get_text("https://services.swpc.noaa.gov/text/aurora-nowcast-hemi-power.txt")
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) >= 4:
+            north = _num(parts[2])
+            south = _num(parts[3])
+            if north is not None and south is not None:
+                return float(north), float(south)
+    return None, None
+
+
+def _fetch_flare_probs() -> dict:
+    """
+    Return 24-hour M-class and X-class flare probabilities (0-100 %) from the
+    NOAA SWPC solar probabilities product.
+    Source: https://services.swpc.noaa.gov/json/solar_probabilities.json
+    """
+    data = _get_json("https://services.swpc.noaa.gov/json/solar_probabilities.json")
+    latest = data[-1] if data else {}
+    return {
+        "m_class": _num(latest.get("m_class_1_day")),
+        "x_class": _num(latest.get("x_class_1_day")),
+    }
+
+
+def _fetch_dst() -> int:
+    """
+    Return the most recent Kyoto Dst index in nT.
+    Negative values indicate geomagnetic storm activity.
+    Source: https://services.swpc.noaa.gov/products/kyoto-dst.json
+    Response: array of [timestamp_str, dst_str] rows (no header row).
+    """
+    data = _get_json("https://services.swpc.noaa.gov/products/kyoto-dst.json")
+    for row in reversed(data):
+        if len(row) >= 2:
+            val = _num(row[1])
+            if val is not None:
+                return int(val)
+    return None
+
+
+def _aurora_index(north_gw: float, south_gw: float) -> int:
+    """
+    Compute the aurora activity index (0-10+) from combined hemispheric power.
+
+    Replicates the mapping described by N0NBH (hamqsl.com/solar2.html):
+      "Data is now calculated from the current hemispheric power value (0-150 GW)
+       to give the old reported scaled factor value from 0 to 10++."
+
+    Linear mapping: total HP / 15 GW per index unit.
+    No ceiling - values above 10 are valid (extreme storm conditions).
+    """
+    total = north_gw + south_gw
+    return max(0, round(total / 15.0))
+
+
+# ---------------------------------------------------------------------------
 # Main fetch
 # ---------------------------------------------------------------------------
 
@@ -285,6 +446,53 @@ def fetch_all() -> dict:
         except Exception as e:
             errors.append(f"hf_calc: {e}")
 
+    # --- EUV 304 Å (GOES-R EUVS) ---
+    euv_304a = None
+    try:
+        euv_304a = _fetch_euv_304a()
+    except Exception as e:
+        errors.append(f"euv_304a: {e}")
+
+    # --- Proton flux >=10 MeV (GOES integral protons) ---
+    proton_flux = None
+    try:
+        proton_flux = _fetch_proton_flux()
+    except Exception as e:
+        errors.append(f"proton_flux: {e}")
+
+    # --- Electron flux >=2 MeV (GOES integral electrons) ---
+    electron_flux = None
+    try:
+        electron_flux = _fetch_electron_flux()
+    except Exception as e:
+        errors.append(f"electron_flux: {e}")
+
+    # --- Hemispheric power -> aurora activity index ---
+    aurora_idx = None
+    try:
+        north_gw, south_gw = _fetch_hemi_power()
+        if north_gw is not None and south_gw is not None:
+            aurora_idx = _aurora_index(north_gw, south_gw)
+    except Exception as e:
+        errors.append(f"aurora: {e}")
+
+    # --- Solar flare probabilities (24h M-class and X-class) ---
+    flare_prob_m = None
+    flare_prob_x = None
+    try:
+        probs = _fetch_flare_probs()
+        flare_prob_m = probs.get("m_class")
+        flare_prob_x = probs.get("x_class")
+    except Exception as e:
+        errors.append(f"flare_probs: {e}")
+
+    # --- Kyoto Dst index ---
+    dst = None
+    try:
+        dst = _fetch_dst()
+    except Exception as e:
+        errors.append(f"dst: {e}")
+
     # --- Assemble result ---
     result = {
         "sfi":           sfi,
@@ -298,6 +506,13 @@ def fetch_all() -> dict:
         "geomag_scale":  geomag_scale,   # e.g. "G0 none" or "G1 minor"
         "radio_scale":   radio_scale,    # e.g. "R0 none" or "R1 minor"
         "hf_conditions": hf_conditions,
+        "euv_304a":      euv_304a,        # GOES-R EUVS 304 A, AU-corrected mW/m^2
+        "proton_flux":   proton_flux,    # GOES integral p+ >=10 MeV, pfu
+        "electron_flux": electron_flux,  # GOES integral e- >=2 MeV, formatted string
+        "aurora_idx":    aurora_idx,     # HP-based aurora index (0-150 GW -> 0-10+)
+        "flare_prob_m":  flare_prob_m,   # 24h M-class flare probability, %
+        "flare_prob_x":  flare_prob_x,   # 24h X-class flare probability, %
+        "dst":           dst,            # Kyoto Dst index, nT (negative = storm)
         "fetched_utc":   datetime.now(timezone.utc).strftime("%d %b %Y %H%M UTC"),
         "_errors":       errors if errors else None,
     }
@@ -322,9 +537,16 @@ def _refresh_loop():
                 _last_json  = payload
                 _last_fetch = time.time()
                 _last_error = "; ".join(data.get("_errors") or [])
-            log.info("refreshed: sfi=%s kp=%s xray=%s sw=%s bz=%s",
-                     data.get("sfi"), data.get("k_index"),
-                     data.get("xray"), data.get("solar_wind"), data.get("bz"))
+            log.info(
+                "refreshed: sfi=%s kp=%s xray=%s sw=%s bz=%s bt=%s dst=%s "
+                "304a=%s p+=%s e-=%s aurora=%s fM=%s%% fX=%s%%",
+                data.get("sfi"), data.get("k_index"),
+                data.get("xray"), data.get("solar_wind"),
+                data.get("bz"), data.get("bt"), data.get("dst"),
+                data.get("euv_304a"), data.get("proton_flux"),
+                data.get("electron_flux"), data.get("aurora_idx"),
+                data.get("flare_prob_m"), data.get("flare_prob_x"),
+            )
         except Exception as exc:
             msg = str(exc)
             with _lock:

@@ -2,90 +2,106 @@
   "version": 1,
   "notes": {
     "source": "NOAA SWPC government data via solar_proxy.py (plain HTTP, no TLS)",
-    "proxy": "http://vps.gorkos.net:8086/solar"
+    "layout": "HamClock-inspired: solar indices left, HF band conditions right"
   },
   "data": {
     "source": "http",
     "url": "http://{{setting.proxy_host}}:{{setting.proxy_port}}/solar",
     "poll_ms": 900000,
     "fields": {
-      "sfi":         "sfi",
-      "k_index":     "k_index",
-      "a_index":     "a_index",
-      "xray":        "xray",
-      "sunspots":    "sunspots",
-      "solar_wind":  "solar_wind",
-      "geomag":      "geomag_scale",
-      "updated":     "fetched_utc",
-      "hf_80_day":   "hf_conditions.80m-40m.day",
-      "hf_80_night": "hf_conditions.80m-40m.night",
-      "hf_20_day":   "hf_conditions.30m-20m.day",
-      "hf_20_night": "hf_conditions.30m-20m.night",
-      "hf_15_day":   "hf_conditions.17m-15m.day",
-      "hf_15_night": "hf_conditions.17m-15m.night",
-      "hf_10_day":   "hf_conditions.12m-10m.day",
-      "hf_10_night": "hf_conditions.12m-10m.night"
+      "sfi":          "sfi",
+      "k_index":      "k_index",
+      "a_index":      "a_index",
+      "xray":         "xray",
+      "sunspots":     "sunspots",
+      "solar_wind":   "solar_wind",
+      "geomag":       "geomag_scale",
+      "updated":      "fetched_utc",
+      "hf_80_day":    "hf_conditions.80m-40m.day",
+      "hf_80_night":  "hf_conditions.80m-40m.night",
+      "hf_20_day":    "hf_conditions.30m-20m.day",
+      "hf_20_night":  "hf_conditions.30m-20m.night",
+      "hf_15_day":    "hf_conditions.17m-15m.day",
+      "hf_15_night":  "hf_conditions.17m-15m.night",
+      "hf_10_day":    "hf_conditions.12m-10m.day",
+      "hf_10_night":  "hf_conditions.12m-10m.night",
+      "euv_304a":     "euv_304a",
+      "proton_flux":  "proton_flux",
+      "elec_flux":    "electron_flux",
+      "aurora_idx":   "aurora_idx",
+      "bz":           "bz",
+      "bt":           "bt",
+      "dst":          "dst",
+      "flare_prob_m": "flare_prob_m",
+      "flare_prob_x": "flare_prob_x"
     }
   },
   "ui": {
     "title": "Solar / HF",
     "nodes": [
-      {
-        "type": "label",
-        "x": 4, "y": 2,
-        "font": 1,
-        "color": "#90CAF9",
-        "text": "SFI:{{sfi}}  K:{{k_index}}  A:{{a_index}}  SN:{{sunspots}}"
-      },
-      {
-        "type": "label",
-        "x": 4, "y": 14,
-        "font": 1,
-        "color": "#80CBC4",
-        "text": "Xray:{{xray}}  SW:{{solar_wind}}km/s  {{geomag}}"
-      },
-      {
-        "type": "label",
-        "x": 4, "y": 30,
-        "font": 1,
-        "color": "#B0BEC5",
-        "text": "        DAY   NIGHT"
-      },
-      {
-        "type": "label",
-        "x": 4, "y": 42,
-        "font": 1,
-        "color": "#CFD8DC",
-        "text": "80/40m  {{hf_80_day}}  {{hf_80_night}}"
-      },
-      {
-        "type": "label",
-        "x": 4, "y": 54,
-        "font": 1,
-        "color": "#CFD8DC",
-        "text": "30/20m  {{hf_20_day}}  {{hf_20_night}}"
-      },
-      {
-        "type": "label",
-        "x": 4, "y": 66,
-        "font": 1,
-        "color": "#CFD8DC",
-        "text": "17/15m  {{hf_15_day}}  {{hf_15_night}}"
-      },
-      {
-        "type": "label",
-        "x": 4, "y": 78,
-        "font": 1,
-        "color": "#CFD8DC",
-        "text": "12/10m  {{hf_10_day}}  {{hf_10_night}}"
-      },
-      {
-        "type": "label",
-        "x": 4, "y": 94,
-        "font": 1,
-        "color": "#546E7A",
-        "text": "{{updated}}"
-      }
+      { "type": "label",    "x": 2,   "y": 1,  "font": 2, "color": "#90CAF9", "text": "SOLAR" },
+      { "type": "label",    "x": 156, "y": 1,  "font": 2, "color": "#80CBC4", "text": "HF CONDS" },
+      { "type": "line",     "x": 0,   "y": 17, "x2": 320, "y2": 0, "color": "#1E2D3D" },
+      { "type": "line",     "x": 153, "y": 0,  "x2": 0,   "y2": 220, "color": "#1E2D3D" },
+
+      { "type": "label", "x": 2,  "y": 20, "font": 1, "color": "#78909C", "text": "SFI" },
+      { "type": "label", "x": 60, "y": 20, "font": 1, "color": "#ECEFF1", "text": "{{sfi}}" },
+
+      { "type": "label", "x": 2,  "y": 31, "font": 1, "color": "#78909C", "text": "K-Idx" },
+      { "type": "label", "x": 60, "y": 31, "font": 1, "color": "#ECEFF1", "text": "{{k_index}}" },
+
+      { "type": "label", "x": 2,  "y": 42, "font": 1, "color": "#78909C", "text": "A-Idx" },
+      { "type": "label", "x": 60, "y": 42, "font": 1, "color": "#ECEFF1", "text": "{{a_index}}" },
+
+      { "type": "label", "x": 2,  "y": 53, "font": 1, "color": "#78909C", "text": "X-ray" },
+      { "type": "label", "x": 60, "y": 53, "font": 1, "color": "#ECEFF1", "text": "{{xray}}" },
+
+      { "type": "label", "x": 2,  "y": 64, "font": 1, "color": "#78909C", "text": "Sunspots" },
+      { "type": "label", "x": 60, "y": 64, "font": 1, "color": "#ECEFF1", "text": "{{sunspots}}" },
+
+      { "type": "label", "x": 2,  "y": 75, "font": 1, "color": "#78909C", "text": "EUV-304" },
+      { "type": "label", "x": 60, "y": 75, "font": 1, "color": "#FFCC80", "text": "{{euv_304a}}" },
+
+      { "type": "label", "x": 2,  "y": 86, "font": 1, "color": "#78909C", "text": "Sol Wind" },
+      { "type": "label", "x": 60, "y": 86, "font": 1, "color": "#80DEEA", "text": "{{solar_wind}} km/s" },
+
+      { "type": "label", "x": 2,  "y": 97, "font": 1, "color": "#78909C", "text": "Bz / Bt" },
+      { "type": "label", "x": 60, "y": 97, "font": 1, "color": "#CE93D8", "text": "{{bz}} / {{bt}} nT" },
+
+      { "type": "line",     "x": 0, "y": 109, "x2": 152, "y2": 0, "color": "#1E2D3D" },
+      { "type": "label",    "x": 2, "y": 113, "font": 1,  "color": "#78909C", "text": "K-Index (0-9)" },
+      { "type": "progress", "x": 2, "y": 123, "w": 148, "h": 8, "key": "k_index",   "min": 0, "max": 9,  "color": "#EF5350", "bg": "#1A2535" },
+
+      { "type": "label",    "x": 2, "y": 137, "font": 1,  "color": "#78909C", "text": "Aurora (0-10)" },
+      { "type": "progress", "x": 2, "y": 147, "w": 148, "h": 8, "key": "aurora_idx","min": 0, "max": 10, "color": "#80DEEA", "bg": "#1A2535" },
+
+      { "type": "label", "x": 156, "y": 20, "font": 1, "color": "#546E7A", "text": "BAND   DAY   NIGHT" },
+
+      { "type": "label", "x": 156, "y": 31, "font": 1, "color": "#B0BEC5", "text": "80/40m" },
+      { "type": "label", "x": 198, "y": 31, "font": 1, "color": "#FDD835", "text": "{{hf_80_day}}" },
+      { "type": "label", "x": 234, "y": 31, "font": 1, "color": "#4DD0E1", "text": "{{hf_80_night}}" },
+
+      { "type": "label", "x": 156, "y": 42, "font": 1, "color": "#B0BEC5", "text": "30/20m" },
+      { "type": "label", "x": 198, "y": 42, "font": 1, "color": "#FDD835", "text": "{{hf_20_day}}" },
+      { "type": "label", "x": 234, "y": 42, "font": 1, "color": "#4DD0E1", "text": "{{hf_20_night}}" },
+
+      { "type": "label", "x": 156, "y": 53, "font": 1, "color": "#B0BEC5", "text": "17/15m" },
+      { "type": "label", "x": 198, "y": 53, "font": 1, "color": "#FDD835", "text": "{{hf_15_day}}" },
+      { "type": "label", "x": 234, "y": 53, "font": 1, "color": "#4DD0E1", "text": "{{hf_15_night}}" },
+
+      { "type": "label", "x": 156, "y": 64, "font": 1, "color": "#B0BEC5", "text": "12/10m" },
+      { "type": "label", "x": 198, "y": 64, "font": 1, "color": "#FDD835", "text": "{{hf_10_day}}" },
+      { "type": "label", "x": 234, "y": 64, "font": 1, "color": "#4DD0E1", "text": "{{hf_10_night}}" },
+
+      { "type": "line",  "x": 153, "y": 74, "x2": 167, "y2": 0, "color": "#1E2D3D" },
+
+      { "type": "label", "x": 156, "y": 78,  "font": 1, "color": "#FFAB91", "text": "Flare M:{{flare_prob_m}}%  X:{{flare_prob_x}}%" },
+      { "type": "label", "x": 156, "y": 89,  "font": 1, "color": "#CE93D8", "text": "Aurora:{{aurora_idx}}  Dst:{{dst}}nT" },
+      { "type": "label", "x": 156, "y": 100, "font": 1, "color": "#ECEFF1", "text": "Geomag:{{geomag}}" },
+      { "type": "label", "x": 156, "y": 111, "font": 1, "color": "#80CBC4", "text": "p+:{{proton_flux}}pfu  e-:{{elec_flux}}" },
+
+      { "type": "line",  "x": 0, "y": 174, "x2": 320, "y2": 0, "color": "#1E2D3D" },
+      { "type": "label", "x": 2, "y": 178, "font": 1, "color": "#37474F", "text": "{{updated}}" }
     ]
   }
 }

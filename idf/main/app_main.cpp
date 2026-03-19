@@ -7,8 +7,6 @@
 #include "LayoutRuntimeEspIdf.h"
 #include "TouchCalibration.h"
 #include "TouchInputEspIdf.h"
-#include "TextEntryEspIdf.h"
-#include "LvglPasswordPrompt.h"
 #include "Font5x7Classic.h"
 #include "core/BootCommon.h"
 #include "core/TimeSync.h"
@@ -180,66 +178,76 @@ bool ensureWifiStackReady() {
   return true;
 }
 
-void applySavedStaConfig() {
-  // Reuse saved credentials when Wi-Fi driver NVS config is missing.
-  const std::string savedSsid = platform::prefs::getString("wifi", "ssid", "");
-  const std::string savedPass = platform::prefs::getString("wifi", "password", "");
-  if (savedSsid.empty()) {
-    return;
-  }
-  wifi_config_t staConfig = {};
-  const size_t ssidLen =
-      std::min(savedSsid.size(), sizeof(staConfig.sta.ssid) - static_cast<size_t>(1));
-  std::memcpy(staConfig.sta.ssid, savedSsid.data(), ssidLen);
+// ---------------------------------------------------------------------------
+// WiFi credentials — loaded from /littlefs/wifi.json
+// Format: { "version": 1, "networks": [ {"ssid":"...", "password":"..."} ] }
+// ---------------------------------------------------------------------------
 
-  const size_t passLen =
-      std::min(savedPass.size(), sizeof(staConfig.sta.password) - static_cast<size_t>(1));
-  std::memcpy(staConfig.sta.password, savedPass.data(), passLen);
-  esp_err_t cfgErr = esp_wifi_set_config(WIFI_IF_STA, &staConfig);
+struct WifiCredential { std::string ssid; std::string password; };
+
+std::vector<WifiCredential> loadWifiNetworks() {
+  std::vector<WifiCredential> out;
+  std::FILE* fp = std::fopen("/littlefs/wifi.json", "rb");
+  if (!fp) {
+    ESP_LOGW(kWifiTag, "wifi.json not found");
+    return out;
+  }
+  std::fseek(fp, 0, SEEK_END);
+  const long sz = std::ftell(fp);
+  std::rewind(fp);
+  if (sz <= 0 || sz > 4096) {
+    std::fclose(fp);
+    ESP_LOGW(kWifiTag, "wifi.json bad size %ld", sz);
+    return out;
+  }
+  std::string buf(static_cast<size_t>(sz), '\0');
+  (void)std::fread(buf.data(), 1, static_cast<size_t>(sz), fp);
+  std::fclose(fp);
+
+  // Parse with dsl_json free functions
+  std::string_view sv(buf);
+  std::string_view networksArr;
+  if (!dsl_json::objectMemberArray(sv, "networks", networksArr)) {
+    ESP_LOGW(kWifiTag, "wifi.json: 'networks' array not found");
+    return out;
+  }
+  dsl_json::forEachArrayElement(networksArr, [&](int /*idx*/, std::string_view elemSv) {
+    WifiCredential cred;
+    (void)dsl_json::objectMemberString(elemSv, "ssid",     cred.ssid);
+    (void)dsl_json::objectMemberString(elemSv, "password", cred.password);
+    if (!cred.ssid.empty()) {
+      out.push_back(std::move(cred));
+    }
+  });
+  ESP_LOGI(kWifiTag, "wifi.json loaded %u network(s)", static_cast<unsigned>(out.size()));
+  return out;
+}
+
+bool applyAndConnect(const WifiCredential& cred, uint32_t timeoutMs) {
+  wifi_config_t sta = {};
+  const size_t sl = std::min(cred.ssid.size(),     sizeof(sta.sta.ssid)     - 1U);
+  const size_t pl = std::min(cred.password.size(), sizeof(sta.sta.password) - 1U);
+  std::memcpy(sta.sta.ssid,     cred.ssid.data(),     sl);
+  std::memcpy(sta.sta.password, cred.password.data(), pl);
+  esp_err_t cfgErr = esp_wifi_set_config(WIFI_IF_STA, &sta);
   if (cfgErr == ESP_ERR_WIFI_STATE) {
-    ESP_LOGW(kWifiTag, "set_config while busy; disconnecting and retrying");
     (void)esp_wifi_disconnect();
     platform::sleepMs(80);
-    cfgErr = esp_wifi_set_config(WIFI_IF_STA, &staConfig);
+    cfgErr = esp_wifi_set_config(WIFI_IF_STA, &sta);
   }
   if (cfgErr != ESP_OK) {
-    ESP_LOGE(kWifiTag, "set_config failed err=0x%x", static_cast<unsigned>(cfgErr));
-    return;
-  }
-  ESP_LOGI(kWifiTag, "loaded credentials from prefs ns=wifi");
-}
-
-bool startWifiStation(uint32_t timeoutMs, const char* requestedSsid = nullptr) {
-  ESP_LOGI(kBootTag, "start wifi provisioning");
-  if (!ensureWifiStackReady()) {
+    ESP_LOGE(kWifiTag, "set_config failed err=0x%x ssid=%s", static_cast<unsigned>(cfgErr), cred.ssid.c_str());
     return false;
   }
-  if (requestedSsid != nullptr && *requestedSsid != '\0') {
-    config_screen::showWifiStatus("CONNECTING WIFI", requestedSsid, false);
-  } else {
-    config_screen::showWifiStatus("CONNECTING WIFI", "TRYING SAVED CREDENTIALS", false);
-  }
-  (void)esp_wifi_disconnect();
-  applySavedStaConfig();
-  ESP_LOGI(kWifiTag, "station mode enabled");
   xEventGroupClearBits(sWifiEventGroup, kWifiConnectedBit | kWifiFailedBit);
-  ESP_ERROR_CHECK(esp_wifi_connect());
-
-  const EventBits_t bits =
-      xEventGroupWaitBits(sWifiEventGroup, kWifiConnectedBit | kWifiFailedBit, pdFALSE, pdFALSE,
-                          pdMS_TO_TICKS(timeoutMs));
-  if ((bits & kWifiConnectedBit) != 0) {
-    ESP_LOGI(kWifiTag, "connected with stored credentials");
-    config_screen::showWifiStatus("WIFI CONNECTED", requestedSsid != nullptr ? requestedSsid : "", false);
-    platform::sleepMs(500);
-    return true;
-  }
-  ESP_LOGW(kWifiTag, "connect timeout/no stored credentials");
-  config_screen::showWifiStatus("CONNECT FAILED", "TAP RETRY OR SCAN", true);
-  platform::sleepMs(700);
-  return false;
+  (void)esp_wifi_connect();
+  const EventBits_t bits = xEventGroupWaitBits(
+      sWifiEventGroup, kWifiConnectedBit | kWifiFailedBit,
+      pdFALSE, pdFALSE, pdMS_TO_TICKS(timeoutMs));
+  return (bits & kWifiConnectedBit) != 0;
 }
 
+// Scan visible APs, deduplicate by SSID, sort by RSSI descending.
 bool scanWifiNetworks(std::vector<WifiApEntry>& out) {
   out.clear();
   if (!ensureWifiStackReady()) {
@@ -288,9 +296,57 @@ bool scanWifiNetworks(std::vector<WifiApEntry>& out) {
   return true;
 }
 
-bool hasStoredWifiCreds() {
-  const std::string savedSsid = platform::prefs::getString("wifi", "ssid", "");
-  return !savedSsid.empty();
+// Scan for visible networks, match against credentials in wifi.json (best RSSI first),
+// try each match in turn. Returns true if any connection succeeds.
+bool autoConnectWifi(const std::vector<WifiCredential>& knownNetworks) {
+  if (knownNetworks.empty()) {
+    ESP_LOGI(kWifiTag, "no credentials in wifi.json; skipping WiFi");
+    return false;
+  }
+  if (!ensureWifiStackReady()) return false;
+
+  config_screen::showWifiStatus("SCANNING WIFI", "LOOKING FOR KNOWN NETWORKS...", false);
+  std::vector<WifiApEntry> visible;
+  if (!scanWifiNetworks(visible)) {
+    ESP_LOGW(kWifiTag, "scan failed");
+  }
+
+  // Build ordered list: visible networks that have a matching credential, best RSSI first.
+  struct Match { size_t credIdx; int8_t rssi; };
+  std::vector<Match> matches;
+  for (const auto& ap : visible) {
+    for (size_t ci = 0; ci < knownNetworks.size(); ++ci) {
+      if (knownNetworks[ci].ssid == ap.ssid) {
+        matches.push_back({ci, ap.rssi});
+        break;
+      }
+    }
+  }
+  // If scan found nothing, fall back to trying all credentials in order.
+  if (matches.empty()) {
+    ESP_LOGW(kWifiTag, "no visible known networks; trying all credentials blind");
+    for (size_t ci = 0; ci < knownNetworks.size(); ++ci) {
+      matches.push_back({ci, -100});
+    }
+  }
+  std::stable_sort(matches.begin(), matches.end(),
+                   [](const Match& a, const Match& b) { return a.rssi > b.rssi; });
+
+  for (const auto& m : matches) {
+    const WifiCredential& cred = knownNetworks[m.credIdx];
+    ESP_LOGI(kWifiTag, "trying ssid=%s rssi=%d", cred.ssid.c_str(), static_cast<int>(m.rssi));
+    config_screen::showWifiStatus("CONNECTING WIFI", cred.ssid.c_str(), false);
+    if (applyAndConnect(cred, 10000)) {
+      config_screen::showWifiStatus("WIFI CONNECTED", cred.ssid.c_str(), false);
+      platform::sleepMs(500);
+      return true;
+    }
+    ESP_LOGW(kWifiTag, "failed ssid=%s", cred.ssid.c_str());
+  }
+
+  config_screen::showWifiStatus("CONNECT FAILED", "NO KNOWN NETWORKS REACHABLE", true);
+  platform::sleepMs(1000);
+  return false;
 }
 
 uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
@@ -302,17 +358,22 @@ void drawTinyChar(int x, int y, char c, uint16_t fg, uint16_t bg, int scale) {
     c = '?';
   }
   const size_t idx = static_cast<size_t>(static_cast<uint8_t>(c)) * 5U;
+  const uint16_t pw = static_cast<uint16_t>(5 * scale);
+  const uint16_t ph = static_cast<uint16_t>(8 * scale);
+  // Render into a pixel buffer and send in one SPI transaction (max scale=4: 20×32=640px).
+  uint16_t buf[20 * 32];
   for (int col = 0; col < 5; ++col) {
     const uint8_t line = font[idx + static_cast<size_t>(col)];
     for (int row = 0; row < 8; ++row) {
-      const bool on = ((line >> row) & 0x01U) != 0U;
-      (void)display_spi::fillRect(static_cast<uint16_t>(x + col * scale),
-                                  static_cast<uint16_t>(y + row * scale),
-                                  static_cast<uint16_t>(scale),
-                                  static_cast<uint16_t>(scale),
-                                  on ? fg : bg);
+      const uint16_t color = ((line >> row) & 0x01U) ? fg : bg;
+      for (int sy = 0; sy < scale; ++sy) {
+        for (int sx = 0; sx < scale; ++sx) {
+          buf[(row * scale + sy) * (5 * scale) + (col * scale + sx)] = color;
+        }
+      }
     }
   }
+  (void)display_spi::drawRgb565(static_cast<uint16_t>(x), static_cast<uint16_t>(y), pw, ph, buf);
 }
 
 void drawTinyText(int x, int y, const char* text, uint16_t fg, uint16_t bg, int scale) {
@@ -340,8 +401,6 @@ void drawTabBar(const std::string& activeLayoutPath) {
   const uint16_t textColor = rgb565(220, 230, 245);
   const uint16_t divider   = rgb565(60, 80, 110);
 
-  // Fill bar background
-  (void)display_spi::fillRect(0, 0, w, kTabBarH, barBg);
   // Bottom border
   (void)display_spi::fillRect(0, static_cast<uint16_t>(kTabBarH - 1), w, 1, divider);
 
@@ -465,20 +524,9 @@ void savePreferredLayoutPath(const std::string& path) {
 
 
 
-struct ConfigInteractionResult {
-  bool offlineRequested = false;
-  bool retryRequested = false;
-  bool openWifiListRequested = false;
-  bool localeChanged = false;
-  std::string selectedSsid;
-};
-
-config_screen::ViewState makeViewState(bool hasStoredCreds, bool wifiConnected,
-                                       bool showWifiButtons) {
+config_screen::ViewState makeViewState(bool wifiConnected) {
   config_screen::ViewState state = {};
-  state.hasStoredCreds = hasStoredCreds;
   state.wifiConnected = wifiConnected;
-  state.showWifiButtons = showWifiButtons;
   state.use24HourClock = RuntimeSettings::use24HourClock;
   state.useFahrenheit = RuntimeSettings::useFahrenheit;
   state.useMiles = RuntimeSettings::useMiles;
@@ -487,40 +535,20 @@ config_screen::ViewState makeViewState(bool hasStoredCreds, bool wifiConnected,
 
 const char* configActionName(config_screen::Action action) {
   switch (action) {
-    case config_screen::Action::RetryWifi:
-      return "retry_wifi";
-    case config_screen::Action::OfflineMode:
-      return "offline_mode";
-    case config_screen::Action::OpenWifiList:
-      return "open_wifi_list";
-    case config_screen::Action::ToggleClock:
-      return "toggle_clock";
-    case config_screen::Action::ToggleTemp:
-      return "toggle_temp";
-    case config_screen::Action::ToggleDistance:
-      return "toggle_distance";
-    default:
-      return "none";
+    case config_screen::Action::ToggleClock:    return "toggle_clock";
+    case config_screen::Action::ToggleTemp:     return "toggle_temp";
+    case config_screen::Action::ToggleDistance: return "toggle_distance";
+    default: return "none";
   }
 }
 
-ConfigInteractionResult runConfigInteraction(uint32_t durationMs, bool hasStoredCreds,
-                                             bool wifiConnected, bool showWifiButtons) {
-  ConfigInteractionResult result = {};
-  config_screen::show(makeViewState(hasStoredCreds, wifiConnected, showWifiButtons));
+// Show the locale config screen for up to durationMs, allowing time/temp/dist toggles.
+void runLocaleInteraction(uint32_t durationMs, bool wifiConnected) {
+  config_screen::show(makeViewState(wifiConnected));
+  if (!AppConfig::kTouchEnabled) return;
 
-  if (!AppConfig::kTouchEnabled) {
-    return result;
-  }
-  if (!touch_input::init()) {
-    ESP_LOGW(kTouchTag, "touch init failed");
-    return result;
-  }
-
-  ESP_LOGI(kTouchTag, "interaction start duration_ms=%u wifi_buttons=%d",
-           static_cast<unsigned>(durationMs), showWifiButtons ? 1 : 0);
+  ESP_LOGI(kTouchTag, "locale interaction start duration_ms=%u", static_cast<unsigned>(durationMs));
   const uint32_t startMs = platform::millisMs();
-  uint32_t lastLogMs = 0;
   bool touchHeld = false;
   while (durationMs == 0 || (platform::millisMs() - startMs < durationMs)) {
     touch_input::Point p;
@@ -530,149 +558,28 @@ ConfigInteractionResult runConfigInteraction(uint32_t durationMs, bool hasStored
       continue;
     }
     config_screen::markTouch(p.x, p.y);
-
-    if (touchHeld) {
-      platform::sleepMs(25);
-      continue;
-    }
+    if (touchHeld) { platform::sleepMs(25); continue; }
     touchHeld = true;
 
     const config_screen::Action action = config_screen::hitTest(p.x, p.y);
-    const uint32_t now = platform::millisMs();
-    if (action != config_screen::Action::None || now - lastLogMs > 250U) {
-      ESP_LOGI(kTouchTag, "tap raw=(%u,%u) map=(%u,%u) action=%s", p.rawX, p.rawY, p.x, p.y,
-               configActionName(action));
-      lastLogMs = now;
-    }
+    ESP_LOGI(kTouchTag, "tap (%u,%u) action=%s", p.x, p.y, configActionName(action));
 
     if (action == config_screen::Action::ToggleClock) {
       RuntimeSettings::use24HourClock = !RuntimeSettings::use24HourClock;
       RuntimeSettings::save();
-      result.localeChanged = true;
-      config_screen::show(makeViewState(hasStoredCreds, wifiConnected, showWifiButtons));
+      config_screen::show(makeViewState(wifiConnected));
     } else if (action == config_screen::Action::ToggleTemp) {
       RuntimeSettings::useFahrenheit = !RuntimeSettings::useFahrenheit;
       RuntimeSettings::save();
-      result.localeChanged = true;
-      config_screen::show(makeViewState(hasStoredCreds, wifiConnected, showWifiButtons));
+      config_screen::show(makeViewState(wifiConnected));
     } else if (action == config_screen::Action::ToggleDistance) {
       RuntimeSettings::useMiles = !RuntimeSettings::useMiles;
       RuntimeSettings::save();
-      result.localeChanged = true;
-      config_screen::show(makeViewState(hasStoredCreds, wifiConnected, showWifiButtons));
-    } else if (action == config_screen::Action::OpenWifiList && showWifiButtons) {
-      result.openWifiListRequested = true;
-      config_screen::showWifiScanInterstitial();
-      std::vector<WifiApEntry> networks;
-      if (!scanWifiNetworks(networks)) {
-        ESP_LOGW(kWifiTag, "wifi scan failed");
-        config_screen::show(makeViewState(hasStoredCreds, wifiConnected, showWifiButtons));
-        platform::sleepMs(80);
-        continue;
-      }
-
-      std::vector<std::string> labels;
-      labels.reserve(networks.size());
-      for (const auto& ap : networks) {
-        std::string label = ap.ssid;
-        label += ap.secure ? " WPA " : " OPEN ";
-        label += std::to_string(static_cast<int>(ap.rssi));
-        label += "DBM";
-        labels.push_back(label);
-      }
-      std::vector<const char*> ptrs;
-      ptrs.reserve(labels.size());
-      for (const auto& label : labels) {
-        ptrs.push_back(label.c_str());
-      }
-
-      // Drain the touch that triggered SCAN so the AP list doesn't consume a stale press.
-      {
-        const uint32_t releaseStart = platform::millisMs();
-        touch_input::Point discard;
-        while (platform::millisMs() - releaseStart < 800U) {
-          if (!touch_input::read(discard)) {
-            break;
-          }
-          platform::sleepMs(15);
-        }
-      }
-
-      config_screen::showWifiList(ptrs.empty() ? nullptr : ptrs.data(),
-                                  static_cast<uint16_t>(ptrs.size()));
-      ESP_LOGI(kWifiTag, "scan complete aps=%u", static_cast<unsigned>(networks.size()));
-
-      bool inList = true;
-      bool listTouchHeld = false;
-      const uint32_t listStart = platform::millisMs();
-      while (inList && (durationMs == 0 || platform::millisMs() - listStart < durationMs)) {
-        touch_input::Point lp;
-        if (!touch_input::read(lp)) {
-          listTouchHeld = false;
-          platform::sleepMs(15);
-          continue;
-        }
-        config_screen::markTouch(lp.x, lp.y);
-        if (listTouchHeld) {
-          platform::sleepMs(25);
-          continue;
-        }
-        listTouchHeld = true;
-
-        const int row =
-            config_screen::hitTestWifiListRow(lp.x, lp.y, static_cast<uint16_t>(networks.size()));
-        if (row == -1) {
-          inList = false;
-          break;
-        }
-        if (row < 0 || row >= static_cast<int>(networks.size())) {
-          platform::sleepMs(35);
-          continue;
-        }
-
-        const WifiApEntry& selected = networks[static_cast<size_t>(row)];
-        ESP_LOGI(kWifiTag, "selected ssid=%s secure=%d rssi=%d", selected.ssid.c_str(),
-                 selected.secure ? 1 : 0, static_cast<int>(selected.rssi));
-
-        std::string password;
-        if (selected.secure) {
-          if (!lvgl_password_prompt::prompt("WIFI PASSWORD", selected.ssid, password)) {
-            text_entry::Options opts = {};
-            opts.title = "WIFI PASSWORD";
-            opts.subtitle = selected.ssid;
-            opts.maskInput = true;
-            opts.maxLen = 63;
-            if (!text_entry::prompt(opts, password)) {
-              config_screen::showWifiList(ptrs.empty() ? nullptr : ptrs.data(),
-                                          static_cast<uint16_t>(ptrs.size()));
-              platform::sleepMs(80);
-              continue;
-            }
-          }
-        }
-
-        if (!platform::prefs::putString("wifi", "ssid", selected.ssid.c_str()) ||
-            !platform::prefs::putString("wifi", "password", password.c_str())) {
-          ESP_LOGW(kWifiTag, "failed to persist credentials");
-        }
-        result.selectedSsid = selected.ssid;
-        result.retryRequested = true;
-        return result;
-      }
-
-      config_screen::show(makeViewState(hasStoredCreds, wifiConnected, showWifiButtons));
-    } else if (action == config_screen::Action::OfflineMode && showWifiButtons) {
-      result.offlineRequested = true;
-      break;
-    } else if (action == config_screen::Action::RetryWifi && showWifiButtons) {
-      result.retryRequested = true;
-      break;
+      config_screen::show(makeViewState(wifiConnected));
     }
-
     platform::sleepMs(35);
   }
-  ESP_LOGI(kTouchTag, "interaction end");
-  return result;
+  ESP_LOGI(kTouchTag, "locale interaction end");
 }
 
 bool fileSizeBytes(const char* path, long& outSize) {
@@ -953,8 +860,8 @@ void refreshLayout(RuntimeLoopContext* ctx) {
   if (!layout_runtime::begin(ctx->activeLayoutPath.c_str())) {
     ESP_LOGW(kUiTag, "layout begin failed path=%s; falling back to layout A",
              ctx->activeLayoutPath.c_str());
-    ctx->activeLayoutPath = kLayoutAPath;
-    (void)layout_runtime::begin(kLayoutAPath);
+    ctx->activeLayoutPath = kFallbackLayoutPath;
+    (void)layout_runtime::begin(kFallbackLayoutPath);
   }
   sTabBar.dirty = true;
 }
@@ -966,28 +873,6 @@ void switchLayout(RuntimeLoopContext* ctx, const char* path) {
   ctx->activeLayoutPath = path;
   savePreferredLayoutPath(ctx->activeLayoutPath);
   ESP_LOGI(kUiTag, "switch layout path=%s", ctx->activeLayoutPath.c_str());
-  refreshLayout(ctx);
-}
-
-void openRuntimeConfig(RuntimeLoopContext* ctx) {
-  const bool hasCreds = hasStoredWifiCreds();
-  const bool wifiConnected = platform::net::isConnected();
-  ESP_LOGI(kUiTag, "open runtime config");
-  const ConfigInteractionResult result =
-      runConfigInteraction(20000, hasCreds, wifiConnected, true);
-  if (result.retryRequested) {
-    const char* requested =
-        result.selectedSsid.empty() ? nullptr : result.selectedSsid.c_str();
-    ctx->wifiReady = startWifiStation(10000, requested);
-  } else {
-    ctx->wifiReady = platform::net::isConnected();
-  }
-  refreshLayout(ctx);
-}
-
-void openRuntimeTouchCalibration(RuntimeLoopContext* ctx) {
-  ESP_LOGI(kUiTag, "open runtime touch calibration");
-  (void)runTouchCalibration(true);
   refreshLayout(ctx);
 }
 
@@ -1027,7 +912,7 @@ void runtimeLoopTask(void* arg) {
           if (tabHit >= 0) {
             handled = true;
             ESP_LOGI(kUiTag, "tab tap idx=%d x=%u y=%u", tabHit, tapX, tapY);
-            switchLayout(ctx, sTabs[static_cast<size_t>(tabHit)].path);
+            switchLayout(ctx, sTabs[static_cast<size_t>(tabHit)].path.c_str());
           } else {
             handled = layout_runtime::onTap(tapX, tapY);
             if (handled) {
@@ -1098,50 +983,14 @@ void bootTask(void* arg) {
     (void)runDisplayModeCalibrationIfNeeded();
   }
 
-  const bool savedCreds = hasStoredWifiCreds();
-  bool wifiReady = false;
-  bool offlineSelected = false;
-
-  // Production-style behavior: if credentials exist, boot directly to app path.
-  // Only enter config first-run flow when no credentials are stored.
-  if (!savedCreds) {
-    const ConfigInteractionResult preWifi =
-        runConfigInteraction(kTouchBootProbeMs, savedCreds, false, true);
-    if (preWifi.offlineRequested) {
-      offlineSelected = true;
-      ESP_LOGI(kWifiTag, "offline mode selected before connect");
-    }
-  } else {
-    ESP_LOGI(kBootTag, "saved wifi creds present; skipping pre-wifi config");
-  }
-
-  if (!offlineSelected) {
-    wifiReady = startWifiStation(10000, nullptr);
-  } else {
-    ESP_LOGI(kWifiTag, "skipping WiFi connect");
-  }
-
-  if (!wifiReady && !offlineSelected) {
-    const ConfigInteractionResult postFail =
-        runConfigInteraction(kConfigPostFailMs, savedCreds, false, true);
-    if (postFail.offlineRequested) {
-      offlineSelected = true;
-      ESP_LOGI(kWifiTag, "offline mode selected after connect failure");
-    } else if (postFail.retryRequested) {
-      ESP_LOGI(kWifiTag, "retry requested from config screen");
-      const char* requested =
-          postFail.selectedSsid.empty() ? nullptr : postFail.selectedSsid.c_str();
-      wifiReady = startWifiStation(10000, requested);
-    }
-  }
+  // Load credentials from /littlefs/wifi.json and attempt automatic connection.
+  const std::vector<WifiCredential> wifiNetworks = loadWifiNetworks();
+  const bool wifiReady = autoConnectWifi(wifiNetworks);
 
   boot::mark(baselineState, "wifi_ready", kBaselineEnabled);
 
-  if (!wifiReady) {
-    (void)runConfigInteraction(kConfigPostFailMs, savedCreds, false, true);
-  } else if (!savedCreds) {
-    (void)runConfigInteraction(kConfigPostConnectMs, true, true, false);
-  }
+  // Show locale config screen briefly so user can adjust time/temp/dist units.
+  runLocaleInteraction(kConfigPostConnectMs, wifiReady);
 
   GeoContext geo = loadGeoContextFromPrefs();
   if (geo.hasLocation) {
