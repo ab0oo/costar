@@ -15,7 +15,7 @@ Data sources (all public-domain US government data, no API keys required):
   - https://services.swpc.noaa.gov/products/summary/solar-wind-speed.json  (solar wind)
   - https://services.swpc.noaa.gov/products/summary/solar-wind-mag-field.json (Bz/Bt)
   - https://services.swpc.noaa.gov/products/noaa-scales.json               (R/S/G scales)
-  - https://services.swpc.noaa.gov/json/solar_regions.json                 (sunspots)
+  - https://services.swpc.noaa.gov/text/daily-solar-indices.txt            (SESC sunspot number)
   - https://services.swpc.noaa.gov/json/goes/primary/euvs-6-hour.json      (EUV 304 A)
   - https://services.swpc.noaa.gov/json/goes/primary/integral-protons-1-day.json  (p+ flux)
   - https://services.swpc.noaa.gov/json/goes/primary/integral-electrons-1-day.json (e- flux)
@@ -177,27 +177,30 @@ def calc_hf_conditions(sfi: float, kp: float) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Sunspot total from solar_regions.json
+# Sunspot number from NOAA daily-solar-indices (SESC International Sunspot Number)
 # ---------------------------------------------------------------------------
 
-def _sum_sunspots(regions: list) -> int:
-    """Sum number_spots across all active regions for current day."""
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    total = 0
-    seen = set()
-    for r in regions:
-        # Each region may appear multiple times (one per observatory); deduplicate
-        region_id = r.get("region") or r.get("Region")
-        obs_date  = (r.get("observed_date") or r.get("Obsdate") or "")[:10]
-        if obs_date != today:
+def _fetch_sunspots() -> int:
+    """
+    Return the SESC International Sunspot Number from the NOAA daily solar
+    indices text product — the same number reported by N0NBH.
+
+    Source: https://services.swpc.noaa.gov/text/daily-solar-indices.txt
+    Format (space-delimited, skip # and : comment lines):
+      YYYY MM DD  SFI  SESC_SSN  Area  NewRgns  ...
+    Column index 4 (1-based) is the SESC sunspot number.
+    """
+    text = _get_text("https://services.swpc.noaa.gov/text/daily-solar-indices.txt")
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        if not line or line.startswith("#") or line.startswith(":"):
             continue
-        key = str(region_id)
-        if key in seen:
-            continue
-        seen.add(key)
-        spots = r.get("number_spots") or r.get("Numspot") or 0
-        total += _num(spots, 0)
-    return total
+        parts = line.split()
+        if len(parts) >= 5:
+            val = _num(parts[4])
+            if val is not None and val >= 0:
+                return int(val)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -430,11 +433,10 @@ def fetch_all() -> dict:
     except Exception as e:
         errors.append(f"scales: {e}")
 
-    # --- Sunspot count from solar regions ---
+    # --- Sunspot count (SESC International Sunspot Number) ---
     sunspots = None
     try:
-        regions = _get_json("https://services.swpc.noaa.gov/json/solar_regions.json")
-        sunspots = _sum_sunspots(regions)
+        sunspots = _fetch_sunspots()
     except Exception as e:
         errors.append(f"sunspots: {e}")
 
