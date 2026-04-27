@@ -1,4 +1,5 @@
 {
   "layout_server_host": "vps.gorkos.net",
-  "layout_server_port": 80
+  "layout_server_port": 80,
+  "layout_server_path": "/costar"
 }

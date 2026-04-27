@@ -3,8 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <base id="costarBase" href="/costar/">
   <title>CoStar · Layouts</title>
-  <link rel="stylesheet" href="/static/css/theme.css">
+  <link rel="stylesheet" href="static/css/theme.css">
   <style>
     /* ── Three-column assembly layout ── */
     .assembly-page {
@@ -161,10 +162,10 @@
   <nav class="topbar">
     <span class="topbar-brand">CoStar</span>
     <div class="topbar-nav">
-      <a href="/screens.html">Screens</a>
-      <a href="/layouts.html" class="active">Layouts</a>
-      <a href="/editor.html">Editor</a>
-      <a href="/flash.html">Flash</a>
+      <a href="screens.html">Screens</a>
+      <a href="layouts.html" class="active">Layouts</a>
+      <a href="editor.html">Editor</a>
+      <a href="flash.html">Flash</a>
     </div>
   </nav>
 
@@ -302,8 +303,8 @@
   </div><!-- /content -->
 </div><!-- /page -->
 
-<script src="/static/js/api.js"></script>
-<script src="/static/js/layouts.js"></script>
+<script src="static/js/api.js"></script>
+<script src="static/js/layouts.js"></script>
 <script>
   // Wire clock_24h select — value is string "1" for true, "" for false
   document.getElementById("localeClock24h").addEventListener("change", function() {

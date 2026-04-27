@@ -188,6 +188,7 @@ bool ensureWifiStackReady() {
 struct ProxyConfig {
   std::string host = AppConfig::kLayoutServerHostFallback;
   uint16_t    port = AppConfig::kLayoutServerPortFallback;
+  std::string path;  // e.g. "/costar" — empty means no prefix
 };
 
 static ProxyConfig loadProxyConfig() {
@@ -226,7 +227,15 @@ static ProxyConfig loadProxyConfig() {
       out.port = static_cast<uint16_t>(portNum);
     }
   }
-  ESP_LOGI(kBootTag, "config.json loaded: host=%s port=%u", out.host.c_str(), out.port);
+  std::string pathStr;
+  if (dsl_json::objectMemberString(sv, "layout_server_path", pathStr) && !pathStr.empty()) {
+    // Normalise: ensure leading slash, strip trailing slash
+    if (pathStr.front() != '/') pathStr.insert(pathStr.begin(), '/');
+    while (pathStr.size() > 1 && pathStr.back() == '/') pathStr.pop_back();
+    out.path = std::move(pathStr);
+  }
+  ESP_LOGI(kBootTag, "config.json loaded: host=%s port=%u path=%s",
+           out.host.c_str(), out.port, out.path.c_str());
   return out;
 }
 
@@ -1047,6 +1056,7 @@ void bootTask(void* arg) {
       layout_update::Config luCfg = {};
       luCfg.host      = proxyCfg.host.c_str();
       luCfg.port      = proxyCfg.port;
+      luCfg.path      = proxyCfg.path.c_str();
       luCfg.timeoutMs = 10000;
       if (layout_update::checkAndApply(luCfg)) {
         ESP_LOGI(kBootTag, "layout updated — rebooting");

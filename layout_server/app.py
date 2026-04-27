@@ -18,12 +18,17 @@ import os
 from pathlib import Path
 
 from flask import Flask, abort, jsonify, request, send_from_directory
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 import db
 
 log = logging.getLogger("layout_server")
 
-app = Flask(__name__, static_folder="static", static_url_path="/static")
+_prefix = os.environ.get("COSTAR_PREFIX", "").rstrip("/")  # e.g. "/costar"
+
+app = Flask(__name__, static_folder="static", static_url_path=f"{_prefix}/static")
+app.config["APPLICATION_ROOT"] = _prefix or "/"
+app.wsgi_app = ProxyFix(app.wsgi_app, x_prefix=1)
 
 
 # ---------------------------------------------------------------------------
@@ -68,12 +73,13 @@ def _require_json(*fields):
 # Root — serve the UI shell
 # ---------------------------------------------------------------------------
 
-@app.route("/")
+@app.route(f"{_prefix}/")
+@app.route(f"{_prefix}")
 def root():
     return send_from_directory("static", "screens.html")
 
 
-@app.route("/<path:filename>")
+@app.route(f"{_prefix}/<path:filename>")
 def static_pages(filename):
     if filename.endswith(".html"):
         return send_from_directory("static", filename)
@@ -84,12 +90,12 @@ def static_pages(filename):
 # Screens API
 # ---------------------------------------------------------------------------
 
-@app.route("/api/screens", methods=["GET"])
+@app.route(f"{_prefix}/api/screens", methods=["GET"])
 def api_list_screens():
     return _ok(db.list_screens())
 
 
-@app.route("/api/screens/<int:screen_id>", methods=["GET"])
+@app.route(f"{_prefix}/api/screens/<int:screen_id>", methods=["GET"])
 def api_get_screen(screen_id):
     s = db.get_screen(screen_id)
     if s is None:
@@ -97,7 +103,7 @@ def api_get_screen(screen_id):
     return _ok(s)
 
 
-@app.route("/api/screens", methods=["POST"])
+@app.route(f"{_prefix}/api/screens", methods=["POST"])
 def api_create_screen():
     data, err = _require_json("name", "content")
     if err:
@@ -117,7 +123,7 @@ def api_create_screen():
     return _ok(s, 201)
 
 
-@app.route("/api/screens/<int:screen_id>", methods=["PUT"])
+@app.route(f"{_prefix}/api/screens/<int:screen_id>", methods=["PUT"])
 def api_update_screen(screen_id):
     data, err = _require_json()
     if err:
@@ -137,7 +143,7 @@ def api_update_screen(screen_id):
     return _ok(s)
 
 
-@app.route("/api/screens/<int:screen_id>", methods=["DELETE"])
+@app.route(f"{_prefix}/api/screens/<int:screen_id>", methods=["DELETE"])
 def api_delete_screen(screen_id):
     try:
         deleted = db.delete_screen(screen_id)
@@ -152,12 +158,12 @@ def api_delete_screen(screen_id):
 # Layouts API
 # ---------------------------------------------------------------------------
 
-@app.route("/api/layouts", methods=["GET"])
+@app.route(f"{_prefix}/api/layouts", methods=["GET"])
 def api_list_layouts():
     return _ok(db.list_layouts())
 
 
-@app.route("/api/layouts/<int:layout_id>", methods=["GET"])
+@app.route(f"{_prefix}/api/layouts/<int:layout_id>", methods=["GET"])
 def api_get_layout(layout_id):
     layout = db.get_layout(layout_id)
     if layout is None:
@@ -165,7 +171,7 @@ def api_get_layout(layout_id):
     return _ok(layout)
 
 
-@app.route("/api/layouts", methods=["POST"])
+@app.route(f"{_prefix}/api/layouts", methods=["POST"])
 def api_create_layout():
     data, err = _require_json("name", "screen_ids")
     if err:
@@ -186,7 +192,7 @@ def api_create_layout():
     return _ok(layout, 201)
 
 
-@app.route("/api/layouts/<int:layout_id>", methods=["PUT"])
+@app.route(f"{_prefix}/api/layouts/<int:layout_id>", methods=["PUT"])
 def api_update_layout(layout_id):
     data, err = _require_json()
     if err:
@@ -210,7 +216,7 @@ def api_update_layout(layout_id):
     return _ok(layout)
 
 
-@app.route("/api/layouts/<int:layout_id>", methods=["DELETE"])
+@app.route(f"{_prefix}/api/layouts/<int:layout_id>", methods=["DELETE"])
 def api_delete_layout(layout_id):
     deleted = db.delete_layout(layout_id)
     if not deleted:
@@ -222,7 +228,7 @@ def api_delete_layout(layout_id):
 # LittleFS image build
 # ---------------------------------------------------------------------------
 
-@app.route("/api/layouts/<int:layout_id>/build", methods=["POST"])
+@app.route(f"{_prefix}/api/layouts/<int:layout_id>/build", methods=["POST"])
 def api_build_layout(layout_id):
     layout = db.get_layout(layout_id)
     if layout is None:
@@ -236,7 +242,7 @@ def api_build_layout(layout_id):
     return _ok(result)
 
 
-@app.route("/api/layouts/<int:layout_id>/image", methods=["GET"])
+@app.route(f"{_prefix}/api/layouts/<int:layout_id>/image", methods=["GET"])
 def api_download_image(layout_id):
     layout = db.get_layout(layout_id)
     if layout is None:
@@ -258,7 +264,7 @@ def api_download_image(layout_id):
 # Device manifest endpoints (polled by ESP32 at boot)
 # ---------------------------------------------------------------------------
 
-@app.route("/manifest/<device_nick>", methods=["GET"])
+@app.route(f"{_prefix}/manifest/<device_nick>", methods=["GET"])
 def api_manifest(device_nick):
     manifest = db.get_manifest(device_nick)
     if manifest is None:
@@ -266,7 +272,7 @@ def api_manifest(device_nick):
     return _ok(manifest)
 
 
-@app.route("/files/<device_nick>/<filename>", methods=["GET"])
+@app.route(f"{_prefix}/files/<device_nick>/<filename>", methods=["GET"])
 def api_manifest_file(device_nick, filename):
     # Only allow safe filenames: screen_layout_N.json, tabs.json, wifi.json
     allowed = {"tabs.json", "wifi.json"} | {f"screen_layout_{i}.json" for i in range(1, 6)}

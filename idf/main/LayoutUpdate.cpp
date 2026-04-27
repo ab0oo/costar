@@ -206,10 +206,11 @@ bool checkAndApply(const Config& cfg) {
         return false;
     }
 
-    // Build manifest URL: http://host:port/manifest/<MAC>
-    char manifestUrl[128];
+    // Build manifest URL: http://host:port[/path]/manifest/<MAC>
+    const char* pfx = (cfg.path && cfg.path[0]) ? cfg.path : "";
+    char manifestUrl[160];
     std::snprintf(manifestUrl, sizeof(manifestUrl),
-                  "http://%s:%u/manifest/%s", cfg.host, cfg.port, mac.c_str());
+                  "http://%s:%u%s/manifest/%s", cfg.host, cfg.port, pfx, mac.c_str());
 
     ESP_LOGI(kTag, "checking manifest url=%s", manifestUrl);
     std::string manifestBody;
@@ -239,11 +240,11 @@ bool checkAndApply(const Config& cfg) {
             continue;
         }
 
-        // Fetch file: http://host:port/files/<MAC>/<filename>
-        char fileUrl[160];
+        // Fetch file: http://host:port[/path]/files/<MAC>/<filename>
+        char fileUrl[192];
         std::snprintf(fileUrl, sizeof(fileUrl),
-                      "http://%s:%u/files/%s/%s",
-                      cfg.host, cfg.port, mac.c_str(), entry.name.c_str());
+                      "http://%s:%u%s/files/%s/%s",
+                      cfg.host, cfg.port, pfx, mac.c_str(), entry.name.c_str());
 
         ESP_LOGI(kTag, "downloading file=%s url=%s", entry.name.c_str(), fileUrl);
         std::string body;

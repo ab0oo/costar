@@ -14,8 +14,9 @@
 namespace layout_update {
 
 struct Config {
-  const char* host;     // e.g. "vps.gorkos.net"
-  uint16_t    port;     // e.g. 8087
+  const char* host;           // e.g. "vps.gorkos.net"
+  uint16_t    port;           // e.g. 80
+  const char* path = "";      // path prefix, e.g. "/costar" (no trailing slash)
   uint32_t    timeoutMs = 10000;
 };
 
