@@ -28,7 +28,6 @@ services:
       - layout_data:/data
     environment:
       - PYTHONUNBUFFERED=1
-      - COSTAR_PREFIX=/costar
 
 volumes:
   layout_data:

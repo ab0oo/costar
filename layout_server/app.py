@@ -18,17 +18,14 @@ import os
 from pathlib import Path
 
 from flask import Flask, abort, jsonify, request, send_from_directory
-from werkzeug.middleware.proxy_fix import ProxyFix
 
 import db
 
 log = logging.getLogger("layout_server")
 
-_prefix = os.environ.get("COSTAR_PREFIX", "").rstrip("/")  # e.g. "/costar"
+app = Flask(__name__, static_folder="static", static_url_path="/static")
 
-app = Flask(__name__, static_folder="static", static_url_path=f"{_prefix}/static")
-app.config["APPLICATION_ROOT"] = _prefix or "/"
-app.wsgi_app = ProxyFix(app.wsgi_app, x_prefix=1)
+_prefix = ""  # Apache strips the prefix before forwarding; Flask sees bare paths.
 
 
 # ---------------------------------------------------------------------------
