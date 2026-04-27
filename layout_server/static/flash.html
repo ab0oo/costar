@@ -1,0 +1,573 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CoStar · Flash</title>
+  <link rel="stylesheet" href="/static/css/theme.css">
+  <style>
+    .flash-page {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      align-items: start;
+      max-width: 960px;
+    }
+
+    @media (max-width: 760px) { .flash-page { grid-template-columns: 1fr; } }
+
+    /* ── Progress bar ── */
+    .progress-wrap {
+      background: #0a0f18;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      height: 18px;
+      overflow: hidden;
+      margin-top: 4px;
+    }
+
+    .progress-bar {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #1a5fa8, var(--accent));
+      transition: width 0.12s linear;
+      border-radius: 6px;
+    }
+
+    .progress-label {
+      font-size: 10px;
+      color: var(--muted);
+      text-align: right;
+      margin-top: 2px;
+    }
+
+    /* ── Log terminal ── */
+    #logBox {
+      background: #060b12;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 8px 10px;
+      height: 260px;
+      overflow-y: auto;
+      font-size: 11px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      word-break: break-all;
+      color: #8faac8;
+    }
+
+    #logBox .ok   { color: var(--ok); }
+    #logBox .err  { color: var(--err); }
+    #logBox .warn { color: var(--warn); }
+    #logBox .info { color: var(--accent); }
+
+    /* ── File rows ── */
+    .file-row {
+      display: grid;
+      grid-template-columns: 80px 1fr 90px;
+      gap: 8px;
+      align-items: center;
+      padding: 6px 0;
+      border-bottom: 1px solid #1a2233;
+    }
+    .file-row:last-child { border-bottom: none; }
+
+    .addr-badge {
+      font-size: 10px;
+      font-family: monospace;
+      background: #0e1a2b;
+      border: 1px solid #2a3d5a;
+      border-radius: 4px;
+      padding: 2px 6px;
+      color: var(--accent);
+      text-align: center;
+    }
+
+    .file-name { font-size: 11px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-size { font-size: 10px; color: var(--muted); text-align: right; }
+
+    .file-source-local  { color: var(--muted); font-size: 10px; }
+    .file-source-server { color: var(--ok);    font-size: 10px; }
+
+    /* ── Connect bar ── */
+    .connect-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      background: #0e1522;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      margin-bottom: 14px;
+    }
+
+    .chip-badge {
+      background: #0e2240;
+      border: 1px solid #2a4d7a;
+      color: var(--accent);
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 11px;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--line);
+      flex-shrink: 0;
+    }
+    .dot.connected   { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+    .dot.connecting  { background: var(--warn); }
+    .dot.error       { background: var(--err); }
+
+    /* ── Baud selector ── */
+    select.baud { width: 100px; }
+
+    /* ── Section divider ── */
+    .section-label {
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin: 10px 0 4px;
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <nav class="topbar">
+    <span class="topbar-brand">CoStar</span>
+    <div class="topbar-nav">
+      <a href="/screens.html">Screens</a>
+      <a href="/layouts.html">Layouts</a>
+      <a href="/editor.html">Editor</a>
+      <a href="/flash.html" class="active">Flash</a>
+    </div>
+  </nav>
+
+  <div class="content">
+
+    <!-- ── Connection bar ── -->
+    <div class="connect-bar">
+      <div class="dot" id="connDot"></div>
+      <span id="connLabel" style="font-size:12px;color:var(--muted)">Not connected</span>
+      <span class="chip-badge" id="chipBadge" style="display:none"></span>
+      <div style="flex:1"></div>
+      <label style="flex-direction:row;align-items:center;gap:6px;color:var(--muted);font-size:11px">
+        Baud
+        <select class="baud" id="baudSelect">
+          <option value="921600" selected>921600</option>
+          <option value="460800">460800</option>
+          <option value="115200">115200</option>
+        </select>
+      </label>
+      <button type="button" id="connectBtn" class="primary">Connect</button>
+      <button type="button" id="disconnectBtn" style="display:none">Disconnect</button>
+    </div>
+
+    <div id="noSerialWarning" class="hint" style="color:var(--warn);margin-bottom:10px;display:none">
+      Web Serial API not available. Use Chrome or Edge (desktop) version 89+.
+    </div>
+
+    <div class="flash-page">
+
+      <!-- ── Left: firmware flash ── -->
+      <div>
+        <div class="card">
+          <div class="card-title">
+            Full Firmware Flash
+            <span style="font-size:10px;color:var(--muted)">bootloader + partitions + app</span>
+          </div>
+          <div class="card-body">
+            <div class="hint" style="margin-bottom:10px">
+              Upload a complete firmware set. Each binary can be loaded from your computer
+              or pulled from the layout server's last build.
+            </div>
+
+            <div class="section-label">Binaries</div>
+            <div id="fwFileRows">
+              <!-- bootloader -->
+              <div class="file-row" id="row-bootloader">
+                <div class="addr-badge">0x1000</div>
+                <div>
+                  <div class="file-name">bootloader.bin</div>
+                  <div class="file-source-local" id="src-bootloader">no file selected</div>
+                </div>
+                <button type="button" onclick="pickFile('bootloader', 0x1000)">Choose…</button>
+              </div>
+              <!-- partitions -->
+              <div class="file-row" id="row-partitions">
+                <div class="addr-badge">0x8000</div>
+                <div>
+                  <div class="file-name">partitions.bin</div>
+                  <div class="file-source-local" id="src-partitions">no file selected</div>
+                </div>
+                <button type="button" onclick="pickFile('partitions', 0x8000)">Choose…</button>
+              </div>
+              <!-- app -->
+              <div class="file-row" id="row-app">
+                <div class="addr-badge">0x10000</div>
+                <div>
+                  <div class="file-name">firmware.bin</div>
+                  <div class="file-source-local" id="src-app">no file selected</div>
+                </div>
+                <button type="button" onclick="pickFile('app', 0x10000)">Choose…</button>
+              </div>
+            </div>
+
+            <div style="margin-top:12px">
+              <label style="flex-direction:row;align-items:center;gap:6px;font-size:11px;color:var(--text);margin-bottom:8px">
+                <input type="checkbox" id="eraseAll"> Erase entire flash before writing
+              </label>
+            </div>
+
+            <div class="progress-wrap" id="fwProgressWrap" style="display:none">
+              <div class="progress-bar" id="fwProgressBar"></div>
+            </div>
+            <div class="progress-label" id="fwProgressLabel"></div>
+
+            <div class="row" style="margin-top:10px">
+              <button type="button" class="primary" id="flashFwBtn" disabled>Flash Firmware</button>
+              <span class="status" id="fwStatus"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Right: LittleFS flash ── -->
+      <div>
+        <div class="card">
+          <div class="card-title">
+            LittleFS Flash
+            <span style="font-size:10px;color:var(--muted)">layout image only · 0x210000</span>
+          </div>
+          <div class="card-body">
+            <div class="hint" style="margin-bottom:10px">
+              Flash only the filesystem partition. Use this after building a layout image
+              on the Layout page, or upload your own .bin.
+            </div>
+
+            <div class="section-label">Source</div>
+
+            <!-- Layout picker (from server) -->
+            <div style="margin-bottom:8px">
+              <label>Layout image from server
+                <div class="row" style="margin-top:4px">
+                  <select id="layoutSelect" style="flex:1">
+                    <option value="">— select layout —</option>
+                  </select>
+                  <button type="button" id="fetchLayoutBtn">Load</button>
+                </div>
+              </label>
+              <div class="hint" id="serverImageHint" style="margin-top:4px"></div>
+            </div>
+
+            <div style="font-size:10px;color:var(--muted);margin:6px 0">— or —</div>
+
+            <!-- Local file -->
+            <div class="file-row" style="border:none;padding:0;grid-template-columns:1fr 90px">
+              <div>
+                <div class="file-name" id="fsFileName">no file selected</div>
+                <div class="file-source-local" id="src-fs"></div>
+              </div>
+              <button type="button" onclick="pickFile('fs', 0x210000)">Choose…</button>
+            </div>
+
+            <div class="progress-wrap" id="fsProgressWrap" style="display:none;margin-top:10px">
+              <div class="progress-bar" id="fsProgressBar"></div>
+            </div>
+            <div class="progress-label" id="fsProgressLabel"></div>
+
+            <div class="row" style="margin-top:10px">
+              <button type="button" class="primary" id="flashFsBtn" disabled>Flash LittleFS</button>
+              <span class="status" id="fsStatus"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Log ── -->
+        <div class="card">
+          <div class="card-title">
+            Serial Log
+            <button type="button" style="font-size:10px;padding:2px 7px" onclick="clearLog()">Clear</button>
+          </div>
+          <div class="card-body" style="padding:8px">
+            <div id="logBox"></div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /flash-page -->
+  </div><!-- /content -->
+</div><!-- /page -->
+
+<script src="/static/js/api.js"></script>
+<script type="module">
+import { ESPLoader, Transport } from "https://unpkg.com/esptool-js@0.6.0/bundle.js";
+
+// ── State ──────────────────────────────────────────────────────────────────
+let port      = null;
+let transport = null;
+let esploader = null;
+const files   = {};   // key → { data: Uint8Array, address: number, name: string }
+
+// ── DOM refs ───────────────────────────────────────────────────────────────
+const connDot        = document.getElementById("connDot");
+const connLabel      = document.getElementById("connLabel");
+const chipBadge      = document.getElementById("chipBadge");
+const connectBtn     = document.getElementById("connectBtn");
+const disconnectBtn  = document.getElementById("disconnectBtn");
+const baudSelect     = document.getElementById("baudSelect");
+const flashFwBtn     = document.getElementById("flashFwBtn");
+const flashFsBtn     = document.getElementById("flashFsBtn");
+const layoutSelect   = document.getElementById("layoutSelect");
+
+// ── Serial API check ───────────────────────────────────────────────────────
+if (!("serial" in navigator)) {
+  document.getElementById("noSerialWarning").style.display = "";
+  connectBtn.disabled = true;
+}
+
+// ── Log ────────────────────────────────────────────────────────────────────
+function log(msg, cls = "") {
+  const box = document.getElementById("logBox");
+  const line = document.createElement("span");
+  if (cls) line.className = cls;
+  line.textContent = msg + "\n";
+  box.appendChild(line);
+  box.scrollTop = box.scrollHeight;
+}
+
+window.clearLog = () => { document.getElementById("logBox").innerHTML = ""; };
+
+const terminal = {
+  clean() {},
+  writeLine(data) { log(data); },
+  write(data)     { log(data); },
+};
+
+// ── Connection ─────────────────────────────────────────────────────────────
+function setConnState(state, chip = "") {
+  connDot.className = "dot " + (state === "connected" ? "connected" : state === "connecting" ? "connecting" : state === "error" ? "error" : "");
+  connLabel.textContent = state === "connected" ? "Connected" : state === "connecting" ? "Connecting…" : state === "error" ? "Connection failed" : "Not connected";
+  connLabel.style.color = state === "connected" ? "var(--ok)" : state === "error" ? "var(--err)" : "var(--muted)";
+  chipBadge.style.display = chip ? "" : "none";
+  chipBadge.textContent = chip;
+  connectBtn.style.display    = state === "connected" ? "none" : "";
+  disconnectBtn.style.display = state === "connected" ? "" : "none";
+  connectBtn.disabled = state === "connecting";
+}
+
+connectBtn.addEventListener("click", async () => {
+  setConnState("connecting");
+  log("Requesting serial port…", "info");
+  try {
+    port = await navigator.serial.requestPort();
+    transport = new Transport(port, true);
+    esploader = new ESPLoader({
+      transport,
+      baudrate: parseInt(baudSelect.value),
+      terminal,
+      debugLogging: false,
+    });
+    const chip = await esploader.main();
+    log(`Connected — chip: ${chip}`, "ok");
+    setConnState("connected", chip);
+    updateFlashBtns();
+  } catch (e) {
+    log("Connect failed: " + e.message, "err");
+    setConnState("error");
+    transport = null; esploader = null; port = null;
+  }
+});
+
+disconnectBtn.addEventListener("click", async () => {
+  if (transport) { try { await transport.disconnect(); } catch (_) {} }
+  transport = null; esploader = null; port = null;
+  setConnState("idle");
+  updateFlashBtns();
+  log("Disconnected.", "warn");
+});
+
+// ── File picking ───────────────────────────────────────────────────────────
+window.pickFile = async (key, address) => {
+  const [fh] = await window.showOpenFilePicker({
+    types: [{ description: "Binary", accept: { "application/octet-stream": [".bin"] } }],
+  }).catch(() => [null]);
+  if (!fh) return;
+  const file = await fh.getFile();
+  const buf  = await file.arrayBuffer();
+  files[key] = { data: new Uint8Array(buf), address, name: file.name };
+  const srcEl = document.getElementById("src-" + key);
+  if (srcEl) {
+    srcEl.textContent = `${file.name}  (${fmtBytes(buf.byteLength)})`;
+    srcEl.className = "file-source-local";
+  }
+  if (key === "fs") document.getElementById("fsFileName").textContent = file.name;
+  log(`Loaded ${file.name} → 0x${address.toString(16)}  (${fmtBytes(buf.byteLength)})`, "info");
+  updateFlashBtns();
+};
+
+function fmtBytes(n) {
+  return n >= 1048576 ? (n/1048576).toFixed(1)+" MB" : n >= 1024 ? (n/1024).toFixed(1)+" KB" : n+" B";
+}
+
+// ── Layout picker (server images) ─────────────────────────────────────────
+async function loadLayoutList() {
+  try {
+    const layouts = await api.layouts.list();
+    layoutSelect.innerHTML = '<option value="">— select layout —</option>';
+    for (const l of layouts) {
+      const opt = document.createElement("option");
+      opt.value = l.id;
+      opt.textContent = l.name + (l.device_nick ? `  [${l.device_nick}]` : "");
+      layoutSelect.appendChild(opt);
+    }
+  } catch (e) {
+    log("Could not load layout list: " + e.message, "warn");
+  }
+}
+
+document.getElementById("fetchLayoutBtn").addEventListener("click", async () => {
+  const id = layoutSelect.value;
+  if (!id) return;
+  const hint = document.getElementById("serverImageHint");
+  hint.textContent = "Fetching…";
+  try {
+    const resp = await fetch(api.layouts.imageUrl(id));
+    if (!resp.ok) throw new Error(resp.status === 404 ? "No built image — Build it on the Layouts page first." : `HTTP ${resp.status}`);
+    const buf = await resp.arrayBuffer();
+    files["fs"] = { data: new Uint8Array(buf), address: 0x210000, name: `layout_${id}.bin` };
+    document.getElementById("fsFileName").textContent = `layout_${id}.bin  (${fmtBytes(buf.byteLength)})`;
+    document.getElementById("src-fs").textContent = "from server";
+    document.getElementById("src-fs").className = "file-source-server";
+    hint.textContent = `Loaded ${fmtBytes(buf.byteLength)} from server.`;
+    log(`Loaded layout ${id} image from server (${fmtBytes(buf.byteLength)})`, "info");
+    updateFlashBtns();
+  } catch (e) {
+    hint.textContent = e.message;
+    log("Server image fetch failed: " + e.message, "err");
+  }
+});
+
+// ── Flash button gating ────────────────────────────────────────────────────
+function updateFlashBtns() {
+  const ready = !!esploader;
+  flashFwBtn.disabled = !ready || !files.bootloader || !files.partitions || !files.app;
+  flashFsBtn.disabled = !ready || !files.fs;
+}
+
+// ── Progress helpers ───────────────────────────────────────────────────────
+function showProgress(prefix, pct) {
+  const bar   = document.getElementById(prefix + "ProgressBar");
+  const label = document.getElementById(prefix + "ProgressLabel");
+  const wrap  = document.getElementById(prefix + "ProgressWrap");
+  wrap.style.display = "";
+  bar.style.width = pct + "%";
+  label.textContent = pct.toFixed(0) + "%";
+}
+
+function hideProgress(prefix) {
+  document.getElementById(prefix + "ProgressWrap").style.display = "none";
+  document.getElementById(prefix + "ProgressLabel").textContent = "";
+}
+
+function setStatus(id, msg, cls = "") {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.className = "status" + (cls ? " " + cls : "");
+}
+
+// ── Flash firmware ─────────────────────────────────────────────────────────
+flashFwBtn.addEventListener("click", async () => {
+  flashFwBtn.disabled = true;
+  flashFsBtn.disabled = true;
+  setStatus("fwStatus", "Flashing…");
+  hideProgress("fw");
+
+  const fileArray = [
+    { data: files.bootloader.data, address: files.bootloader.address },
+    { data: files.partitions.data, address: files.partitions.address },
+    { data: files.app.data,        address: files.app.address },
+  ];
+
+  const totalBytes = fileArray.reduce((s, f) => s + f.data.length, 0);
+  let writtenTotal = 0;
+  const startMs = Date.now();
+
+  try {
+    await esploader.writeFlash({
+      fileArray,
+      flashMode:  "dio",
+      flashFreq:  "40m",
+      flashSize:  "4MB",
+      eraseAll:   document.getElementById("eraseAll").checked,
+      compress:   true,
+      reportProgress(fileIndex, written, total) {
+        const prevDone = fileArray.slice(0, fileIndex).reduce((s, f) => s + f.data.length, 0);
+        writtenTotal = prevDone + written;
+        showProgress("fw", (writtenTotal / totalBytes) * 100);
+      },
+      calculateMD5Hash: (img) => CryptoJS.MD5(CryptoJS.lib.WordArray.create(img)).toString(),
+    });
+    showProgress("fw", 100);
+    const secs = ((Date.now() - startMs) / 1000).toFixed(1);
+    log(`Firmware flashed successfully in ${secs}s`, "ok");
+    setStatus("fwStatus", `Done in ${secs}s`, "ok");
+    await esploader.after("hard_reset");
+    log("Device reset.", "info");
+  } catch (e) {
+    log("Flash failed: " + e.message, "err");
+    setStatus("fwStatus", "Failed: " + e.message, "err");
+  }
+
+  updateFlashBtns();
+});
+
+// ── Flash LittleFS ─────────────────────────────────────────────────────────
+flashFsBtn.addEventListener("click", async () => {
+  flashFwBtn.disabled = true;
+  flashFsBtn.disabled = true;
+  setStatus("fsStatus", "Flashing…");
+  hideProgress("fs");
+
+  const startMs = Date.now();
+  const { data, address } = files.fs;
+
+  try {
+    await esploader.writeFlash({
+      fileArray: [{ data, address }],
+      flashMode:  "dio",
+      flashFreq:  "40m",
+      flashSize:  "4MB",
+      eraseAll:   false,
+      compress:   true,
+      reportProgress(_, written, total) {
+        showProgress("fs", (written / total) * 100);
+      },
+      calculateMD5Hash: (img) => CryptoJS.MD5(CryptoJS.lib.WordArray.create(img)).toString(),
+    });
+    showProgress("fs", 100);
+    const secs = ((Date.now() - startMs) / 1000).toFixed(1);
+    log(`LittleFS flashed successfully in ${secs}s`, "ok");
+    setStatus("fsStatus", `Done in ${secs}s`, "ok");
+    await esploader.after("hard_reset");
+    log("Device reset.", "info");
+  } catch (e) {
+    log("Flash failed: " + e.message, "err");
+    setStatus("fsStatus", "Failed: " + e.message, "err");
+  }
+
+  updateFlashBtns();
+});
+
+// ── Init ───────────────────────────────────────────────────────────────────
+loadLayoutList();
+</script>
+
+<!-- CryptoJS for MD5 (required by esptool-js calculateMD5Hash) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js"></script>
+</body>
+</html>

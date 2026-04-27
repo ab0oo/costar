@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CoStar · Layouts</title>
+  <link rel="stylesheet" href="/static/css/theme.css">
+  <style>
+    /* ── Three-column assembly layout ── */
+    .assembly-page {
+      display: grid;
+      grid-template-columns: 220px 1fr 260px;
+      gap: 14px;
+      align-items: start;
+    }
+
+    /* ── Left: layout list ── */
+    #layoutList {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .layout-list-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      border: 1px solid transparent;
+      font-size: 12px;
+    }
+
+    .layout-list-item:hover  { background: #111d2e; border-color: var(--line); }
+    .layout-list-item.active { background: #132238; border-color: var(--accent); }
+
+    .layout-list-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .layout-list-nick { font-size: 10px; color: var(--muted); max-width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* ── Center: slots + library ── */
+    .slots-area {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .slot {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      background: #0e1522;
+      min-height: 46px;
+      transition: border-color 0.12s, background 0.12s;
+      cursor: default;
+    }
+
+    .slot.occupied   { border-style: solid; border-color: #2a4d7a; background: #0f1e32; }
+    .slot.drag-over  { border-color: var(--accent); background: #0e1f30; }
+
+    .slot-pos   { font-size: 11px; color: var(--muted); min-width: 14px; text-align: center; }
+    .slot-name  { flex: 1; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .slot-empty { flex: 1; font-size: 11px; color: var(--muted); font-style: italic; }
+
+    .screen-library-wrap {
+      border-top: 1px solid var(--line);
+      padding-top: 10px;
+      margin-top: 4px;
+    }
+
+    #screenLibrary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+    }
+
+    .screen-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 8px;
+      background: #0f1a2b;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      font-size: 11px;
+      cursor: grab;
+      user-select: none;
+      transition: border-color 0.12s;
+    }
+
+    .screen-chip:hover   { border-color: var(--accent); }
+    .screen-chip:active  { cursor: grabbing; }
+
+    /* ── Right: device config ── */
+    .config-section {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .wifi-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    .wifi-table td { padding: 3px 4px; }
+    .wifi-table input { width: 100%; }
+
+    .locale-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .locale-grid label { font-size: 11px; }
+
+    /* ── Icon buttons ── */
+    .icon-btn {
+      padding: 2px 6px;
+      font-size: 11px;
+      line-height: 1.4;
+      background: transparent;
+    }
+
+    /* ── Build area ── */
+    .build-area {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding-top: 6px;
+      border-top: 1px solid var(--line);
+    }
+
+    #downloadLink {
+      display: none;
+      font-size: 12px;
+      color: var(--ok);
+      word-break: break-all;
+    }
+
+    /* ── Header fields ── */
+    .header-fields {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+
+    @media (max-width: 900px) {
+      .assembly-page { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Top navigation -->
+  <nav class="topbar">
+    <span class="topbar-brand">CoStar</span>
+    <div class="topbar-nav">
+      <a href="/screens.html">Screens</a>
+      <a href="/layouts.html" class="active">Layouts</a>
+      <a href="/editor.html">Editor</a>
+      <a href="/flash.html">Flash</a>
+    </div>
+  </nav>
+
+  <div class="content">
+
+    <!-- Page status bar -->
+    <div class="row" style="margin-bottom:10px">
+      <span class="status" id="pageStatus"></span>
+    </div>
+
+    <div class="assembly-page">
+
+      <!-- ── Left: layout list ───────────────────────────────────────────── -->
+      <div>
+        <div class="card">
+          <div class="card-title">
+            Layouts
+            <button type="button" class="primary" id="newLayoutBtn" style="font-size:11px;padding:4px 8px">+ New</button>
+          </div>
+          <div class="card-body" style="padding:8px">
+            <ul id="layoutList"></ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Center: slot builder + screen library ──────────────────────── -->
+      <div>
+        <div class="card">
+          <div class="card-title">Assembly
+            <span style="font-size:11px;color:var(--muted)">drag screens into slots · max 5</span>
+          </div>
+          <div class="card-body">
+
+            <div class="header-fields">
+              <label>Layout Name
+                <input type="text" id="layoutName" placeholder="e.g. home">
+              </label>
+              <label>Device MAC / Nick
+                <input type="text" id="layoutDeviceNick" placeholder="e.g. AA:BB:CC:DD:EE:FF">
+              </label>
+            </div>
+
+            <div class="slots-area">
+              <div class="slot" id="slot-1" data-pos="1"></div>
+              <div class="slot" id="slot-2" data-pos="2"></div>
+              <div class="slot" id="slot-3" data-pos="3"></div>
+              <div class="slot" id="slot-4" data-pos="4"></div>
+              <div class="slot" id="slot-5" data-pos="5"></div>
+            </div>
+
+            <div class="screen-library-wrap">
+              <div style="font-size:11px;color:var(--muted)">Screen Library — drag a chip into a slot above</div>
+              <div id="screenLibrary"></div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Right: device config + build ──────────────────────────────── -->
+      <div class="config-section">
+
+        <!-- WiFi -->
+        <div class="card">
+          <div class="card-title">
+            WiFi Networks
+            <button type="button" id="addWifiBtn" style="font-size:11px;padding:4px 8px">+ Add</button>
+          </div>
+          <div class="card-body">
+            <table class="wifi-table">
+              <thead>
+                <tr>
+                  <th style="text-align:left;color:var(--muted);font-weight:normal;padding-bottom:4px">SSID</th>
+                  <th style="text-align:left;color:var(--muted);font-weight:normal;padding-bottom:4px">Password</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="wifiRows"></tbody>
+            </table>
+            <div class="hint" style="margin-top:6px">Networks are tried in order. Leave password empty for open networks.</div>
+          </div>
+        </div>
+
+        <!-- Locale -->
+        <div class="card">
+          <div class="card-title">Locale &amp; Units</div>
+          <div class="card-body">
+            <div class="locale-grid">
+              <label>Temperature
+                <select id="localeTempUnit">
+                  <option value="F">Fahrenheit (°F)</option>
+                  <option value="C">Celsius (°C)</option>
+                </select>
+              </label>
+              <label>Distance
+                <select id="localeDistUnit">
+                  <option value="mi">Miles</option>
+                  <option value="km">Kilometers</option>
+                </select>
+              </label>
+              <label>Clock
+                <select id="localeClock24h">
+                  <option value="">12-hour</option>
+                  <option value="1">24-hour</option>
+                </select>
+              </label>
+              <label>Timezone
+                <select id="localeTimezone"></select>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Build -->
+        <div class="card">
+          <div class="card-title">Device Image</div>
+          <div class="card-body">
+            <div class="build-area">
+              <div class="hint">
+                Assembles a flashable LittleFS .bin from the active layout.
+                Flash via <code>pio run -t uploadfs</code> or the poll-on-boot mechanism.
+              </div>
+              <div>
+                <button type="button" class="primary" id="buildBtn">Build Image</button>
+              </div>
+              <div class="status" id="buildStatus"></div>
+              <a id="downloadLink" download></a>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /config-section -->
+
+    </div><!-- /assembly-page -->
+  </div><!-- /content -->
+</div><!-- /page -->
+
+<script src="/static/js/api.js"></script>
+<script src="/static/js/layouts.js"></script>
+<script>
+  // Wire clock_24h select — value is string "1" for true, "" for false
+  document.getElementById("localeClock24h").addEventListener("change", function() {
+    active.locale.clock_24h = this.value === "1";
+    scheduleSave();
+  });
+</script>
+</body>
+</html>

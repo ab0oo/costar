@@ -16,3 +16,18 @@ services:
     restart: unless-stopped
     ports:
       - "8085:8085"
+
+  layout:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.layout
+    restart: unless-stopped
+    ports:
+      - "8087:8087"
+    volumes:
+      - layout_data:/data
+    environment:
+      - PYTHONUNBUFFERED=1
+
+volumes:
+  layout_data:

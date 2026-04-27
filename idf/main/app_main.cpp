@@ -15,6 +15,7 @@
 #include "platform/Prefs.h"
 #include "AppConfig.h"
 #include "DslJson.h"
+#include "LayoutUpdate.h"
 
 #include "esp_err.h"
 #include "esp_event.h"
@@ -988,6 +989,17 @@ void bootTask(void* arg) {
   const bool wifiReady = autoConnectWifi(wifiNetworks);
 
   boot::mark(baselineState, "wifi_ready", kBaselineEnabled);
+
+  if (wifiReady && AppConfig::kLayoutServerHost[0] != '\0') {
+    layout_update::Config luCfg = {};
+    luCfg.host      = AppConfig::kLayoutServerHost;
+    luCfg.port      = AppConfig::kLayoutServerPort;
+    luCfg.timeoutMs = 10000;
+    if (layout_update::checkAndApply(luCfg)) {
+      ESP_LOGI(kBootTag, "layout updated — rebooting");
+      esp_restart();
+    }
+  }
 
   // Show locale config screen briefly so user can adjust time/temp/dist units.
   runLocaleInteraction(kConfigPostConnectMs, wifiReady);

@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CoStar · Screens</title>
+  <link rel="stylesheet" href="/static/css/theme.css">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/jsoneditor/10.4.1/jsoneditor.min.css" rel="stylesheet">
+  <style>
+    .screen-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .modal-wide { max-width: 820px; }
+
+    .edit-layout {
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 14px;
+      align-items: start;
+    }
+
+    .dsl-editor-wrap {
+      height: 460px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .dsl-editor-wrap .jsoneditor {
+      height: 100% !important;
+      border: 0;
+      background: #0f1723;
+    }
+
+    .preview-col {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .field-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Top navigation -->
+  <nav class="topbar">
+    <span class="topbar-brand">CoStar</span>
+    <div class="topbar-nav">
+      <a href="/screens.html" class="active">Screens</a>
+      <a href="/layouts.html">Layouts</a>
+      <a href="/editor.html">Editor</a>
+      <a href="/flash.html">Flash</a>
+    </div>
+  </nav>
+
+  <div class="content">
+    <div class="row" style="margin-bottom:12px">
+      <strong style="color:var(--accent);font-size:14px">Screen Library</strong>
+      <button type="button" class="primary" id="newScreenBtn">+ New Screen</button>
+      <span class="status" id="pageStatus"></span>
+    </div>
+
+    <div class="screen-grid" id="screenGrid">
+      <p style="color:var(--muted)">Loading…</p>
+    </div>
+  </div>
+</div>
+
+<!-- ── Edit / Create Modal ─────────────────────────────────────────────── -->
+<div class="modal-overlay hidden" id="modalOverlay">
+  <div class="modal modal-wide">
+    <h2 id="modalTitle">New Screen</h2>
+
+    <div class="field-row">
+      <label>Screen Name
+        <input type="text" id="screenName" placeholder="e.g. screen_layout_solar">
+      </label>
+      <label>Tab Label <span style="color:var(--muted)">(≤6 chars)</span>
+        <input type="text" id="screenTabLabel" maxlength="6" placeholder="e.g. SOL">
+      </label>
+    </div>
+
+    <label>Description (optional)
+      <input type="text" id="screenDesc" placeholder="Short description">
+    </label>
+
+    <div class="edit-layout">
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Screen Layout JSON</div>
+        <div class="dsl-editor-wrap">
+          <div id="dslEditorArea"></div>
+        </div>
+      </div>
+
+      <div class="preview-col">
+        <div style="font-size:11px;color:var(--muted)">Preview</div>
+        <div class="screen-frame" style="align-self:flex-start">
+          <canvas class="screen-canvas" id="modalPreviewCanvas" width="320" height="240"></canvas>
+        </div>
+        <button type="button" id="previewBtn">Refresh Preview</button>
+        <div class="hint">Preview renders the first widget DSL in the layout with an empty payload.</div>
+      </div>
+    </div>
+
+    <div class="status" id="modalStatus"></div>
+
+    <div class="modal-footer">
+      <button type="button" id="cancelBtn">Cancel</button>
+      <button type="button" class="primary" id="saveBtn">Save Screen</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsoneditor/10.4.1/jsoneditor.min.js"></script>
+<script src="/static/js/preview.js"></script>
+<script src="/static/js/api.js"></script>
+<script src="/static/js/screens.js"></script>
+<script>
+  // Wire up the in-modal preview refresh button
+  document.getElementById("previewBtn").addEventListener("click", () => {
+    try {
+      const content = dslEditor.get();
+      const canvas  = document.getElementById("modalPreviewCanvas");
+      renderDslToCanvas(canvas, content, {}, {}, {});
+    } catch (e) {
+      setModalStatus("Preview failed: " + e.message, "err");
+    }
+  });
+</script>
+</body>
+</html>

@@ -58,4 +58,8 @@ constexpr uint16_t kTouchDebounceMs = 140;
 // Phase-1 migration instrumentation. Keep enabled until ESP-IDF baseline is captured.
 constexpr bool kBaselineMetricsEnabled = true;
 constexpr uint32_t kBaselineLoopLogPeriodMs = 30000;
+
+// Layout update server (poll-on-boot). Set host to "" to disable.
+constexpr const char* kLayoutServerHost = "vps.gorkos.net";
+constexpr uint16_t    kLayoutServerPort = 8087;
 }

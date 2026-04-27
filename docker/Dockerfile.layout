@@ -1,0 +1,34 @@
+FROM python:3.12-slim
+
+# Install mklittlefs pre-built binary from earlephilhower/mklittlefs releases.
+# Supports amd64 (x86_64) and arm64 (aarch64) — matches common VPS and Pi targets.
+ARG TARGETARCH
+ARG MKLITTLEFS_VERSION=4.1.0
+ARG MKLITTLEFS_COMMIT=42acb97
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64)  TRIPLET="x86_64-linux-gnu"   ;; \
+      arm64)  TRIPLET="aarch64-linux-gnu"  ;; \
+      *) echo "Unsupported arch: ${TARGETARCH}" && exit 1 ;; \
+    esac; \
+    URL="https://github.com/earlephilhower/mklittlefs/releases/download/${MKLITTLEFS_VERSION}/${TRIPLET}-mklittlefs-${MKLITTLEFS_COMMIT}.tar.gz"; \
+    apt-get update -qq && apt-get install -y --no-install-recommends curl ca-certificates tar && rm -rf /var/lib/apt/lists/*; \
+    curl -fsSL "${URL}" | tar -xz -C /usr/local/bin --strip-components=1; \
+    chmod +x /usr/local/bin/mklittlefs; \
+    mklittlefs --version
+
+WORKDIR /app
+
+COPY layout_server/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY layout_server/ .
+
+ENV COSTAR_DB=/data/costar.db
+ENV COSTAR_SCREENS=/data/screens
+ENV COSTAR_BUILDS=/data/builds
+ENV PORT=8087
+
+EXPOSE 8087
+
+CMD ["python3", "-u", "app.py"]

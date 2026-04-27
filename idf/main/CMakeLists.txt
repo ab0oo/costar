@@ -18,6 +18,7 @@ idf_component_register(
     "BootCommon.cpp"
     "RuntimeSettings.cpp"
     "TimeSync.cpp"
+    "LayoutUpdate.cpp"
   INCLUDE_DIRS
     "."
     "../../include"

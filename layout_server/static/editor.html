@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CoStar · DSL Editor</title>
+  <link rel="stylesheet" href="/static/css/theme.css">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/jsoneditor/10.4.1/jsoneditor.min.css" rel="stylesheet">
+  <style>
+    .editor-page {
+      display: grid;
+      grid-template-columns: 1.3fr 1fr;
+      gap: 12px;
+      align-items: start;
+    }
+
+    .editor-area {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      overflow: hidden;
+      background: #0f1723;
+      resize: vertical;
+    }
+
+    .editor-area .jsoneditor        { height: 100% !important; border: 0; }
+    .editor-area .jsoneditor-outer  { height: 100% !important; }
+
+    #dslEditorEl         { height: 420px; }
+    #payloadEditorEl     { height: 200px; }
+    #sharedSettingsEditorEl,
+    #widgetSettingsEditorEl,
+    #layoutSettingsEditorEl { height: 140px; }
+
+    .tab-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+
+    .tab-btn {
+      border-color: #3d5577;
+      background: #101a29;
+      color: var(--muted);
+      padding: 5px 10px;
+      font-size: 12px;
+    }
+    .tab-btn.active { border-color: var(--accent); color: var(--text); background: #14233a; }
+
+    .tab-panels { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #0e1622; }
+    .tab-panel  { display: none; flex-direction: column; gap: 8px; }
+    .tab-panel.active { display: flex; }
+
+    /* screen picker bar */
+    .picker-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: flex-end;
+      margin-bottom: 10px;
+      padding: 10px 12px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .picker-bar select { flex: 1; min-width: 160px; }
+
+    .meta-row {
+      display: grid;
+      grid-template-columns: 1fr 80px 1fr;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    @media (max-width: 1000px) {
+      .editor-page { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <nav class="topbar">
+    <span class="topbar-brand">CoStar</span>
+    <div class="topbar-nav">
+      <a href="/screens.html">Screens</a>
+      <a href="/layouts.html">Layouts</a>
+      <a href="/editor.html" class="active">Editor</a>
+      <a href="/flash.html">Flash</a>
+    </div>
+  </nav>
+
+  <div class="content">
+    <div class="editor-page">
+
+      <!-- ── Left: DSL editor ─────────────────────────────────────────── -->
+      <section class="card">
+        <div class="card-title">
+          DSL JSON Editor
+          <small style="color:var(--muted);font-size:11px">Widget DSL (ui + data block)</small>
+        </div>
+        <div class="card-body">
+
+          <!-- Screen picker + metadata -->
+          <div class="picker-bar">
+            <label style="flex:1;min-width:160px">Screen
+              <select id="screenSelect"></select>
+            </label>
+            <button type="button" id="newScreenBtn">New</button>
+            <button type="button" id="saveScreenBtn" class="primary">Save</button>
+            <button type="button" id="deleteScreenBtn" class="danger">Delete</button>
+          </div>
+
+          <div class="meta-row">
+            <label>Screen Name
+              <input type="text" id="screenNameInput" placeholder="e.g. solar_conditions">
+            </label>
+            <label>Tab Label
+              <input type="text" id="screenTabInput" maxlength="6" placeholder="SOL">
+            </label>
+            <label>Description
+              <input type="text" id="screenDescInput" placeholder="optional">
+            </label>
+          </div>
+
+          <div class="row" style="margin-bottom:6px">
+            <button type="button" id="loadWeatherBtn">Weather Sample</button>
+            <button type="button" id="loadAdsbBtn">ADSB Sample</button>
+            <button type="button" id="formatBtn">Format</button>
+            <button type="button" id="downloadBtn">Download</button>
+          </div>
+
+          <div class="status" id="fileStatus"></div>
+          <div class="editor-area" id="dslEditorEl"></div>
+          <div class="status" id="dslStatus"></div>
+        </div>
+      </section>
+
+      <!-- ── Right: runtime data + preview ────────────────────────────── -->
+      <section class="card">
+        <div class="card-title">
+          Runtime Data + Preview
+          <small style="color:var(--muted);font-size:11px">Simulates field extraction</small>
+        </div>
+        <div class="card-body">
+
+          <div class="tab-bar">
+            <button class="tab-btn active" data-tab="payloadTab">Payload</button>
+            <button class="tab-btn"        data-tab="sharedSettingsTab">Shared Settings</button>
+            <button class="tab-btn"        data-tab="widgetSettingsTab">Widget Settings</button>
+            <button class="tab-btn"        data-tab="layoutTab">Layout JSON</button>
+            <button class="tab-btn"        data-tab="referenceTab">Reference</button>
+          </div>
+
+          <div class="tab-panels">
+
+            <div id="payloadTab" class="tab-panel active">
+              <div class="editor-area" id="payloadEditorEl"></div>
+              <div class="row">
+                <button type="button" id="applyPayloadBtn">Apply Payload</button>
+                <label style="flex-direction:row;align-items:center;gap:4px;font-size:12px;color:var(--text)">
+                  <input id="animateClock" type="checkbox" checked> animate local_time
+                </label>
+              </div>
+              <div class="status" id="payloadStatus"></div>
+            </div>
+
+            <div id="sharedSettingsTab" class="tab-panel">
+              <div class="editor-area" id="sharedSettingsEditorEl"></div>
+            </div>
+
+            <div id="widgetSettingsTab" class="tab-panel">
+              <div class="editor-area" id="widgetSettingsEditorEl"></div>
+              <div class="row">
+                <button type="button" id="applySettingsBtn">Apply Settings</button>
+              </div>
+            </div>
+
+            <div id="layoutTab" class="tab-panel">
+              <div class="editor-area" id="layoutSettingsEditorEl"></div>
+              <div class="row">
+                <label style="flex-direction:row;align-items:center;gap:4px;font-size:12px;color:var(--text)">
+                  Widget ID
+                  <input type="text" id="layoutWidgetId" value="ha-card-1" style="width:120px">
+                </label>
+                <button type="button" id="importLayoutSettingsBtn">Import From Layout JSON</button>
+              </div>
+            </div>
+
+            <div id="referenceTab" class="tab-panel" style="overflow-y:auto;max-height:360px;font-size:11px;line-height:1.5">
+              <style>
+                #referenceTab h3  { margin:10px 0 4px; color:var(--accent); font-size:12px; border-bottom:1px solid #333; padding-bottom:2px; }
+                #referenceTab h4  { margin:8px 0 2px; color:#aad; font-size:11px; }
+                #referenceTab table { border-collapse:collapse; width:100%; margin-bottom:6px; }
+                #referenceTab td, #referenceTab th { border:1px solid #333; padding:2px 5px; vertical-align:top; }
+                #referenceTab th  { background:#1e1e2e; color:#ccc; }
+                #referenceTab code { background:#1e1e2e; padding:1px 3px; border-radius:2px; }
+              </style>
+              <h3>Node Types</h3>
+              <table><tr><th>type</th><th>Key Properties</th></tr>
+                <tr><td><code>label</code></td><td>text, font, color, bg, align, valign, wrap, overflow, max_lines, path</td></tr>
+                <tr><td><code>value_box</code></td><td>key, text, font, color, bg, w, h</td></tr>
+                <tr><td><code>progress</code></td><td>key, min, max, w, h, color, bg</td></tr>
+                <tr><td><code>sparkline</code></td><td>key, w, h, color, min, max</td></tr>
+                <tr><td><code>icon</code></td><td>path (or icon/text), w, h</td></tr>
+                <tr><td><code>arc / circle</code></td><td>cx, cy, r, start_deg, end_deg, color, thickness</td></tr>
+                <tr><td><code>line / hand</code></td><td>x, y, x2, y2 or length+angle_expr, color, width</td></tr>
+                <tr><td><code>moon_phase</code></td><td>phase (0–1 or key), r, color, bg</td></tr>
+                <tr><td><code>repeat</code></td><td>count, start, step, var, nodes</td></tr>
+              </table>
+              <h3>Format Options (fmt)</h3>
+              <table><tr><th>Key</th><th>Description</th></tr>
+                <tr><td><code>round</code></td><td>Decimal places</td></tr>
+                <tr><td><code>unit</code></td><td>c, f, c_to_f, %, compass_16</td></tr>
+                <tr><td><code>prefix / suffix</code></td><td>Text around value</td></tr>
+                <tr><td><code>tz / time_format</code></td><td>IANA tz + strftime pattern</td></tr>
+                <tr><td><code>map / map_default</code></td><td>Value lookup table</td></tr>
+              </table>
+              <h3>Font Reference</h3>
+              <table><tr><th>font</th><th>Family</th><th>yAdvance</th></tr>
+                <tr><td>1</td><td>5×7 bitmap 1×</td><td>8 px</td></tr>
+                <tr><td>2</td><td>5×7 bitmap 2×</td><td>16 px</td></tr>
+                <tr><td>3</td><td>5×7 bitmap 3×</td><td>24 px</td></tr>
+                <tr><td>4</td><td>5×7 bitmap 4×</td><td>32 px</td></tr>
+                <tr><td>5</td><td>FreeMono 9pt</td><td>18 px</td></tr>
+                <tr><td>6</td><td>FreeMono 12pt</td><td>24 px</td></tr>
+                <tr><td>7</td><td>FreeMono 18pt</td><td>35 px</td></tr>
+              </table>
+              <h3>Data Sources</h3>
+              <table><tr><th>source</th><th>Required Fields</th></tr>
+                <tr><td><code>http</code></td><td>url, poll_ms, fields</td></tr>
+                <tr><td><code>local_time</code></td><td>fields (hour, minute, second, iso_local…)</td></tr>
+                <tr><td><code>home_assistant</code></td><td>entity_id, fields</td></tr>
+                <tr><td><code>static</code></td><td>values</td></tr>
+              </table>
+            </div>
+
+          </div><!-- /tab-panels -->
+
+          <div class="status" id="settingsStatus"></div>
+          <div class="hint"  id="settingsHint"></div>
+
+          <!-- Locale / geo prefs -->
+          <div class="row" style="margin-top:8px">
+            <label>Temp
+              <select id="prefTempUnit">
+                <option value="auto">Auto</option>
+                <option value="F">°F</option>
+                <option value="C">°C</option>
+              </select>
+            </label>
+            <label>Distance
+              <select id="prefDistanceUnit">
+                <option value="auto">Auto</option>
+                <option value="mi">mi</option>
+                <option value="km">km</option>
+              </select>
+            </label>
+            <label>Clock
+              <select id="prefClockMode">
+                <option value="auto">Auto</option>
+                <option value="24h">24h</option>
+                <option value="12h">12h</option>
+              </select>
+            </label>
+          </div>
+          <div class="row" style="margin-top:6px">
+            <label>Lat <input type="text" id="geoLatInput" value="37.4220" style="width:80px"></label>
+            <label>Lon <input type="text" id="geoLonInput" value="-122.0841" style="width:90px"></label>
+            <button type="button" id="useBrowserGeoBtn">Use Browser Geo</button>
+          </div>
+          <div class="hint" id="runtimePrefHint"></div>
+          <div class="hint" id="runtimeGeoHint"></div>
+
+          <!-- Preview canvas -->
+          <div style="display:grid;place-items:center;padding:12px 0 4px">
+            <div class="screen-frame">
+              <canvas class="screen-canvas" id="previewCanvas" width="320" height="240"></canvas>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+    </div><!-- /editor-page -->
+  </div><!-- /content -->
+</div><!-- /page -->
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsoneditor/10.4.1/jsoneditor.min.js"></script>
+<script src="/static/js/preview.js"></script>
+<script src="/static/js/api.js"></script>
+<script src="/static/js/editor.js"></script>
+</body>
+</html>
