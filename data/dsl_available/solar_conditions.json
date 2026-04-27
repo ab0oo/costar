@@ -6,7 +6,7 @@
   },
   "data": {
     "source": "http",
-    "url": "http://{{setting.proxy_host}}:{{setting.proxy_port}}/solar",
+    "url": "{{setting.solar_proxy_base}}/solar",
     "poll_ms": 900000,
     "fields": {
       "sfi":          "sfi",

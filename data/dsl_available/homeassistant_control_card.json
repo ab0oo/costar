@@ -69,7 +69,7 @@
         "y": 36,
         "w": 24,
         "h": 24,
-        "path": "http://vps.gorkos.net:8085/mdi?icon={{ha_icon}}&size=24&color={{if_eq(state,'on','FFD54A','7CE2FF')}}"
+        "path": "{{setting.image_proxy_base}}/mdi?icon={{ha_icon}}&size=24&color={{if_eq(state,'on','FFD54A','7CE2FF')}}"
       },
       {
         "type": "label",

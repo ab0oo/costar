@@ -1,5 +1,8 @@
 {
   "version": 1,
+  "shared_settings": {
+    "image_proxy_base": "http://vps.gorkos.net/image"
+  },
   "screen": {
     "id": "nyt-fullscreen",
     "orientation": "landscape",
@@ -23,7 +26,7 @@
       "update_ms": 1000,
       "settings": {
         "dsl_path": "/dsl_available/nyt_headlines.json",
-        "rss_proxy_base": "http://vps.gorkos.net:8085",
+        "rss_proxy_base": "{{setting.image_proxy_base}}",
         "limit": "5"
       }
     }

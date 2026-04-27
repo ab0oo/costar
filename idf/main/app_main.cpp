@@ -180,6 +180,57 @@ bool ensureWifiStackReady() {
 }
 
 // ---------------------------------------------------------------------------
+// Layout server config — loaded from /littlefs/config.json
+// Format: { "layout_server_host": "host", "layout_server_port": 80 }
+// Falls back to AppConfig constants when the file is absent or unparseable.
+// ---------------------------------------------------------------------------
+
+struct ProxyConfig {
+  std::string host = AppConfig::kLayoutServerHostFallback;
+  uint16_t    port = AppConfig::kLayoutServerPortFallback;
+};
+
+static ProxyConfig loadProxyConfig() {
+  ProxyConfig out;
+  std::FILE* fp = std::fopen("/littlefs/config.json", "rb");
+  if (!fp) {
+    ESP_LOGI(kBootTag, "config.json not found; using compiled defaults host=%s port=%u",
+             out.host.c_str(), out.port);
+    return out;
+  }
+  std::fseek(fp, 0, SEEK_END);
+  const long sz = std::ftell(fp);
+  std::rewind(fp);
+  if (sz <= 0 || sz > 1024) {
+    std::fclose(fp);
+    ESP_LOGW(kBootTag, "config.json bad size %ld; using compiled defaults", sz);
+    return out;
+  }
+  std::string buf(static_cast<size_t>(sz), '\0');
+  (void)std::fread(buf.data(), 1, static_cast<size_t>(sz), fp);
+  std::fclose(fp);
+
+  std::string_view sv(buf);
+  std::string hostStr;
+  if (dsl_json::objectMemberString(sv, "layout_server_host", hostStr) && !hostStr.empty()) {
+    out.host = std::move(hostStr);
+  }
+  std::string portStr;
+  if (dsl_json::objectMemberString(sv, "layout_server_port", portStr)) {
+    const int p = std::atoi(portStr.c_str());
+    if (p > 0 && p <= 65535) out.port = static_cast<uint16_t>(p);
+  } else {
+    // Also accept port as a bare JSON number
+    int portNum = 0;
+    if (dsl_json::objectMemberInt(sv, "layout_server_port", portNum) && portNum > 0) {
+      out.port = static_cast<uint16_t>(portNum);
+    }
+  }
+  ESP_LOGI(kBootTag, "config.json loaded: host=%s port=%u", out.host.c_str(), out.port);
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // WiFi credentials — loaded from /littlefs/wifi.json
 // Format: { "version": 1, "networks": [ {"ssid":"...", "password":"..."} ] }
 // ---------------------------------------------------------------------------
@@ -990,14 +1041,17 @@ void bootTask(void* arg) {
 
   boot::mark(baselineState, "wifi_ready", kBaselineEnabled);
 
-  if (wifiReady && AppConfig::kLayoutServerHost[0] != '\0') {
-    layout_update::Config luCfg = {};
-    luCfg.host      = AppConfig::kLayoutServerHost;
-    luCfg.port      = AppConfig::kLayoutServerPort;
-    luCfg.timeoutMs = 10000;
-    if (layout_update::checkAndApply(luCfg)) {
-      ESP_LOGI(kBootTag, "layout updated — rebooting");
-      esp_restart();
+  if (wifiReady) {
+    const ProxyConfig proxyCfg = loadProxyConfig();
+    if (!proxyCfg.host.empty()) {
+      layout_update::Config luCfg = {};
+      luCfg.host      = proxyCfg.host.c_str();
+      luCfg.port      = proxyCfg.port;
+      luCfg.timeoutMs = 10000;
+      if (layout_update::checkAndApply(luCfg)) {
+        ESP_LOGI(kBootTag, "layout updated — rebooting");
+        esp_restart();
+      }
     }
   }
 

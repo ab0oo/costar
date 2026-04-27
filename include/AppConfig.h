@@ -59,7 +59,8 @@ constexpr uint16_t kTouchDebounceMs = 140;
 constexpr bool kBaselineMetricsEnabled = true;
 constexpr uint32_t kBaselineLoopLogPeriodMs = 30000;
 
-// Layout update server (poll-on-boot). Set host to "" to disable.
-constexpr const char* kLayoutServerHost = "vps.gorkos.net";
-constexpr uint16_t    kLayoutServerPort = 8087;
+// Layout update server config is loaded at boot from /littlefs/config.json.
+// These are the compile-time fallbacks used when the file is absent.
+constexpr const char* kLayoutServerHostFallback = "vps.gorkos.net";
+constexpr uint16_t    kLayoutServerPortFallback = 80;
 }

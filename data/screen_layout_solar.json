@@ -1,5 +1,9 @@
 {
   "version": 1,
+  "shared_settings": {
+    "solar_proxy_base": "http://vps.gorkos.net/solar",
+    "image_proxy_base": "http://vps.gorkos.net/image"
+  },
   "screen": {
     "id": "solar-fullscreen",
     "orientation": "landscape",
@@ -23,8 +27,7 @@
       "update_ms": 1000,
       "settings": {
         "dsl_path": "/dsl_available/solar_conditions.json",
-        "proxy_host": "vps.gorkos.net",
-        "proxy_port": "8086"
+        "solar_proxy_base": "{{setting.solar_proxy_base}}"
       }
     }
   }

@@ -171,7 +171,7 @@
         "y": 28,
         "w": 20,
         "h": 20,
-        "path": "http://vps.gorkos.net:8085/mdi?icon={{i1}}&size=20&color={{if_eq(s1,'on','FFD54A','7CE2FF')}}"
+        "path": "{{setting.image_proxy_base}}/mdi?icon={{i1}}&size=20&color={{if_eq(s1,'on','FFD54A','7CE2FF')}}"
       },
       {
         "type": "label",
@@ -198,7 +198,7 @@
         "y": 62,
         "w": 20,
         "h": 20,
-        "path": "http://vps.gorkos.net:8085/mdi?icon={{i2}}&size=20&color={{if_eq(s2,'on','FFD54A','7CE2FF')}}"
+        "path": "{{setting.image_proxy_base}}/mdi?icon={{i2}}&size=20&color={{if_eq(s2,'on','FFD54A','7CE2FF')}}"
       },
       {
         "type": "label",
@@ -225,7 +225,7 @@
         "y": 96,
         "w": 20,
         "h": 20,
-        "path": "http://vps.gorkos.net:8085/mdi?icon={{i3}}&size=20&color={{if_eq(s3,'on','FFD54A','7CE2FF')}}"
+        "path": "{{setting.image_proxy_base}}/mdi?icon={{i3}}&size=20&color={{if_eq(s3,'on','FFD54A','7CE2FF')}}"
       },
       {
         "type": "label",
@@ -252,7 +252,7 @@
         "y": 130,
         "w": 20,
         "h": 20,
-        "path": "http://vps.gorkos.net:8085/mdi?icon={{i4}}&size=20&color={{if_eq(s4,'on','FFD54A','7CE2FF')}}"
+        "path": "{{setting.image_proxy_base}}/mdi?icon={{i4}}&size=20&color={{if_eq(s4,'on','FFD54A','7CE2FF')}}"
       },
       {
         "type": "label",
@@ -279,7 +279,7 @@
         "y": 164,
         "w": 20,
         "h": 20,
-        "path": "http://vps.gorkos.net:8085/mdi?icon={{i5}}&size=20&color={{if_eq(s5,'on','FFD54A','7CE2FF')}}"
+        "path": "{{setting.image_proxy_base}}/mdi?icon={{i5}}&size=20&color={{if_eq(s5,'on','FFD54A','7CE2FF')}}"
       },
       {
         "type": "label",
@@ -306,7 +306,7 @@
         "y": 198,
         "w": 20,
         "h": 20,
-        "path": "http://vps.gorkos.net:8085/mdi?icon={{i6}}&size=20&color={{if_eq(s6,'on','FFD54A','7CE2FF')}}"
+        "path": "{{setting.image_proxy_base}}/mdi?icon={{i6}}&size=20&color={{if_eq(s6,'on','FFD54A','7CE2FF')}}"
       },
       {
         "type": "label",

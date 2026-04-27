@@ -35,6 +35,9 @@
       }
     ]
   },
+  "shared_settings": {
+    "image_proxy_base": "http://vps.gorkos.net/image"
+  },
   "widget_defs": {
     "weather-now": {
       "type": "dsl",

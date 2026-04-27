@@ -18,6 +18,7 @@
     ]
   },
   "shared_settings": {
+    "image_proxy_base": "http://vps.gorkos.net/image",
     "ws_base_url": "https://homeassistant.edh.gorkos.net",
     "ws_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkOTJlMjRkMmI4NzY0NjUwYWY5Yzc1ZDZhMDY3OTYxNSIsImlhdCI6MTc3MTcxMjIzNCwiZXhwIjoyMDg3MDcyMjM0fQ.A9fTF3UIZzjTg6yJjKwYY82EuT8NIxU1TK-a00ru7mc",
     "ws_profiles": {
