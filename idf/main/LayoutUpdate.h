@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 // Poll-on-boot layout update check.
 //
 // Fetches GET /manifest/<mac> from the layout server, compares per-file MD5s
