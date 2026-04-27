@@ -1,0 +1,18 @@
+services:
+  solar:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.solar
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  image:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.image
+    restart: unless-stopped
+    ports:
+      - "8085:8085"

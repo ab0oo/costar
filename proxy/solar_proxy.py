@@ -188,7 +188,7 @@ def _fetch_sunspots() -> int:
     Source: https://services.swpc.noaa.gov/text/daily-solar-indices.txt
     Format (space-delimited, skip # and : comment lines):
       YYYY MM DD  SFI  SESC_SSN  Area  NewRgns  ...
-    Column index 4 (1-based) is the SESC sunspot number.
+    parts[4] (the 5th whitespace-delimited token) is the SESC sunspot number.
     """
     text = _get_text("https://services.swpc.noaa.gov/text/daily-solar-indices.txt")
     for line in reversed(text.splitlines()):
@@ -209,9 +209,12 @@ def _fetch_sunspots() -> int:
 
 def _fmt_flux(val) -> str:
     """
-    Format a particle flux for display on a small screen.
-    Values < 1000 show as decimals (e.g. "0.18", "123.4");
-    larger values use compact scientific notation (e.g. "1.2e4").
+    Format a numeric particle flux value for display on a small screen.
+
+    val may be int, float, or a string coercible to float; None returns "N/A".
+    Values < 1000 are formatted as decimals ("0.18", "9.4", "123");
+    larger values use compact scientific notation ("1.2e4", "3.0e6").
+    The result is always a short string suitable for a ~6-character display field.
     """
     if val is None:
         return "N/A"
@@ -360,6 +363,38 @@ def _aurora_index(north_gw: float, south_gw: float) -> int:
 # ---------------------------------------------------------------------------
 
 def fetch_all() -> dict:
+    """
+    Fetch all space-weather data from NOAA SWPC and return a flat dict.
+
+    All fields are None when the upstream fetch fails; partial failures are
+    collected in '_errors' so the caller still gets whatever data succeeded.
+
+    Response schema:
+      sfi           int      Solar Flux Index (10.7 cm), sfu
+      a_index       int      Running planetary A-index (3-hour Kp product), nT equivalent
+      k_index       float    Most recent 1-minute estimated Kp (0-9)
+      xray          str      Current X-ray flare class (e.g. "B4.7", "M1.2")
+      sunspots      int      SESC International Sunspot Number (daily)
+      solar_wind    float    Solar wind speed, km/s
+      bz            float    IMF Bz component, nT (negative = southward = storm-favorable)
+      bt            float    IMF total field magnitude Bt, nT
+      geomag_scale  str      NOAA G-scale current conditions (e.g. "G0 none", "G1 minor")
+      radio_scale   str      NOAA R-scale current conditions (e.g. "R0 none", "R1 minor")
+      hf_conditions dict     HF band conditions by band; see calc_hf_conditions()
+                             keys: "80m-40m", "30m-20m", "17m-15m", "12m-10m"
+                             values: {"day": "Good"|"Fair"|"Poor",
+                                      "night": "Good"|"Fair"|"Poor"}
+      euv_304a      float    GOES-R EUV 304 Å irradiance, AU-corrected, mW/m²
+      proton_flux   float    GOES integral proton flux >=10 MeV, pfu
+      electron_flux str      GOES integral electron flux >=2 MeV, compact string (e.g. "1.9e3")
+      aurora_idx    int      Aurora activity index 0-10+ (hemispheric power / 15 GW)
+      flare_prob_m  int      24-hour M-class flare probability, %
+      flare_prob_x  int      24-hour X-class flare probability, %
+      dst           int      Kyoto Dst index, nT (negative = geomagnetic storm in progress)
+      fetched_utc   str      Fetch timestamp, e.g. "26 Apr 2026 1430 UTC"
+      _errors       list|None  List of "key: error" strings for any failed sub-fetches,
+                               or None when all fetches succeeded
+    """
     errors = []
 
     # --- SFI ---
@@ -614,7 +649,8 @@ def main():
     parser.add_argument("--port",     type=int, default=8086)
     parser.add_argument("--host",     default="0.0.0.0")
     parser.add_argument("--interval", type=int, default=FETCH_INTERVAL_S,
-                        help="upstream fetch interval in seconds (default 300)")
+                        help="background refresh interval in seconds (default 300); "
+                             "does not affect the initial synchronous fetch at startup")
     parser.add_argument("--debug",    action="store_true")
     args = parser.parse_args()
     FETCH_INTERVAL_S = args.interval

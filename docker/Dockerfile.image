@@ -1,0 +1,15 @@
+FROM golang:1.21-alpine AS builder
+
+WORKDIR /src
+COPY tools/image_proxy/go.mod tools/image_proxy/go.sum ./
+RUN go mod download
+
+COPY tools/image_proxy/ .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o image_proxy .
+
+FROM scratch
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=builder /src/image_proxy /image_proxy
+
+EXPOSE 8085
+ENTRYPOINT ["/image_proxy"]

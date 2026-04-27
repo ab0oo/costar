@@ -1,0 +1,29 @@
+# firmware build artifacts
+.pio/
+idf/build/
+managed_components/
+sdkconfig*
+dependencies.lock
+
+# data / certs
+data/
+*.pem
+*.key
+*.crt
+
+# dev tools
+tools/dsl_editor/
+tools/gen_icons.py
+tools/ha_ws_probe.py
+tools/import_meteocons.py
+tools/pio_*.py
+
+# python cache
+proxy/__pycache__/
+**/__pycache__/
+*.pyc
+
+# git / IDE
+.git/
+.vscode/
+.idea/
