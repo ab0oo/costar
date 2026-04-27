@@ -332,14 +332,19 @@ def _fetch_dst() -> int:
     Return the most recent Kyoto Dst index in nT.
     Negative values indicate geomagnetic storm activity.
     Source: https://services.swpc.noaa.gov/products/kyoto-dst.json
-    Response: array of [timestamp_str, dst_str] rows (no header row).
+    Response: array of {"time_tag": str, "dst": int} objects.
+    (Previously was array of [timestamp_str, dst_str] rows.)
     """
     data = _get_json("https://services.swpc.noaa.gov/products/kyoto-dst.json")
     for row in reversed(data):
-        if len(row) >= 2:
+        if isinstance(row, dict):
+            val = _num(row.get("dst"))
+        elif len(row) >= 2:
             val = _num(row[1])
-            if val is not None:
-                return int(val)
+        else:
+            continue
+        if val is not None:
+            return int(val)
     return None
 
 
@@ -401,7 +406,9 @@ def fetch_all() -> dict:
     sfi = None
     try:
         d = _get_json("https://services.swpc.noaa.gov/products/summary/10cm-flux.json")
-        sfi = _num(d.get("Flux"))
+        # Response is now a list of objects; grab the most recent non-null entry.
+        rec = d[-1] if isinstance(d, list) else d
+        sfi = _num(rec.get("flux") or rec.get("Flux"))
     except Exception as e:
         errors.append(f"sfi: {e}")
 
@@ -419,9 +426,11 @@ def fetch_all() -> dict:
     a_index = None
     try:
         rows = _get_json("https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json")
-        # rows[0] is header; find most recent row with a numeric a_running
-        for row in reversed(rows[1:]):
-            val = _num(row[2]) if len(row) > 2 else None
+        # Response is now a list of dicts (no header row) with key "a_running".
+        for row in reversed(rows):
+            val = _num(row.get("a_running")) if isinstance(row, dict) else (
+                _num(row[2]) if len(row) > 2 else None
+            )
             if val is not None:
                 a_index = val
                 break
@@ -441,7 +450,9 @@ def fetch_all() -> dict:
     solar_wind = None
     try:
         d = _get_json("https://services.swpc.noaa.gov/products/summary/solar-wind-speed.json")
-        solar_wind = _num(d.get("WindSpeed"))
+        # Response is now a list; key renamed WindSpeed → proton_speed.
+        rec = d[-1] if isinstance(d, list) else d
+        solar_wind = _num(rec.get("proton_speed") or rec.get("WindSpeed"))
     except Exception as e:
         errors.append(f"solar_wind: {e}")
 
@@ -450,8 +461,10 @@ def fetch_all() -> dict:
     bt = None
     try:
         d = _get_json("https://services.swpc.noaa.gov/products/summary/solar-wind-mag-field.json")
-        bz = _num(d.get("Bz"))
-        bt = _num(d.get("Bt"))
+        # Response is now a list; Bz renamed to bz_gsm, Bt to bt.
+        rec = d[-1] if isinstance(d, list) else d
+        bz = _num(rec.get("bz_gsm") or rec.get("Bz"))
+        bt = _num(rec.get("bt")     or rec.get("Bt"))
     except Exception as e:
         errors.append(f"mag_field: {e}")
 
